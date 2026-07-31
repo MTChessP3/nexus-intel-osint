@@ -1,308 +1,345 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// Executive Report Generation API
+// Executive Report Generator API
 export async function POST(request: NextRequest) {
   try {
-    const { reportType, data, options } = await request.json();
-
-    if (!reportType || !data) {
-      return NextResponse.json({ error: 'Report type and data are required' }, { status: 400 });
+    const { reportType, data, options = {} } = await request.json();
+    
+    if (!reportType) {
+      return NextResponse.json({ 
+        error: 'Se requiere el tipo de informe',
+        availableTypes: ['threat-summary', 'ip-intel', 'cve-analysis', 'full-assessment', 'ioc-report']
+      }, { status: 400 });
     }
 
-    let reportContent: any;
+    let report;
 
-    switch (reportType) {
-      case 'threat-assessment':
-        reportContent = generateThreatAssessmentReport(data, options);
+    switch (reportType.toLowerCase()) {
+      case 'threat-summary':
+        report = generateThreatSummaryReport(data);
         break;
-      case 'incident-response':
-        reportContent = generateIncidentResponseReport(data, options);
+      case 'ip-intel':
+        report = generateIPIntelReport(data);
         break;
-      case 'intelligence-briefing':
-        reportContent = generateIntelligenceBriefing(data, options);
+      case 'cve-analysis':
+        report = generateCVEAnalysisReport(data);
         break;
-      case 'executive-summary':
-        reportContent = generateExecutiveSummary(data, options);
+      case 'full-assessment':
+        report = generateFullAssessmentReport(data);
         break;
       case 'ioc-report':
-        reportContent = generateIOCReport(data, options);
+        report = generateIOCReport(data);
         break;
       default:
-        return NextResponse.json({ error: 'Invalid report type' }, { status: 400 });
+        return NextResponse.json({ 
+          error: `Tipo de informe no reconocido: ${reportType}`,
+          availableTypes: ['threat-summary', 'ip-intel', 'cve-analysis', 'full-assessment', 'ioc-report']
+        }, { status: 400 });
     }
 
     return NextResponse.json({
       success: true,
       data: {
-        report: reportContent,
+        report,
         metadata: {
           generatedAt: new Date().toISOString(),
-          reportId: `RPT-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`,
-          version: '3.0',
-          classification: options?.classification || 'CONFIDENTIAL'
+          type: reportType,
+          classification: options.classification || 'CONFIDENTIAL',
+          version: '1.0'
         }
       }
     });
-  } catch (error) {
+
+  } catch (error: any) {
     console.error('Report Generation Error:', error);
     return NextResponse.json(
-      { error: 'Failed to generate report' },
+      { error: 'Error al generar el informe', details: error.message },
       { status: 500 }
     );
   }
 }
 
-function generateThreatAssessmentReport(data: any, options: any): any {
-  const currentDate = new Date().toLocaleDateString('en-US', { 
+function generateThreatSummaryReport(threatData: any) {
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('es-ES', { 
     year: 'numeric', month: 'long', day: 'numeric' 
   });
 
   return {
-    title: 'Threat Assessment Report',
-    subtitle: 'Comprehensive Cyber Threat Landscape Analysis',
-    date: currentDate,
+    title: 'Informe Ejecutivo de Inteligencia de Amenazas',
+    subtitle: `Resumen de Amenazas - ${dateStr}`,
     executiveSummary: {
-      overview: `This report provides a comprehensive assessment of the current cyber threat landscape based on analysis conducted between ${options?.period || 'the past 30 days'}. The assessment identifies key threat actors, attack vectors, and recommended mitigation strategies.`,
+      content: threatData?.globalThreatLevel 
+        ? `El nivel global de amenazas se encuentra actualmente en "${threatData.globalThreatLevel.level}" con una puntuación de ${threatData.globalThreatLevel.score}/100. Se han identificado ${threatData.activeThreats?.length || 0} vulnerabilidades recientes y ${threatData.campaigns?.filter((c: any) => c.status === 'ACTIVE').length || 0} campañas activas que requieren atención inmediata.`
+        : 'Se recomienda ejecutar un análisis completo de amenazas antes de generar este informe.',
       keyFindings: [
-        `Global threat level assessed as "${data.globalThreatLevel?.level || 'Elevated'}" with a composite score of ${data.globalThreatLevel?.score || 70}/100`,
-        `${data.activeThreats?.length || 12} active threat campaigns identified targeting various sectors`,
-        `${data.iocs?.length || 250}+ Indicators of Compromise (IOCs) added to tracking database`,
-        `${data.campaigns?.length || 4} major APT campaigns showing increased activity`
+        'Monitoreo continuo de IOCs activo',
+        'Integración con bases de datos de vulnerabilidades (NIST NVD)',
+        'Detección de campañas de amenazas persistentes'
       ],
-      riskRating: {
-        overall: data.globalThreatLevel?.level || 'Elevated',
-        score: data.globalThreatLevel?.score || 70,
-        trend: 'Increasing',
-        factors: ['Geopolitical tensions driving cyber operations', 'Ransomware-as-a-Service expansion', 'AI-powered attack tools emerging']
-      }
+      recommendations: [
+        'Revisar y actualizar reglas de firewall basadas en IOCs detectados',
+        'Aplicar parches críticos para CVEs de alta severidad',
+        'Capacitar al personal sobre campañas de phishing activas'
+      ]
     },
     sections: [
       {
-        id: 1,
-        title: 'Executive Overview',
-        content: `The cybersecurity landscape continues to evolve rapidly, with state-sponsored actors and criminal organizations leveraging increasingly sophisticated techniques. This assessment synthesizes intelligence from multiple sources to provide actionable insights for organizational decision-makers.
-
-Our analysis indicates a marked increase in supply chain attacks, with adversaries recognizing the multiplier effect of compromising trusted software vendors. Additionally, the proliferation of AI-assisted attack tools has lowered the barrier to entry for less sophisticated threat actors, expanding the overall threat pool significantly.`,
-        metrics: {
-          threatsIdentified: data.activeThreats?.length || 12,
-          iocsTracked: data.iocs?.length || 250,
-          campaignsMonitored: data.campaigns?.length || 4,
-          sectorsAffected: 8
-        }
+        title: 'Nivel Global de Amenazas',
+        content: threatData?.globalThreatLevel || null,
+        type: 'metric'
       },
       {
-        id: 2,
-        title: 'Threat Actor Analysis',
-        subsections: [
-          {
-            name: 'Nation-State Actors',
-            content: 'State-sponsored groups continue to represent the most sophisticated threat category. Primary actors include Russian-linked APT28/APT29 focusing on espionage and influence operations, Chinese APT groups targeting intellectual property, and North Korean Lazarus group pursuing financial gain alongside strategic objectives.',
-            actors: data.aptGroups?.slice(0, 3) || []
-          },
-          {
-            name: 'Cybercriminal Organizations',
-            content: 'Ransomware-as-a-Service (RaaS) models have democratized access to sophisticated attack capabilities. Groups like LockBit, BlackCat, and Conti continue to evolve their tactics, implementing double-extortion strategies that combine encryption with data theft.',
-            trends: ['Increased targeting of MSPs', 'Cross-sector proliferation', 'Improved evasion techniques']
-          },
-          {
-            name: 'Hacktivists',
-            content: 'Ideologically motivated actors have increased activity, particularly around geopolitical events. While typically less sophisticated, these groups can cause significant disruption through DDoS attacks and website defacements.'
-          }
-        ]
+        title: 'Vulnerabilidades Recientes',
+        content: formatVulnerabilitiesForReport(threatData?.activeThreats || []),
+        type: 'table'
       },
       {
-        id: 3,
-        title: 'Attack Vector Analysis',
-        vectors: [
-          { name: 'Phishing/Social Engineering', prevalence: 35, trend: '↑ Increasing', details: 'Remains the most common initial access vector, with spear-phishing showing highest success rate.' },
-          { name: 'Exploit Vulnerabilities', prevalence: 25, trend: '→ Stable', details: 'Zero-day exploits command premium prices; unpatched systems remain primary targets.' },
-          { name: 'Supply Chain', prevalence: 18, trend: '↑↑ Rapidly Increasing', details: 'Software supply chain compromises provide high ROI for attackers.' },
-          { name: 'Credential Attacks', prevalence: 12, trend: '↑ Increasing', details: 'Password spraying, credential stuffing, and session hijacking prevalent.' },
-          { name: 'Insider Threats', prevalence: 10, trend: '→ Stable', details: 'Both malicious insiders and negligent users contribute to breaches.' }
-        ]
+        title: 'Campañas Activas',
+        content: threatData?.campaigns || [],
+        type: 'list'
       },
       {
-        id: 4,
-        title: 'Sector-Specific Threats',
-        sectors: [
-          { sector: 'Financial Services', topThreats: ['Ransomware', 'Fraud', 'DDoS'], riskLevel: 'High' },
-          { sector: 'Healthcare', topThreats: ['Ransomware', 'Data Theft', 'PII Exposure'], riskLevel: 'Critical' },
-          { sector: 'Government', topThreats: ['Espionage', 'DDoS', 'Data Destruction'], riskLevel: 'Critical' },
-          { sector: 'Technology', topThreats: ['IP Theft', 'Supply Chain', 'Sabotage'], riskLevel: 'High' },
-          { sector: 'Manufacturing', topThreats: ['Industrial Espionage', 'Ransomware'], riskLevel: 'Medium-High' }
-        ]
-      },
-      {
-        id: 5,
-        title: 'Indicators of Compromise (IOCs)',
-        summary: {
-          totalIOCs: data.iocs?.length || 250,
-          highConfidence: Math.floor((data.iocs?.length || 250) * 0.6),
-          byType: {
-            ip: Math.floor((data.iocs?.length || 250) * 0.3),
-            domain: Math.floor((data.iocs?.length || 250) * 0.35),
-            hash: Math.floor((data.iocs?.length || 250) * 0.2),
-            url: Math.floor((data.iocs?.length || 250) * 0.15)
-          }
-        },
-        topIOCs: data.iocs?.slice(0, 10) || []
-      },
-      {
-        id: 6,
-        title: 'Recommendations',
-        priorities: [
-          {
-            priority: 'Immediate (0-30 days)',
-            actions: [
-              'Patch all critical and high-severity vulnerabilities within 72 hours',
-              'Implement MFA across all remote access points',
-              'Update firewall rules with latest IOC blocklists',
-              'Conduct emergency security awareness training focused on phishing recognition'
-            ]
-          },
-          {
-            priority: 'Short-term (30-90 days)',
-            actions: [
-              'Deploy endpoint detection and response (EDR) solution',
-              'Implement network segmentation for critical assets',
-              'Establish 24/7 security monitoring capability',
-              'Develop and test incident response playbooks'
-            ]
-          },
-          {
-            priority: 'Medium-term (90-180 days)',
-            actions: [
-              'Conduct tabletop exercises for ransomware scenarios',
-              'Implement zero-trust architecture principles',
-              'Enhance third-party risk management program',
-              'Deploy deception technology for early threat detection'
-            ]
-          },
-          {
-            priority: 'Long-term (180+ days)',
-            actions: [
-              'Achieve maturity in security operations center',
-              'Implement advanced threat hunting capabilities',
-              'Develop threat intelligence program',
-              'Conduct regular red team assessments'
-            ]
-          }
-        ]
-      },
-      {
-        id: 7,
-        title: 'Appendices',
-        appendices: [
-          { name: 'A: Full IOC List', description: 'Complete list of all tracked indicators' },
-          { name: 'B: Threat Actor Profiles', description: 'Detailed profiles of monitored threat groups' },
-          { name: 'C: Technical Indicators', description: 'YARA rules, Sigma rules, Snort rules' },
-          { name: 'D: Glossary', description: 'Definitions of technical terms used' },
-          { name: 'E: References', description: 'Sources and attribution methodology' }
-        ]
+        title: 'Grupos APT Monitoreados',
+        content: threatData?.aptGroups || [],
+        type: 'grid'
       }
     ],
-    conclusion: {
-      summary: 'The current threat landscape demands vigilant, proactive security measures. Organizations must balance defensive capabilities with resilience planning to ensure business continuity in the face of inevitable compromise attempts.',
-      nextSteps: 'Schedule follow-up briefing to discuss implementation roadmap and resource allocation for recommended actions.',
-      contact: 'For questions regarding this report, contact the Threat Intelligence Team.'
+    footer: {
+      disclaimer: 'Este informe fue generado automáticamente por NEXUS INTEL OSINT Platform. Los datos provienen de fuentes públicas y deben ser verificados antes de tomar decisiones críticas.',
+      nextReview: new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString()
     }
   };
 }
 
-function generateIncidentResponseReport(data: any, options: any): any {
+function generateIPIntelReport(ipData: any) {
+  if (!ipData) {
+    return {
+      title: 'Informe de Intelencia IP',
+      error: 'No se proporcionaron datos de IP para generar el informe.'
+    };
+  }
+
   return {
-    title: 'Incident Response Report',
-    subtitle: `Case #${data.incidentId || 'IR-2024-' + Date.now()}`,
-    date: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+    title: 'Informe de Intelencia IP',
+    subtitle: `Análisis de ${ipData.query || 'IP desconocida'}`,
     executiveSummary: {
-      incidentOverview: data.description || 'Security incident requiring investigation and response',
-      severity: data.severity || 'High',
-      status: data.status || 'Contained',
-      timeline: {
-        detected: data.detectedAt || new Date().toISOString(),
-        contained: data.containedAt || new Date().toISOString(),
-        eradicated: data.eradicatedAt || null,
-        recovered: data.recoveredAt || null
-      }
+      content: `La dirección IP ${ipData.query} ha sido analizada y clasificada con nivel de amenaza "${ipData.threat?.level || 'UNKNOWN'}" (${ipData.threat?.score || 0}/100). La IP está ubicada en ${ipData.geolocation?.city || 'desconocido'}, ${ipData.geolocation?.country || 'desconocido'} y es operada por ${ipData.network?.isp || 'ISP desconocido'}.`,
+      keyFindings: ipData.threat?.indicators || [],
+      recommendations: ipData.threat?.recommendations || []
     },
     sections: [
       {
-        id: 1,
-        title: 'Incident Summary',
-        content: `Detailed analysis of the security incident including initial vector, scope of compromise, and immediate actions taken.`
+        title: 'Información Geolocalización',
+        content: ipData.geolocation,
+        type: 'location'
       },
       {
-        id: 2,
-        title: 'Timeline of Events',
-        events: data.timeline || []
+        title: 'Información de Red',
+        content: ipData.network,
+        type: 'network'
       },
       {
-        id: 3,
-        title: 'Affected Systems',
-        systems: data.affectedSystems || []
-      },
-      {
-        id: 4,
-        title: 'Root Cause Analysis',
-        findings: data.rootCause || {}
-      },
-      {
-        id: 5,
-        title: 'Lessons Learned',
-        lessons: data.lessonsLearned || []
-      },
-      {
-        id: 6,
-        title: 'Preventive Measures',
-        recommendations: data.recommendations || []
+        title: 'Evaluación de Amenazas',
+        content: ipData.threat,
+        type: 'threat'
       }
+    ],
+    actionItems: ipData.threat?.score >= 40 ? [
+      `Considerar bloqueo de IP ${ipData.query} en perimeter firewall`,
+      'Agregar a lista de monitoreo de seguridad',
+      'Notificar al equipo SOC sobre actividad sospechosa'
+    ] : [
+      'Continuar monitoreo normal',
+      'Registrar análisis en logs de inteligencia'
     ]
   };
 }
 
-function generateIntelligenceBriefing(data: any, options: any): any {
+function generateCVEAnalysisReport(cveData: any) {
+  const cves = cveData?.results || [cveData];
+  
   return {
-    title: 'Threat Intelligence Briefing',
-    subtitle: `Classification: ${options?.classification || 'CONFIDENTIAL'}`,
-    date: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
-    summary: {
-      headline: data.headline || 'Significant developments in the cyber threat landscape',
-      keyPoints: data.keyPoints || []
+    title: 'Informe de Análisis de Vulnerabilidades',
+    subtitle: `Análisis de ${cves.length} vulnerabilidad(es)`,
+    executiveSummary: {
+      content: cveData?.statistics
+        ? `Se analizaron ${cveData.statistics.total} vulnerabilidades. Distribución por severidad: ${Object.entries(cveData.statistics.bySeverity).map(([k,v]) => `${k}: ${v}`).join(', ')}. Puntuación CVSS promedio: ${cveData.statistics.avgScore}, máxima: ${cveData.statistics.highestScore}.`
+        : 'Análisis de vulnerabilidad individual.',
+      keyFindings: cves.slice(0, 5).map((cve: any) => ({
+        id: cve.id,
+        severity: cve.cvss?.severity,
+        score: cve.cvss?.score
+      })),
+      recommendations: generateCVERecommendations(cves)
     },
     sections: [
-      { title: 'Situation Overview', content: '' },
-      { title: 'Threat Actor Updates', content: '' },
-      { title: 'Technical Analysis', content: '' },
-      { title: 'Implications', content: '' },
-      { title: 'Recommended Actions', content: '' }
-    ]
+      {
+        title: 'Estadísticas Generales',
+        content: cveData?.statistics || null,
+        type: 'stats'
+      },
+      {
+        title: 'Detalles de Vulnerabilidades',
+        content: cves.map(formatCVEForReport),
+        type: 'detailed-list'
+      }
+    ],
+    remediationPriority: cves
+      .sort((a: any, b: any) => (b.cvss?.score || 0) - (a.cvss?.score || 0))
+      .slice(0, 5)
+      .map((cve: any) => ({
+        priority: cve.cvss?.score >= 9 ? 'CRÍTICO' : cve.cvss?.score >= 7 ? 'ALTO' : 'MEDIO',
+        cveId: cve.id,
+        score: cve.cvss?.score,
+        action: getRemediationAction(cve)
+      }))
   };
 }
 
-function generateExecutiveSummary(data: any, options: any): any {
+function generateFullAssessmentReport(allData: any) {
   return {
-    title: 'Executive Security Summary',
-    period: options?.period || 'Monthly',
-    date: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long' }),
-    kpis: {
-      incidentsHandled: Math.floor(Math.random() * 50) + 10,
-      threatsBlocked: Math.floor(Math.random() * 10000) + 5000,
-      vulnerabilityPatches: Math.floor(Math.random() * 100) + 20,
-      securityScore: Math.floor(Math.random() * 20) + 80,
-      mttr: `${Math.floor(Math.random() * 48) + 4} hours`
+    title: 'Informe Integral de Seguridad OSINT',
+    subtitle: 'Evaluación Completa de Postura de Seguridad',
+    executiveSummary: {
+      content: 'Este informe integral combina múltiples fuentes de inteligencia OSINT para proporcionar una visión completa del panorama actual de amenazas y la postura de seguridad detectada.',
+      scope: [
+        'Inteligencia de direcciones IP analizadas',
+        'Búsqueda de vulnerabilidades (CVE)',
+        'Feed de amenazas en tiempo real',
+        'Indicadores de compromiso (IOCs)',
+        'Campañas de amenazas activas'
+      ],
+      overallRisk: allData?.threatData?.globalThreatLevel?.level || 'MODERADO'
     },
-    highlights: [],
-    concerns: [],
-    budgetRecommendations: []
+    sections: [
+      {
+        title: 'Resumen de Amenazas Globales',
+        content: allData?.threatData?.globalThreatLevel,
+        type: 'summary'
+      },
+      {
+        title: 'IOCs Relevantes',
+        content: allData?.threatData?.iocs?.slice(0, 20) || [],
+        type: 'table'
+      },
+      {
+        title: 'Campañas en Curso',
+        content: allData?.threatData?.campaigns || [],
+        type: 'campaigns'
+      }
+    ],
+    strategicRecommendations: [
+      'Implementar monitoreo continuo de IOCs en SIEM/SOC',
+      'Establecer proceso de parcheo acelerado para CVEs críticos',
+      'Desplegar soluciones de protección contra amenazas basadas en intel',
+      'Programar ejercicios de red team basados en TTPs observados',
+      'Revisar y actualizar políticas de acceso basado en amenazas actuales'
+    ],
+    appendix: {
+      dataSources: [
+        'NIST National Vulnerability Database (NVD)',
+        'ip-api.com (Geolocalización)',
+        'AlienVault OTX (IOCs)',
+        'Fuentes de Threat Intelligence públicas'
+      ],
+      methodology: 'Análisis automatizado con correlación multi-fuente',
+      limitations: 'Los datos están sujetos a disponibilidad de APIs externas y rate limits'
+    }
   };
 }
 
-function generateIOCReport(data: any, options: any): any {
+function generateIOCReport(iocData: any) {
   return {
-    title: 'Indicator of Compromise (IOC) Report',
-    date: new Date().toISOString(),
-    iocs: data.iocs || [],
-    statistics: {},
-    exportFormats: ['STIX 2.1', 'CSV', 'JSON', 'OpenIOC']
+    title: 'Informe de Indicadores de Compromiso (IOCs)',
+    subtitle: `Reporte de ${iocData?.iocs?.length || 0} IOCs`,
+    executiveSummary: {
+      content: `Se han recopilado y analizado ${iocData?.iocs?.length || 0} indicadores de compromiso de diversas fuentes. Los IOCs cubren tipos: ${Object.keys(iocData?.statistics?.iocByType || {}).join(', ') || 'varios'}.`,
+      iocBreakdown: iocData?.statistics?.iocByType || {},
+      threatDistribution: iocData?.statistics?.iocByThreatLevel || {}
+    },
+    sections: [
+      {
+        title: 'IOCs por Tipo',
+        content: groupIOCsByType(iocData?.iocs || []),
+        type: 'grouped'
+      },
+      {
+        title: 'IOCs Críticos (Acción Inmediata)',
+        content: (iocData?.iocs || []).filter((ioc: any) => 
+          ioc.threatLevel === 'CRITICAL' || ioc.threatLevel === 'High'
+        ),
+        type: 'critical'
+      }
+    ],
+    implementationGuide: {
+      firewall: 'Importar IPs y dominios en reglas de bloqueo',
+      siem: 'Crear reglas de correlación para detección',
+      dns: 'Configurar DNS sinkhole para dominios maliciosos',
+      email: 'Agregar a listas negras de spam/phishing',
+      edr: 'Configurar detección de hashes maliciosos'
+    }
   };
+}
+
+// Helper functions
+
+function formatVulnerabilitiesForReport(vulns: any[]) {
+  return vulns.map(v => ({
+    id: v.id,
+    description: v.description?.substring(0, 150),
+    severity: v.severity,
+    cvssScore: v.cvssScore,
+    published: v.published
+  }));
+}
+
+function formatCVEForReport(cve: any) {
+  return {
+    id: cve.id,
+    description: cve.descriptions,
+    cvss: cve.cvss,
+    cwe: cve.cwe,
+    references: cve.references?.slice(0, 3),
+    status: cve.status,
+    dates: cve.dates
+  };
+}
+
+function generateCVERecommendations(cves: any[]): string[] {
+  const hasCritical = cves.some((c: any) => c.cvss?.severity === 'CRITICAL');
+  const hasHigh = cves.some((c: any) => c.cvss?.severity === 'HIGH');
+  
+  const recs = [];
+  
+  if (hasCritical) {
+    recs.push('🚨 PRIORIDAD CRÍTICA: Aplicar parches para CVEs CRÍTICAS dentro de 72 horas');
+  }
+  if (hasHigh) {
+    recs.push('⚠️ ALTA PRIORIDAD: Remediar CVEs de severidad ALTA dentro de 2 semanas');
+  }
+  
+  recs.push('Realizar evaluación de impacto para cada CVE identificada');
+  recs.push('Verificar si sistemas internos son afectados');
+  recs.push('Implementar controles mitigantes mientras se aplica parche');
+  recs.push('Documentar excepciones si no se puede parchear inmediatamente');
+  
+  return recs;
+}
+
+function getRemediationAction(cve: any): string {
+  if (!cve.cvss?.score) return 'Evaluar impacto';
+  if (cve.cvss.score >= 9) return 'Parche crítico - 72h';
+  if (cve.cvss.score >= 7) return 'Parche alto - 2 semanas';
+  if (cve.cvss.score >= 4) return 'Parche medio - 30 días';
+  return 'Parche bajo - siguiente ciclo';
+}
+
+function groupIOCsByType(iocs: any[]): Record<string, any[]> {
+  return iocs.reduce((acc, ioc) => {
+    const type = ioc.type || 'unknown';
+    if (!acc[type]) acc[type] = [];
+    acc[type].push(ioc);
+    return acc;
+  }, {} as Record<string, any[]>);
 }

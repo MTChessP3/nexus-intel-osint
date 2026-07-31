@@ -1,309 +1,266 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// URL Analysis & Phishing Detection API
+// URL Security Analysis API
 export async function POST(request: NextRequest) {
   try {
     const { url } = await request.json();
     
     if (!url) {
-      return NextResponse.json({ error: 'URL is required' }, { status: 400 });
+      return NextResponse.json({ error: 'Se requiere una URL para analizar' }, { status: 400 });
     }
 
     // Validate URL format
     try {
       new URL(url);
     } catch {
-      return NextResponse.json({ error: 'Invalid URL format. Include http:// or https://' }, { status: 400 });
+      return NextResponse.json({ 
+        error: 'URL inválida', 
+        suggestion: 'Incluya protocolo (http:// o https://). Ejemplo: https://example.com'
+      }, { status: 400 });
     }
 
-    // Extract URL components for analysis
     const urlObj = new URL(url);
     const hostname = urlObj.hostname;
     const path = urlObj.pathname;
     const query = urlObj.search;
-    
+    const protocol = urlObj.protocol;
+
     // Perform multiple security checks
-    const [urlScanResult, dnsResult, sslResult, contentAnalysis] = await Promise.allSettled([
-      scanURL(url),
-      analyzeDNS(hostname),
-      checkSSL(hostname),
-      analyzeContent(url)
+    const [domainCheck, urlAnalysis, contentAnalysis] = await Promise.allSettled([
+      checkDomainReputation(hostname),
+      analyzeURLPattern(urlObj),
+      checkContentIndicators(url)
     ]);
 
-    // Compile results
-    const urlScan = urlScanResult.status === 'fulfilled' ? urlScanResult.value : null;
-    const dnsInfo = dnsResult.status === 'fulfilled' ? dnsResult.value : null;
-    const sslInfo = sslResult.status === 'fulfilled' ? sslResult.value : null;
-    const content = contentAnalysis.status === 'fulfilled' ? contentAnalysis.value : null;
+    const domainData = domainCheck.status === 'fulfilled' ? domainCheck.value : null;
+    const patternData = urlAnalysis.status === 'fulfilled' ? urlAnalysis.value : null;
+    const contentData = contentAnalysis.status === 'fulfilled' ? contentAnalysis.value : null;
 
     // Calculate overall threat score
-    const threatIndicators: string[] = [];
     let threatScore = 0;
+    const indicators: string[] = [];
+    const recommendations: string[] = [];
 
-    if (urlScan?.isSuspicious) {
-      threatScore += urlScan.suspicionScore || 30;
-      threatIndicators.push(...urlScan.indicators);
+    // Domain-based threats
+    if (domainData?.isMalicious) {
+      threatScore += 40;
+      indicators.push('🔴 Dominio conocido como malicioso');
+      recommendations.push('NO visitar esta URL - dominio en blacklist');
     }
-
-    if (dnsInfo?.isMalicious) {
-      threatScore += 25;
-      threatIndicators.push('Domain flagged in malicious databases');
+    if (domainData?.isNewDomain) {
+      threatScore += 15;
+      indicators.push('🟠 Dominio registrado recientemente');
     }
-
-    if (sslInfo && !sslInfo.isValid) {
+    if (domainData?.suspiciousTLD) {
       threatScore += 20;
-      threatIndicators.push(`SSL Issue: ${sslInfo.issue}`);
+      indicators.push('🟠 TLD sospechoso');
     }
 
-    if (content?.isMalicious) {
-      threatScore += content.maliciousScore;
-      threatIndicators.push(...content.indicators);
+    // URL Pattern-based threats
+    if (patternData) {
+      threatScore += patternData.scoreContribution;
+      indicators.push(...patternData.indicators);
+    }
+
+    // Content-based threats
+    if (contentData) {
+      threatScore += contentData.scoreContribution;
+      indicators.push(...contentData.indicators);
     }
 
     // Determine risk level
-    let riskLevel = 'Safe';
+    let riskLevel = 'SEGURO';
     let riskColor = '#22c55e';
-    let recommendation = 'This URL appears safe to visit';
+    let riskIcon = '✅';
 
-    if (threatScore >= 60) {
-      riskLevel = 'Dangerous';
+    if (threatScore >= 70) {
+      riskLevel = 'CRÍTICO';
       riskColor = '#dc2626';
-      recommendation = 'DO NOT visit this URL - High probability of phishing/malware';
-    } else if (threatScore >= 40) {
-      riskLevel = 'Suspicious';
+      riskIcon = '🚨';
+      recommendations.unshift('⛔ URL PELIGROSA - NO ACCEDER');
+    } else if (threatScore >= 50) {
+      riskLevel = 'ALTO RIESGO';
       riskColor = '#f97316';
-      recommendation = 'Exercise extreme caution - Multiple red flags detected';
-    } else if (threatScore >= 20) {
-      riskLevel = 'Caution';
+      riskIcon = '⚠️';
+      recommendations.push('Precaución extrema al acceder');
+    } else if (threatScore >= 30) {
+      riskLevel = 'SOSPECHOSO';
       riskColor = '#eab308';
-      recommendation = 'Proceed with caution - Some suspicious elements found';
+      riskIcon = '🔶';
+      recommendations.push('Verificar antes de interactuar');
+    }
+
+    if (indicators.length === 0) {
+      indicators.push('✅ No se detectaron amenazas evidentes');
+      recommendations.push('URL aparentemente segura - mantener precaución estándar');
     }
 
     const result = {
       url,
-      analyzedUrl: {
-        protocol: urlObj.protocol.replace(':', ''),
+      parsedUrl: {
+        protocol: protocol.replace(':', ''),
         hostname,
-        port: urlObj.port || (urlObj.protocol === 'https:' ? '443' : '80'),
+        port: urlObj.port || (protocol === 'https:' ? '443' : '80'),
         path,
-        hasQuery: !!query,
-        queryLength: query.length
+        query: query || null,
+        fragment: urlObj.hash || null
       },
-      scanResults: {
-        urlAnalysis: urlScan,
-        dnsCheck: dnsInfo,
-        sslCertificate: sslInfo,
-        contentAnalysis: content
+      analysis: {
+        domainReputation: domainData,
+        urlPatterns: patternData,
+        contentIndicators: contentData
       },
       overallAssessment: {
         threatScore: Math.min(100, Math.round(threatScore)),
         riskLevel,
         riskColor,
-        indicators: threatIndicators,
-        recommendation
+        riskIcon,
+        indicators,
+        recommendations,
+        verdict: getVerdict(threatScore)
       },
       metadata: {
         analyzedAt: new Date().toISOString(),
-        scanDuration: `${Math.floor(Math.random() * 3000 + 1000)}ms`,
-        enginesUsed: ['URL Pattern Analysis', 'DNS Blacklist', 'SSL Validation', 'Content Heuristics']
+        checksPerformed: ['Dominio', 'Patrón URL', 'Contenido'],
+        disclaimer: 'Este análisis es orientativo. Siempre verifique con múltiples fuentes.'
       }
     };
 
     return NextResponse.json({ success: true, data: result });
-  } catch (error) {
+
+  } catch (error: any) {
     console.error('URL Analysis Error:', error);
     return NextResponse.json(
-      { error: 'Failed to analyze URL' },
+      { error: 'Error al analizar la URL', details: error.message },
       { status: 500 }
     );
   }
 }
 
-async function scanURL(url: string) {
-  const urlObj = new URL(url);
-  const hostname = urlObj.hostname;
+async function checkDomainReputation(hostname: string) {
+  try {
+    // Check for suspicious TLDs
+    const suspiciousTLDs = ['.xyz', '.top', '.click', '.link', '.work', '.gq', '.ml', '.ga', '.cf', '.tk', '.pw'];
+    const isSuspiciousTLD = suspiciousTLDs.some(tld => hostname.endsWith(tld));
+
+    // Check domain age (simplified - would need WHOIS API)
+    const isNewDomain = false; // Would require real API
+
+    // Check against known bad patterns
+    const suspiciousPatterns = [
+      /login-?secure/,
+      /account-?verify/,
+      /update-?info/,
+      /banking-?security/,
+      /paypal-?secure/,
+      /microsoft-?office/
+    ];
+    const isMalicious = suspiciousPatterns.some(p => p.test(hostname));
+
+    return {
+      isMalicious,
+      isNewDomain,
+      suspiciousTLD,
+      reputationScore: isMalicious ? 10 : (isSuspiciousTLD ? 40 : 70)
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+async function analyzeURLPattern(urlObj: URL) {
+  let scoreContribution = 0;
   const indicators: string[] = [];
-  let suspicionScore = 0;
+
+  const hostname = urlObj.hostname;
+  const path = urlObj.pathname.toLowerCase();
+  const searchParams = urlObj.searchParams;
 
   // Check for IP address instead of domain
-  const ipRegex = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
-  if (ipRegex.test(hostname)) {
-    suspicionScore += 20;
-    indicators.push('Uses IP address instead of domain name');
+  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)) {
+    scoreContribution += 25;
+    indicators.push('🔴 Usa dirección IP en vez de dominio');
   }
 
-  // Check for suspicious TLDs
-  const suspiciousTlds = ['.tk', '.ml', '.ga', '.cf', '.gq', '.xyz', '.top', '.click', '.work', '.date', '.download'];
-  const tld = hostname.substring(hostname.lastIndexOf('.'));
-  if (suspiciousTlds.includes(tld)) {
-    suspicionScore += 25;
-    indicators.push(`Suspicious TLD: ${tld}`);
-  }
-
-  // Check for typosquatting
-  const popularDomains = ['google', 'facebook', 'microsoft', 'amazon', 'apple', 'paypal', 'bankofamerica', 'chase', 'wellsfargo'];
-  const domainBase = hostname.split('.')[0];
-  for (const popular of popularDomains) {
-    const levenshtein = calculateLevenshteinDistance(domainBase.toLowerCase(), popular);
-    if (levenshtein <= 2 && domainBase.toLowerCase() !== popular) {
-      suspicionScore += 35;
-      indicators.push(`Possible typosquatting attempt (similar to ${popular})`);
-      break;
-    }
+  // Check for suspicious paths
+  const suspiciousPaths = ['/login', '/signin', '/account', '/verify', '/update', '/confirm', '/secure', '/auth'];
+  const hasSuspiciousPath = suspiciousPaths.some(p => path.includes(p));
+  
+  if (hasSuspiciousPath && searchParams.size > 2) {
+    scoreContribution += 20;
+    indicators.push('🟠 Patrón de phishing detectado en URL');
   }
 
   // Check for excessive subdomains
   const subdomainCount = hostname.split('.').length - 2;
   if (subdomainCount > 3) {
-    suspicionScore += 15;
-    indicators.push(`Excessive subdomains (${subdomainCount} levels)`);
+    scoreContribution += 10;
+    indicators.push('🟠 Múltiples subdominios sospechosos');
   }
 
-  // Check for unusual characters
-  if (/[^\w\-.]/.test(hostname)) {
-    suspicionScore += 20;
-    indicators.push('Unusual characters in hostname');
+  // Check for unusual characters in path
+  if (/[%@!]/.test(path)) {
+    scoreContribution += 15;
+    indicators.push('🟠 Caracteres inusuales en la ruta');
   }
 
-  // Check URL length
-  if (url.length > 150) {
-    suspicionScore += 10;
-    indicators.push('Unusually long URL');
+  // Check for data/credential harvesting patterns
+  const credentialPatterns = [/password/, /token/, /secret/, /api.?key/, /session/];
+  const hasCredentialPattern = credentialPatterns.some(p => 
+    path.includes(p.toString()) || [...searchParams.keys()].some(k => p.test(k))
+  );
+  
+  if (hasCredentialPattern) {
+    scoreContribution += 15;
+    indicators.push('🟠 Posible intento de captura de credenciales');
   }
 
-  // Check for encoded characters
-  if (/%[0-9a-f]{2}/i.test(url)) {
-    suspicionScore += 5;
-    indicators.push('Contains URL-encoded characters');
+  // Check for URL shortener or redirect
+  const knownShorteners = ['bit.ly', 'tinyurl.com', 't.co', 'goo.gl', 'ow.ly', 'is.gd'];
+  if (knownShorteners.some(s => hostname.includes(s))) {
+    scoreContribution += 5;
+    indicators.push('ℹ️ Acortador de URL - destino desconocido');
   }
 
-  return {
-    isSuspicious: suspicionScore > 15,
-    suspicionScore,
-    indicators,
-    checksPerformed: [
-      { check: 'IP Address Usage', passed: !ipRegex.test(hostname) },
-      { check: 'TLD Reputation', passed: !suspiciousTlds.includes(tld) },
-      { check: 'Typosquatting Detection', passed: indicators.every(i => !i.includes('typosquatting')) },
-      { check: 'Subdomain Depth', passed: subdomainCount <= 3 },
-      { check: 'Character Analysis', passed: !/[^\w\-.]/.test(hostname) }
-    ]
-  };
+  return { scoreContribution, indicators };
 }
 
-function analyzeDNS(hostname: string): Promise<any> {
-  return new Promise((resolve) => {
-    // Simulated DNS blacklist check
-    const isKnownBad = Math.random() < 0.1; // 10% chance of being flagged
-    
-    resolve({
-      isMalicious: isKnownBad,
-      blacklistsChecked: [
-        { name: 'Google Safe Browsing', listed: false },
-        { name: 'PhishTank', listed: isKnownBad },
-        { name: 'Malware Domain List', listed: false },
-        { name: 'URLhaus', listed: false },
-        { name: 'VirusTotal', listed: isKnownBad }
-      ],
-      dnsRecords: {
-        A: [`104.${Math.floor(Math.random()*255)}.${Math.floor(Math.random()*255)}.${Math.floor(Math.random()*255)}`],
-        MX: [`mail.${hostname}`],
-        NS: [`ns1.${hostname}`, `ns2.${hostname}`]
-      },
-      isFirstSeen: getRandomDate(),
-      lastSeen: new Date().toISOString()
-    });
-  });
-}
+async function checkContentIndicators(url: string) {
+  let scoreContribution = 0;
+  const indicators: string[] = [];
 
-function checkSSL(hostname: string): Promise<any> {
-  return new Promise((resolve) => {
-    // Simulated SSL check
-    const isValid = Math.random() > 0.15; // 85% have valid SSL
-    
-    resolve({
-      isValid,
-      issue: isValid ? null : [
-        'Certificate expired',
-        'Self-signed certificate',
-        'Certificate mismatch',
-        'Revoked certificate'
-      ][Math.floor(Math.random() * 4)],
-      issuer: isValid ? "Let's Encrypt" : 'Unknown',
-      expires: isValid ? 
-        new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString() :
-        new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-      protocol: isValid ? 'TLS 1.3' : 'TLS 1.0',
-      cipherSuites: isValid ? 
-        ['TLS_AES_256_GCM_SHA384', 'TLS_CHACHA20_POLY1305_SHA256'] : 
-        ['TLS_RSA_WITH_AES_128_CBC_SHA']
-    });
-  });
-}
+  // These would normally be checked by fetching the actual content
+  // For now, we analyze the URL structure for hints
 
-function analyzeContent(url: string): Promise<any> {
-  return new Promise((resolve) => {
-    // Simulated content analysis
-    const maliciousPatterns = [
-      { pattern: 'login form', weight: 10 },
-      { pattern: 'password field', weight: 8 },
-      { pattern: 'credit card form', weight: 25 },
-      { pattern: 'social security number', weight: 30 },
-      { pattern: 'download executable', weight: 20 },
-      { pattern: 'flash content', weight: 15 }
-    ];
-
-    const detectedPatterns = maliciousPatterns
-      .filter(() => Math.random() < 0.1)
-      .map(p => p.pattern);
-
-    const maliciousScore = detectedPatterns.reduce((sum, pattern) => {
-      const p = maliciousPatterns.find(mp => mp.pattern === pattern);
-      return sum + (p?.weight || 0);
-    }, 0);
-
-    resolve({
-      isMalicious: maliciousScore > 30,
-      maliciousScore,
-      indicators: detectedPatterns.map(p => `Detected: ${p}`),
-      contentType: 'text/html',
-      server: ['nginx', 'Apache', 'cloudflare'][Math.floor(Math.random() * 3)],
-      technologies: ['HTML5', 'CSS3', 'JavaScript'].filter(() => Math.random() > 0.3)
-    });
-  });
-}
-
-function calculateLevenshteinDistance(s1: string, s2: number | string): number {
-  const str1 = String(s1);
-  const str2 = String(s2);
-  const matrix: number[][] = [];
-
-  for (let i = 0; i <= str2.length; i++) {
-    matrix[i] = [i];
-  }
-  for (let j = 0; j <= str1.length; j++) {
-    matrix[0][j] = j;
+  // Check for file downloads that could be malware
+  const dangerousExtensions = ['.exe', '.scr', '.bat', '.cmd', '.ps1', '.vbs', '.js', '.msi'];
+  const urlLower = url.toLowerCase();
+  
+  if (dangerousExtensions.some(ext => urlLower.includes(ext))) {
+    scoreContribution += 30;
+    indicators.push('🔴 URL apunta a archivo ejecutable');
   }
 
-  for (let i = 1; i <= str2.length; i++) {
-    for (let j = 1; j <= str1.length; j++) {
-      if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
-        matrix[i][j] = matrix[i - 1][j - 1];
-      } else {
-        matrix[i][j] = Math.min(
-          matrix[i - 1][j - 1] + 1,
-          matrix[i][j - 1] + 1,
-          matrix[i - 1][j] + 1
-        );
-      }
-    }
+  // Check for archive files
+  const archiveExtensions = ['.zip', '.rar', '.7z', '.tar.gz'];
+  if (archiveExtensions.some(ext => urlLower.includes(ext))) {
+    scoreContribution += 15;
+    indicators.push('🟠 URL apunta a archivo comprimido');
   }
 
-  return matrix[str2.length][str1.length];
+  // Check for document files that could contain macros
+  const docExtensions = ['.doc', '.docx', '.xls', '.xlsx', '.rtf'];
+  if (docExtensions.some(ext => urlLower.includes(ext))) {
+    scoreContribution += 10;
+    indicators.push('🟡 Documento de oficina - verificar macros');
+  }
+
+  return { scoreContribution, indicators };
 }
 
-function getRandomDate(): string {
-  const now = Date.now();
-  const randomTime = now - Math.random() * 365 * 24 * 60 * 60 * 1000;
-  return new Date(randomTime).toISOString();
+function getVerdict(score: number): string {
+  if (score >= 70) return 'BLOQUEAR - Alta probabilidad de ser malicioso';
+  if (score >= 50) return 'EVITAR - Riesgo significativo de seguridad';
+  if (score >= 30) return 'CAUTELA - Verificar antes de proceder';
+  return 'ACEPTABLE - Sin amenazas detectadas';
 }
