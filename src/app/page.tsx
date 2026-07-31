@@ -8,7 +8,7 @@ import {
   Copy, Filter, ChevronDown, ChevronRight, Zap, Target, Radar,
   Fingerprint, Mail, Hash, Server, Clock, MapPin, Wifi,
   BarChart3, PieChart as PieChartIcon, TrendingUp, Users, Key, Terminal,
-  Save, X, Loader2, Check, Info, AlertCircle, ArrowRight
+  Save, X, Loader2, Check, Info, AlertCircle, ArrowRight, Ban, WifiOff
 } from 'lucide-react';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
@@ -44,6 +44,20 @@ interface APIResponse {
   data?: any;
   error?: string;
   details?: string;
+  message?: string;
+  feedStatus?: Record<string, any>;
+  feeds?: any[];
+  vulnerabilities?: any[];
+  analysis?: any;
+  riskAssessment?: any;
+  dns?: any;
+  securityAnalysis?: any;
+  hashType?: string;
+  executiveSummary?: any;
+  severityBreakdown?: any;
+  typeDistribution?: any;
+  topThreats?: any;
+  recentIntelligence?: any;
   [key: string]: any;
 }
 
@@ -65,6 +79,24 @@ const STATUS_COLORS: Record<IOCStatus, string> = {
 
 const CHART_COLORS = ['#dc2626', '#f97316', '#eab308', '#22c55e', '#3b82f6'];
 
+// ==================== SAMPLE DATA FOR FALLBACK ====================
+const SAMPLE_THREAT_DATA = {
+  cisa: [
+    { cveID: 'CVE-2024-3400', vendorProject: 'Palo Alto Networks', product: 'PAN-OS', vulnerabilityName: 'Command Injection Vulnerability', dateAdded: '2024-04-12', shortDescription: 'PAN-OS GlobalProtect gateway allows authentication bypass leading to command execution.' },
+    { cveID: 'CVE-2024-21887', vendorProject: 'Ivanti', product: 'Connect Secure', vulnerabilityName: 'Request Smuggling RCE', dateAdded: '2024-01-25', shortDescription: 'Authentication bypass allowing remote code execution on vulnerable endpoints.' },
+    { cveID: 'CVE-2023-44428', vendorProject: 'Citrix', product: 'NetScaler ADC', vulnerabilityName: 'RCE Vulnerability', dateAdded: '2023-10-15', shortDescription: 'Critical unauthenticated RCE affecting NetScaler ADC and Gateway appliances.' }
+  ],
+  malware: [
+    { sha256_hash: 'a1b2c3d4e5f6...', md5_hash: 'abc123def456...', file_type: 'PE32+ executable', signature: 'Emotet', first_seen: '2024-01-15', last_seen: '2024-07-20', tags: ['banker', 'trojan'] },
+    { sha256_hash: 'f7e8d9c0b1a2...', md5_hash: '789ghi012jkl...', file_type: 'PDF document', signature: 'Phishing PDF', first_seen: '2024-02-20', last_seen: '2024-07-18', tags: ['phishing', 'pdf'] },
+    { sha256_hash: 'm3n4o5p6q7r8...', md5_hash: 'stu234vwx567y...', file_type: 'Office document', signature: 'TrickBot Loader', first_seen: '2024-03-10', last_seen: '2024-07-19', tags: ['loader', 'banker'] }
+  ],
+  sslbl: [
+    { sha256_fingerprint: '00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb', status: 'bad', listing_reason: 'Malicious SSL certificate detected in phishing campaign' },
+    { sha256_fingerprint: 'aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66', status: 'bad', listing_reason: 'Certificate associated with malware distribution' }
+  ]
+};
+
 // ==================== MAIN COMPONENT ====================
 export default function OSINTPlatform() {
   // State
@@ -80,6 +112,7 @@ export default function OSINTPlatform() {
   const [filterSeverity, setFilterSeverity] = useState<string>('all');
   const [filterType, setFilterType] = useState<string>('all');
   const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   
   // Form states
   const [inputValue, setInputValue] = useState('');
@@ -96,10 +129,17 @@ export default function OSINTPlatform() {
     loadIOCs();
   }, [activeTab]);
 
+  // Clear feedback after 3 seconds
+  useEffect(() => {
+    if (actionFeedback) {
+      const timer = setTimeout(() => setActionFeedback(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [actionFeedback]);
+
   // ==================== API FUNCTIONS ====================
   const loadIOCs = async () => {
     try {
-      setLoading(true);
       const params = new URLSearchParams();
       if (searchQuery) params.set('search', searchQuery);
       if (filterSeverity !== 'all') params.set('severity', filterSeverity);
@@ -111,18 +151,18 @@ export default function OSINTPlatform() {
       
       if (result.success) {
         setIocs(result.data);
+        showFeedback(`Loaded ${result.data.length} IOCs`);
       }
     } catch (err) {
       console.error('Load IOCs error:', err);
-    } finally {
-      setLoading(false);
+      showFeedback('Error loading IOCs', 'error');
     }
   };
 
   const callAPI = async (endpoint: string, options?: RequestInit): Promise<APIResponse> => {
     setLoading(true);
     setError(null);
-    setApiData(null);
+    setActionFeedback('Connecting to API...');
     
     try {
       const response = await fetch(endpoint, {
@@ -137,70 +177,154 @@ export default function OSINTPlatform() {
       setApiData(data);
       
       if (!data.success) {
-        setError(data.error || data.details || 'Unknown error occurred');
-      }
-      
-      // Reload IOCs after mutations
-      if (options?.method === 'POST' || options?.method === 'DELETE') {
-        setTimeout(() => loadIOCs(), 500);
+        setError(data.error || data.details || data.message || 'Unknown error occurred');
+        showFeedback(`Error: ${data.error || data.message || 'API returned error'}`, 'error');
+      } else {
+        showFeedback(`Success! Data received from ${data.source || 'API'}`, 'success');
+        
+        // Reload IOCs after mutations
+        if (options?.method === 'POST' || options?.method === 'DELETE' || options?.method === 'PATCH') {
+          setTimeout(() => loadIOCs(), 500);
+        }
       }
       
       return data;
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Network error';
       setError(errorMsg);
+      showFeedback(`Network Error: ${errorMsg}`, 'error');
       return { success: false, error: errorMsg };
     } finally {
       setLoading(false);
     }
   };
 
+  const showFeedback = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setActionFeedback(`${type.toUpperCase()}: ${message}`);
+  };
+
   // ==================== HANDLERS ====================
   const handleIPRecon = () => {
-    if (!inputValue) return;
+    if (!inputValue) {
+      showFeedback('Please enter an IP address', 'error');
+      return;
+    }
+    showFeedback(`Analyzing IP: ${inputValue}...`, 'info');
     callAPI(`/api/osint/ip?ip=${encodeURIComponent(inputValue)}`);
   };
 
   const handleDomainRecon = () => {
-    if (!inputValue) return;
+    if (!inputValue) {
+      showFeedback('Please enter a domain', 'error');
+      return;
+    }
+    showFeedback(`Resolving domain: ${inputValue}...`, 'info');
     callAPI(`/api/osint/domain?domain=${encodeURIComponent(inputValue)}`);
   };
 
   const handleURLAnalysis = () => {
-    if (!inputValue) return;
+    if (!inputValue) {
+      showFeedback('Please enter a URL', 'error');
+      return;
+    }
+    showFeedback(`Scanning URL: ${inputValue}...`, 'info');
     callAPI(`/api/osint/url?url=${encodeURIComponent(inputValue)}`);
   };
 
   const handleHashLookup = () => {
-    if (!inputValue) return;
+    if (!inputValue) {
+      showFeedback('Please enter a hash', 'error');
+      return;
+    }
+    showFeedback(`Looking up hash: ${inputValue.substring(0, 20)}...`, 'info');
     callAPI(`/api/osint/hash?hash=${encodeURIComponent(inputValue)}`);
   };
 
   const handleCVESearch = () => {
-    if (!inputValue) return;
+    if (!inputValue) {
+      showFeedback('Please enter a CVE ID or keyword', 'error');
+      return;
+    }
     const isCVE = inputValue.toUpperCase().startsWith('CVE-');
     const endpoint = isCVE 
       ? `/api/osint/cve?cveId=${encodeURIComponent(inputValue)}`
       : `/api/osint/cve?keyword=${encodeURIComponent(inputValue)}`;
+    showFeedback(`Searching NIST NVD for: ${inputValue}...`, 'info');
     callAPI(endpoint);
   };
 
   const handleAIAnalysis = async () => {
-    if (!inputValue) return;
+    if (!inputValue) {
+      showFeedback('Please enter a target for analysis', 'error');
+      return;
+    }
     const type = detectInputType(inputValue);
+    showFeedback(`Running AI analysis on ${type}: ${inputValue}...`, 'info');
     await callAPI('/api/osint/ai', {
       method: 'POST',
       body: JSON.stringify({ target: inputValue, type })
     });
   };
 
-  const handleThreatFeedLoad = (feed?: string) => {
+  const handleThreatFeedLoad = async (feed?: string) => {
+    const feedName = feed || 'ALL';
+    showFeedback(`Loading threat feed: ${feedName}...`, 'info');
+    
     const endpoint = feed ? `/api/osint/threats?feed=${feed}&limit=20` : '/api/osint/threats?limit=20';
-    callAPI(endpoint);
+    const result = await callAPI(endpoint);
+    
+    // If external APIs failed, show sample data with clear notice
+    if (result.success && result.feeds?.length === 0 && !result.error) {
+      showFeedback('External APIs restricted - Showing sample threat data', 'info');
+      
+      // Create sample data structure
+      let sampleFeeds = [];
+      
+      if (!feed || feed === 'cisa' || feed === 'all') {
+        sampleFeeds.push({
+          source: 'CISA-KEV (Sample)',
+          type: 'Known Exploited Vulnerabilities',
+          count: SAMPLE_THREAT_DATA.cisa.length,
+          status: 'sample',
+          entries: SAMPLE_THREAT_DATA.cisa
+        });
+      }
+      
+      if (!feed || feed === 'malwaredl' || feed === 'all') {
+        sampleFeeds.push({
+          source: 'MalwareBazaar (Sample)',
+          type: 'Recent Malware Samples',
+          count: SAMPLE_THREAT_DATA.malware.length,
+          status: 'sample',
+          entries: SAMPLE_THREAT_DATA.malware
+        });
+      }
+      
+      if (!feed || feed === 'abusech' || feed === 'all') {
+        sampleFeeds.push({
+          source: 'AbuseCH-SSLBL (Sample)',
+          type: 'Malicious SSL Certificates',
+          count: SAMPLE_THREAT_DATA.sslbl.length,
+          status: 'sample',
+          entries: SAMPLE_THREAT_DATA.sslbl
+        });
+      }
+      
+      setApiData({
+        ...result,
+        feeds: sampleFeeds,
+        totalFeeds: sampleFeeds.length,
+        message: 'Showing sample data - External APIs may be restricted in this environment'
+      });
+    }
   };
 
   const handleAddIOC = async () => {
-    if (!formData.value) return;
+    if (!formData.value) {
+      showFeedback('Please enter a value for the IOC', 'error');
+      return;
+    }
+    showFeedback(`Adding ${formData.type}: ${formData.value}...`, 'info');
     await callAPI('/api/osint/iocs', {
       method: 'POST',
       body: JSON.stringify(formData)
@@ -211,6 +335,7 @@ export default function OSINTPlatform() {
 
   const handleUpdateIOC = async () => {
     if (!selectedIOC) return;
+    showFeedback(`Updating IOC: ${selectedIOC.value}...`, 'info');
     await callAPI('/api/osint/iocs', {
       method: 'PATCH',
       body: JSON.stringify({
@@ -227,18 +352,22 @@ export default function OSINTPlatform() {
 
   const handleDeleteIOC = async (id: string) => {
     if (!confirm('Are you sure you want to delete this IOC?')) return;
+    showFeedback('Deleting IOC...', 'info');
     await callAPI(`/api/osint/iocs?id=${id}`, { method: 'DELETE' });
   };
 
   const handleExport = async (format: string) => {
+    showFeedback(`Preparing ${format.toUpperCase()} export...`, 'info');
     const params = new URLSearchParams({ format });
     if (filterType !== 'all') params.set('type', filterType);
     if (filterSeverity !== 'all') params.set('severity', filterSeverity);
     
     window.open(`/api/osint/export?${params}`, '_blank');
+    showFeedback(`${format.toUpperCase()} export started`, 'success');
   };
 
   const handleGenerateReport = () => {
+    showFeedback('Generating executive report...', 'info');
     callAPI('/api/osint/reports?type=executive');
   };
 
@@ -263,14 +392,15 @@ export default function OSINTPlatform() {
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
+    showFeedback('Copied to clipboard!', 'success');
   };
 
   // ==================== HELPERS ====================
   const detectInputType = (value: string): string => {
     if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(value)) return 'ip';
-    if (/^[a-f0-9]{32}$/i.test(value)) return 'hash'; // MD5
-    if (/^[a-f0-9]{40}$/i.test(value)) return 'hash'; // SHA1
-    if (/^[a-f0-9]{64}$/i.test(value)) return 'hash'; // SHA256
+    if (/^[a-f0-9]{32}$/i.test(value)) return 'hash';
+    if (/^[a-f0-9]{40}$/i.test(value)) return 'hash';
+    if (/^[a-f0-9]{64}$/i.test(value)) return 'hash';
     if (value.toUpperCase().startsWith('CVE-')) return 'cve';
     if (/^https?:\/\//.test(value)) return 'url';
     if (/\.[a-z]{2,}$/.test(value)) return 'domain';
@@ -296,6 +426,20 @@ export default function OSINTPlatform() {
   // ==================== RENDER ====================
   return (
     <div className="min-h-screen bg-gray-950 text-white">
+      {/* Feedback Toast */}
+      {actionFeedback && (
+        <div className={`fixed top-4 right-4 z-[100] px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 animate-pulse ${
+          actionFeedback.includes('ERROR') ? 'bg-red-600 text-white' :
+          actionFeedback.includes('SUCCESS') ? 'bg-green-600 text-white' :
+          'bg-blue-600 text-white'
+        }`}>
+          {actionFeedback.includes('ERROR') ? <XCircle className="w-4 h-4" /> :
+           actionFeedback.includes('SUCCESS') ? <CheckCircle className="w-4 h-4" /> :
+           <Loader2 className="w-4 h-4 animate-spin" />}
+          <span className="text-sm font-medium">{actionFeedback}</span>
+        </div>
+      )}
+
       {/* Header */}
       <header className="bg-gray-900 border-b border-gray-800 sticky top-0 z-50">
         <div className="max-w-[1800px] mx-auto px-4 py-3">
@@ -356,7 +500,7 @@ export default function OSINTPlatform() {
             ].map(({ id, icon: Icon, label }) => (
               <button
                 key={id}
-                onClick={() => setActiveTab(id as TabType)}
+                onClick={() => { setActiveTab(id as TabType); showFeedback(`Switched to ${label}`); }}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
                   activeTab === id
                     ? 'bg-red-600 text-white'
@@ -398,7 +542,7 @@ export default function OSINTPlatform() {
             <div className="space-y-6">
               <div className="flex items-center justify-between">
                 <h2 className="text-2xl font-bold">Intelligence Dashboard</h2>
-                <button onClick={() => handleGenerateReport()} className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-sm font-medium">
+                <button onClick={() => handleGenerateReport()} className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-sm font-medium transition-colors">
                   <FileText className="w-4 h-4" /> Generate Report
                 </button>
               </div>
@@ -411,7 +555,8 @@ export default function OSINTPlatform() {
                   { label: 'Malicious', value: iocs.filter(i => i.status === 'MALICIOUS').length, icon: Bug, color: 'red' },
                   { label: 'Sources Used', value: [...new Set(iocs.map(i => i.source).filter(Boolean))].length, icon: Globe, color: 'green' },
                 ].map(({ label, value, icon: Icon, color }) => (
-                  <div key={label} className={`bg-gray-900 border border-gray-800 rounded-xl p-5`}>
+                  <div key={label} className="bg-gray-900 border border-gray-800 rounded-xl p-5 hover:border-gray-700 transition-colors cursor-pointer"
+                       onClick={() => setActiveTab('iocs')}>
                     <div className="flex items-center justify-between">
                       <div>
                         <p className="text-gray-400 text-sm">{label}</p>
@@ -429,38 +574,40 @@ export default function OSINTPlatform() {
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                   <h3 className="font-semibold mb-4">Severity Distribution</h3>
-                  <ResponsiveContainer width="100%" height={250}>
-                    <PieChart>
-                      <Pie
-                        data={severityChartData}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={60}
-                        outerRadius={100}
-                        paddingAngle={5}
-                        dataKey="value"
-                      >
-                        {severityChartData.map((_, index) => (
-                          <Cell key={index} fill={CHART_COLORS[index % CHART_COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip contentStyle={{ backgroundColor: '#1f2937', border: 'none' }} />
-                      <Legend />
-                    </PieChart>
-                  </ResponsiveContainer>
+                  {severityChartData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={250}>
+                      <PieChart>
+                        <Pie data={severityChartData} cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={5} dataKey="value">
+                          {severityChartData.map((_, index) => (<Cell key={index} fill={CHART_COLORS[index % CHART_COLORS.length]} />))}
+                        </Pie>
+                        <Tooltip contentStyle={{ backgroundColor: '#1f2937', border: 'none' }} />
+                        <Legend />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="h-[250px] flex items-center justify-center text-gray-500">
+                      Run reconnaissance to populate charts
+                    </div>
+                  )}
                 </div>
 
                 <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                   <h3 className="font-semibold mb-4">IOC Types</h3>
-                  <ResponsiveContainer width="100%" height={250}>
-                    <BarChart data={typeChartData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                      <XAxis stroke="#9ca3af" dataKey="name" />
-                      <YAxis stroke="#9ca3af" />
-                      <Tooltip contentStyle={{ backgroundColor: '#1f2937', border: 'none' }} />
-                      <Bar dataKey="value" fill="#ef4444" radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
+                  {typeChartData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={250}>
+                      <BarChart data={typeChartData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                        <XAxis stroke="#9ca3af" dataKey="name" />
+                        <YAxis stroke="#9ca3af" />
+                        <Tooltip contentStyle={{ backgroundColor: '#1f2937', border: 'none' }} />
+                        <Bar dataKey="value" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="h-[250px] flex items-center justify-center text-gray-500">
+                      No data yet - start analyzing!
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -468,7 +615,7 @@ export default function OSINTPlatform() {
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="font-semibold">Recently Added IOCs</h3>
-                  <button onClick={() => setActiveTab('iocs')} className="text-sm text-red-400 hover:text-red-300">
+                  <button onClick={() => setActiveTab('iocs')} className="text-sm text-red-400 hover:text-red-300 transition-colors">
                     View All →
                   </button>
                 </div>
@@ -486,35 +633,24 @@ export default function OSINTPlatform() {
                     </thead>
                     <tbody>
                       {iocs.slice(0, 10).map((ioc) => (
-                        <tr key={ioc.id} className="border-b border-gray-800/50 hover:bg-gray-800/30 cursor-pointer" onClick={() => openDetailModal(ioc)}>
-                          <td className="py-3 px-2">
-                            <span className="px-2 py-1 bg-gray-800 rounded text-xs">{ioc.type}</span>
-                          </td>
+                        <tr key={ioc.id} className="border-b border-gray-800/50 hover:bg-gray-800/30 cursor-pointer transition-colors" onClick={() => openDetailModal(ioc)}>
+                          <td className="py-3 px-2"><span className="px-2 py-1 bg-gray-800 rounded text-xs">{ioc.type}</span></td>
                           <td className="py-3 px-2 font-mono text-sm">{ioc.value.substring(0, 40)}{ioc.value.length > 40 ? '...' : ''}</td>
-                          <td className="py-3 px-2">
-                            <span style={{ color: SEVERITY_COLORS[ioc.severity] }} className="font-medium">
-                              {ioc.severity}
-                            </span>
-                          </td>
-                          <td className="py-3 px-2">
-                            <span style={{ color: STATUS_COLORS[ioc.status] }} className="font-medium">
-                              {ioc.status}
-                            </span>
-                          </td>
+                          <td className="py-3 px-2"><span style={{ color: SEVERITY_COLORS[ioc.severity] }} className="font-medium">{ioc.severity}</span></td>
+                          <td className="py-3 px-2"><span style={{ color: STATUS_COLORS[ioc.status] }} className="font-medium">{ioc.status}</span></td>
                           <td className="py-3 px-2 text-gray-400 text-xs">{ioc.source || '-'}</td>
                           <td className="py-3 px-2">
-                            <button onClick={(e) => { e.stopPropagation(); openDetailModal(ioc); }} className="p-1 hover:bg-gray-700 rounded">
+                            <button onClick={(e) => { e.stopPropagation(); openDetailModal(ioc); }} className="p-1 hover:bg-gray-700 rounded transition-colors">
                               <Eye className="w-4 h-4" />
                             </button>
                           </td>
                         </tr>
                       ))}
                       {iocs.length === 0 && (
-                        <tr>
-                          <td colSpan={6} className="py-8 text-center text-gray-500">
-                            No IOCs yet. Start by running reconnaissance or adding manually.
-                          </td>
-                        </tr>
+                        <tr><td colSpan={6} className="py-12 text-center text-gray-500">
+                          <Database className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                          No IOCs yet. Start by running reconnaissance or adding manually.
+                        </td></tr>
                       )}
                     </tbody>
                   </table>
@@ -539,24 +675,20 @@ export default function OSINTPlatform() {
                       value={inputValue}
                       onChange={(e) => setInputValue(e.target.value)}
                       onKeyPress={(e) => e.key === 'Enter' && handleIPRecon()}
-                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-blue-500 focus:outline-none"
+                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-blue-500 focus:outline-none transition-colors"
                     />
                   </div>
                   <button
                     onClick={handleIPRecon}
                     disabled={loading || !inputValue}
-                    className="px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
+                    className="px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg font-medium flex items-center gap-2 transition-colors"
                   >
                     {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
                     Analyze IP
                   </button>
                   <button
-                    onClick={() => {
-                      setModalType('add');
-                      setFormData({ ...formData, type: 'IP', value: inputValue });
-                      setShowModal(true);
-                    }}
-                    className="px-4 py-3 bg-gray-700 hover:bg-gray-600 rounded-lg"
+                    onClick={() => { setModalType('add'); setFormData({ ...formData, type: 'IP', value: inputValue }); setShowModal(true); }}
+                    className="px-4 py-3 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
                     title="Add to IOC database"
                   >
                     <Plus className="w-4 h-4" />
@@ -569,15 +701,15 @@ export default function OSINTPlatform() {
               </div>
 
               {/* Results */}
-              {apiData?.success && apiData.data && (
+              {apiData?.data && apiData.source === 'ip-api.com' && (
                 <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="font-semibold flex items-center gap-2">
                       <CheckCircle className="w-5 h-5 text-green-500" /> Live Results
                     </h3>
                     <div className="flex items-center gap-2 text-xs text-gray-400">
-                      <Clock className="w-3 h-3" /> {new Date(apiData.timestamp).toLocaleTimeString()}
-                      <span className="px-2 py-0.5 bg-green-500/20 text-green-400 rounded">LIVE</span>
+                      <Clock className="w-3 h-3" /> {new Date(apiData.timestamp || '').toLocaleTimeString()}
+                      <span className="px-2 py-0.5 bg-green-500/20 text-green-400 rounded font-medium">LIVE</span>
                     </div>
                   </div>
                   
@@ -606,19 +738,22 @@ export default function OSINTPlatform() {
                   </div>
 
                   {/* Raw JSON View */}
-                  <details className="mt-4">
-                    <summary className="cursor-pointer text-sm text-gray-400 hover:text-white">View Raw JSON Response</summary>
-                    <pre className="mt-2 p-4 bg-gray-950 rounded-lg overflow-x-auto text-xs">
+                  <details className="mt-4 group">
+                    <summary className="cursor-pointer text-sm text-gray-400 hover:text-white transition-colors flex items-center gap-2">
+                      <ChevronRight className="w-4 h-4 group-open:rotate-90 transition-transform" />
+                      View Raw JSON Response
+                    </summary>
+                    <pre className="mt-2 p-4 bg-gray-950 rounded-lg overflow-x-auto text-xs max-h-60 overflow-y-auto">
                       {JSON.stringify(apiData.data, null, 2)}
                     </pre>
                   </details>
                 </div>
               )}
 
-              {error && (
-                <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400">
-                  <XCircle className="inline w-5 h-5 mr-2" />
-                  {error}
+              {error && activeTab === 'ip' && (
+                <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 flex items-center gap-2">
+                  <XCircle className="w-5 h-5 shrink-0" />
+                  <span>{error}</span>
                 </div>
               )}
             </div>
@@ -640,24 +775,20 @@ export default function OSINTPlatform() {
                       value={inputValue}
                       onChange={(e) => setInputValue(e.target.value)}
                       onKeyPress={(e) => e.key === 'Enter' && handleDomainRecon()}
-                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-purple-500 focus:outline-none"
+                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-purple-500 focus:outline-none transition-colors"
                     />
                   </div>
                   <button
                     onClick={handleDomainRecon}
                     disabled={loading || !inputValue}
-                    className="px-6 py-3 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
+                    className="px-6 py-3 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg font-medium flex items-center gap-2 transition-colors"
                   >
                     {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
                     Analyze Domain
                   </button>
                   <button
-                    onClick={() => {
-                      setModalType('add');
-                      setFormData({ ...formData, type: 'DOMAIN', value: inputValue });
-                      setShowModal(true);
-                    }}
-                    className="px-4 py-3 bg-gray-700 hover:bg-gray-600 rounded-lg"
+                    onClick={() => { setModalType('add'); setFormData({ ...formData, type: 'DOMAIN', value: inputValue }); setShowModal(true); }}
+                    className="px-4 py-3 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
                   >
                     <Plus className="w-4 h-4" />
                   </button>
@@ -669,7 +800,6 @@ export default function OSINTPlatform() {
 
               {apiData?.dns && (
                 <div className="space-y-4">
-                  {/* DNS Records */}
                   {(['A', 'MX', 'NS', 'TXT', 'AAAA'] as const).map((type) => (
                     <div key={type} className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                       <h3 className="font-semibold mb-3 flex items-center gap-2">
@@ -696,7 +826,6 @@ export default function OSINTPlatform() {
                     </div>
                   ))}
 
-                  {/* Security Analysis */}
                   {apiData.securityAnalysis && (
                     <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                       <h3 className="font-semibold mb-3 flex items-center gap-2">
@@ -705,10 +834,10 @@ export default function OSINTPlatform() {
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <SecurityCheck label="SPF Record" pass={apiData.securityAnalysis.hasSPF} />
                         <SecurityCheck label="DMARC Record" pass={apiData.securityAnalysis.hasDMARC} />
-                        <SecurityCheck label="Mail Servers" pass={!!apiData.securityAnalysis.findings.find(f => f.includes('Mail servers'))} />
+                        <SecurityCheck label="Mail Servers" pass={!!apiData.securityAnalysis.findings?.find((f: string) => f.includes('Mail servers'))} />
                       </div>
                       <div className="mt-4 space-y-2">
-                        {apiData.securityAnalysis.findings.map((finding: string, idx: number) => (
+                        {(apiData.securityAnalysis.findings || []).map((finding: string, idx: number) => (
                           <div key={idx} className={`p-3 rounded-lg text-sm ${finding.includes('WARNING') ? 'bg-yellow-500/10 text-yellow-400' : 'bg-gray-800 text-gray-300'}`}>
                             {finding.includes('WARNING') && <AlertTriangle className="inline w-4 h-4 mr-2" />}
                             {finding}
@@ -720,10 +849,10 @@ export default function OSINTPlatform() {
                 </div>
               )}
 
-              {error && (
-                <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400">
-                  <XCircle className="inline w-5 h-5 mr-2" />
-                  {error}
+              {error && activeTab === 'domain' && (
+                <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 flex items-center gap-2">
+                  <XCircle className="w-5 h-5 shrink-0" />
+                  <span>{error}</span>
                 </div>
               )}
             </div>
@@ -745,13 +874,13 @@ export default function OSINTPlatform() {
                       value={inputValue}
                       onChange={(e) => setInputValue(e.target.value)}
                       onKeyPress={(e) => e.key === 'Enter' && handleURLAnalysis()}
-                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-cyan-500 focus:outline-none"
+                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-cyan-500 focus:outline-none transition-colors"
                     />
                   </div>
                   <button
                     onClick={handleURLAnalysis}
                     disabled={loading || !inputValue}
-                    className="px-6 py-3 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
+                    className="px-6 py-3 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg font-medium flex items-center gap-2 transition-colors"
                   >
                     {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
                     Scan URL
@@ -778,22 +907,18 @@ export default function OSINTPlatform() {
                       <span>{apiData.riskAssessment.score}/100</span>
                     </div>
                     <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
-                      <div 
-                        className={`h-full transition-all ${
-                          apiData.riskAssessment.score >= 70 ? 'bg-red-500' :
-                          apiData.riskAssessment.score >= 50 ? 'bg-yellow-500' : 'bg-green-500'
-                        }`}
-                        style={{ width: `${apiData.riskAssessment.score}%` }}
-                      />
+                      <div className={`h-full transition-all ${
+                        apiData.riskAssessment.score >= 70 ? 'bg-red-500' :
+                        apiData.riskAssessment.score >= 50 ? 'bg-yellow-500' : 'bg-green-500'
+                      }`} style={{ width: `${apiData.riskAssessment.score}%` }} />
                     </div>
                   </div>
 
                   <div className="space-y-2">
-                    {apiData.riskAssessment.findings.map((finding: string, idx: number) => (
+                    {(apiData.riskAssessment.findings || []).map((finding: string, idx: number) => (
                       <div key={idx} className={`p-3 rounded text-sm ${
                         finding.includes('WARNING') || finding.includes('SUSPICIOUS') 
-                          ? 'bg-red-500/10 text-red-300' 
-                          : 'bg-gray-800 text-gray-300'
+                          ? 'bg-red-500/10 text-red-300' : 'bg-gray-800 text-gray-300'
                       }`}>
                         {finding.includes('WARNING') || finding.includes('SUSPICIOUS') ? (
                           <AlertTriangle className="inline w-4 h-4 mr-2" />
@@ -825,13 +950,13 @@ export default function OSINTPlatform() {
                       value={inputValue}
                       onChange={(e) => setInputValue(e.target.value)}
                       onKeyPress={(e) => e.key === 'Enter' && handleHashLookup()}
-                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg font-mono focus:border-orange-500 focus:outline-none"
+                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg font-mono focus:border-orange-500 focus:outline-none transition-colors"
                     />
                   </div>
                   <button
                     onClick={handleHashLookup}
                     disabled={loading || !inputValue}
-                    className="px-6 py-3 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
+                    className="px-6 py-3 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg font-medium flex items-center gap-2 transition-colors"
                   >
                     {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
                     Lookup Hash
@@ -861,7 +986,7 @@ export default function OSINTPlatform() {
                       <span className="ml-2 font-mono">{apiData.hashType}</span>
                     </div>
                     
-                    {apiData.analysis.findings.map((finding: string, idx: number) => (
+                    {(apiData.analysis.findings || []).map((finding: string, idx: number) => (
                       <div key={idx} className="p-3 bg-gray-800/50 rounded text-sm text-gray-300">
                         <CheckCircle className="inline w-4 h-4 text-blue-400 mr-2" />
                         {finding}
@@ -869,8 +994,8 @@ export default function OSINTPlatform() {
                     ))}
 
                     <div className={`p-4 rounded-lg mt-4 ${
-                      apiData.analysis.recommendation.includes('ISOLATE') ? 'bg-red-500/10 border border-red-500/30' :
-                      apiData.analysis.recommendation.includes('Quarantine') ? 'bg-orange-500/10 border border-orange-500/30' :
+                      apiData.analysis.recommendation?.includes('ISOLATE') ? 'bg-red-500/10 border border-red-500/30' :
+                      apiData.analysis.recommendation?.includes('Quarantine') ? 'bg-orange-500/10 border border-orange-500/30' :
                       'bg-blue-500/10 border border-blue-500/30'
                     }`}>
                       <strong>Recommendation:</strong> {apiData.analysis.recommendation}
@@ -897,13 +1022,13 @@ export default function OSINTPlatform() {
                       value={inputValue}
                       onChange={(e) => setInputValue(e.target.value)}
                       onKeyPress={(e) => e.key === 'Enter' && handleCVESearch()}
-                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-red-500 focus:outline-none"
+                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-red-500 focus:outline-none transition-colors"
                     />
                   </div>
                   <button
                     onClick={handleCVESearch}
                     disabled={loading || !inputValue}
-                    className="px-6 py-3 bg-red-600 hover:bg-red-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
+                    className="px-6 py-3 bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg font-medium flex items-center gap-2 transition-colors"
                   >
                     {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
                     Search NVD
@@ -928,14 +1053,14 @@ export default function OSINTPlatform() {
                     const desc = descriptions?.find((d: any) => d.lang === 'en')?.value;
                     
                     return (
-                      <div key={idx} className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                      <div key={idx} className="bg-gray-900 border border-gray-800 rounded-xl p-5 hover:border-gray-700 transition-colors">
                         <div className="flex items-start justify-between">
-                          <div>
+                          <div className="flex-1">
                             <h3 className="font-bold text-lg text-red-400 font-mono">{cve}</h3>
                             <p className="text-sm text-gray-300 mt-2 line-clamp-3">{desc}</p>
                           </div>
                           {cvssScore && (
-                            <div className={`px-3 py-2 rounded-lg text-center ml-4 ${
+                            <div className={`px-3 py-2 rounded-lg text-center ml-4 shrink-0 ${
                               cvssScore >= 9 ? 'bg-red-500/20 text-red-400' :
                               cvssScore >= 7 ? 'bg-orange-500/20 text-orange-400' :
                               cvssScore >= 4 ? 'bg-yellow-500/20 text-yellow-400' :
@@ -950,13 +1075,8 @@ export default function OSINTPlatform() {
                         {vuln.references?.length > 0 && (
                           <div className="mt-4 flex flex-wrap gap-2">
                             {vuln.references.slice(0, 5).map((ref: any, rIdx: number) => (
-                              <a
-                                key={rIdx}
-                                href={ref.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1"
-                              >
+                              <a key={rIdx} href={ref.url} target="_blank" rel="noopener noreferrer"
+                                className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 transition-colors">
                                 <ExternalLink className="w-3 h-3" />
                                 {new URL(ref.url).hostname}
                               </a>
@@ -990,7 +1110,7 @@ export default function OSINTPlatform() {
                       value={inputValue}
                       onChange={(e) => setInputValue(e.target.value)}
                       rows={4}
-                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-emerald-500 focus:outline-none resize-none"
+                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-emerald-500 focus:outline-none resize-none transition-colors"
                     />
                   </div>
                 </div>
@@ -999,7 +1119,7 @@ export default function OSINTPlatform() {
                   <button
                     onClick={handleAIAnalysis}
                     disabled={loading || !inputValue}
-                    className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
+                    className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg font-medium flex items-center gap-2 transition-colors"
                   >
                     {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
                     Run AI Analysis
@@ -1027,9 +1147,7 @@ export default function OSINTPlatform() {
                         <span className={`text-2xl font-bold ${
                           apiData.analysis.threatLevel === 'CRITICAL' ? 'text-red-400' :
                           apiData.analysis.threatLevel === 'HIGH' ? 'text-orange-400' : 'text-yellow-400'
-                        }`}>
-                          {apiData.analysis.threatLevel}
-                        </span>
+                        }`}>{apiData.analysis.threatLevel}</span>
                       </div>
                       <div className="p-4 bg-gray-800 rounded-lg">
                         <h4 className="text-sm text-gray-400 mb-2">Confidence</h4>
@@ -1101,28 +1219,49 @@ export default function OSINTPlatform() {
                     key={id}
                     onClick={() => handleThreatFeedLoad(id)}
                     disabled={loading}
-                    className="p-5 bg-gray-900 border border-gray-800 rounded-xl hover:border-${color}-500 transition-colors text-left disabled:opacity-50"
+                    className="p-5 bg-gray-900 border border-gray-800 rounded-xl hover:border-gray-600 transition-all text-left disabled:opacity-50 disabled:cursor-not-allowed group"
                   >
-                    <Icon className={`w-8 h-8 text-${color}-400 mb-3`} />
+                    <Icon className={`w-8 h-8 text-${color}-400 mb-3 group-hover:scale-110 transition-transform`} />
                     <h3 className="font-semibold">{name}</h3>
                     <p className="text-sm text-gray-400 mt-1">{desc}</p>
-                    <span className="inline-block mt-3 text-xs text-${color}-400">Click to load →</span>
+                    <span className="inline-block mt-3 text-xs text-{color}-400 group-hover:underline">Click to load →</span>
                   </button>
                 ))}
                 
                 <button
                   onClick={() => handleThreatFeedLoad()}
                   disabled={loading}
-                  className="p-5 bg-gray-900 border border-dashed border-gray-700 rounded-xl hover:border-gray-500 transition-colors text-left col-span-full"
+                  className="p-5 bg-gray-900 border-2 border-dashed border-gray-700 rounded-xl hover:border-gray-500 hover:bg-gray-800/50 transition-all text-left col-span-full disabled:opacity-50"
                 >
-                  <RefreshCw className="w-8 h-8 text-gray-400 mb-3" />
+                  <RefreshCw className={`w-8 h-8 text-gray-400 mb-3 ${loading ? 'animate-spin' : ''}`} />
                   <h3 className="font-semibold">Load All Feeds</h3>
                   <p className="text-sm text-gray-400 mt-1">Fetch latest from all sources simultaneously</p>
                 </button>
               </div>
 
-              {apiData?.feeds && (
+              {/* Loading State */}
+              {loading && (
+                <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
+                  <Loader2 className="w-12 h-12 mx-auto mb-4 text-blue-400 animate-spin" />
+                  <p className="text-lg font-semibold">Loading threat intelligence...</p>
+                  <p className="text-sm text-gray-400 mt-2">Fetching data from external sources</p>
+                </div>
+              )}
+
+              {/* Results or Sample Data */}
+              {apiData?.feeds && apiData.feeds.length > 0 && (
                 <div className="space-y-6">
+                  {/* Notice for sample data */}
+                  {apiData.message && (
+                    <div className="p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg flex items-center gap-3">
+                      <AlertCircle className="w-5 h-5 text-yellow-500 shrink-0" />
+                      <div>
+                        <p className="font-medium text-yellow-400">Sample Data Mode</p>
+                        <p className="text-sm text-yellow-300/80">{apiData.message}</p>
+                      </div>
+                    </div>
+                  )}
+                  
                   {apiData.feeds.map((feed: any, fIdx: number) => (
                     <div key={fIdx} className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                       <div className="flex items-center justify-between mb-4">
@@ -1131,7 +1270,11 @@ export default function OSINTPlatform() {
                           {feed.source}
                           <span className="text-xs text-gray-400">({feed.count} entries)</span>
                         </h3>
-                        <span className="px-2 py-1 bg-green-500/20 text-green-400 rounded text-xs">LIVE</span>
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${
+                          feed.status === 'sample' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'
+                        }`}>
+                          {feed.status === 'sample' ? 'SAMPLE' : 'LIVE'}
+                        </span>
                       </div>
                       
                       <div className="overflow-x-auto">
@@ -1147,7 +1290,7 @@ export default function OSINTPlatform() {
                           </thead>
                           <tbody>
                             {feed.entries.slice(0, 10).map((entry: any, eIdx: number) => (
-                              <tr key={eIdx} className="border-b border-gray-800/50 hover:bg-gray-800/30">
+                              <tr key={eIdx} className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors">
                                 {Object.values(entry).slice(0, 5).map((val: any, vIdx: number) => (
                                   <td key={vIdx} className="py-2 px-2 text-gray-300 truncate max-w-[200px]">
                                     {typeof val === 'string' && val.length > 40 ? val.substring(0, 40) + '...' : String(val)}
@@ -1162,6 +1305,37 @@ export default function OSINTPlatform() {
                   ))}
                 </div>
               )}
+
+              {/* Feed Status (when APIs fail) */}
+              {apiData?.feedStatus && (
+                <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                  <h3 className="font-semibold mb-4">Feed Status</h3>
+                  <div className="space-y-2">
+                    {Object.entries(apiData.feedStatus).map(([source, status]: [string, any]) => (
+                      <div key={source} className={`flex items-center justify-between p-3 rounded-lg ${
+                        status.status === 'ok' ? 'bg-green-500/10' : 'bg-red-500/10'
+                      }`}>
+                        <span className="font-medium">{source}</span>
+                        <span className={`text-sm ${status.status === 'ok' ? 'text-green-400' : 'text-red-400'}`}>
+                          {status.status === 'ok' ? '✓ Connected' : `✗ ${status.message || 'Failed'}`}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Empty State with guidance */}
+              {!loading && !apiData?.feeds && !error && (
+                <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
+                  <WifiOff className="w-16 h-16 mx-auto mb-4 text-gray-600" />
+                  <h3 className="text-lg font-semibold mb-2">No Data Loaded Yet</h3>
+                  <p className="text-gray-400 mb-4">Click one of the buttons above to load threat intelligence data.</p>
+                  <p className="text-xs text-gray-500">
+                    Note: Some external APIs may have access restrictions. Sample data will be shown when APIs are unavailable.
+                  </p>
+                </div>
+              )}
             </div>
           )}
 
@@ -1173,12 +1347,8 @@ export default function OSINTPlatform() {
                   <Database className="w-7 h-7 text-indigo-400" /> IOC Manager
                 </h2>
                 <button
-                  onClick={() => {
-                    setFormData({ type: 'IP', value: '', description: '', severity: 'MEDIUM', tags: [] });
-                    setModalType('add');
-                    setShowModal(true);
-                  }}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 rounded-lg font-medium flex items-center gap-2"
+                  onClick={() => { setFormData({ type: 'IP', value: '', description: '', severity: 'MEDIUM', tags: [] }); setModalType('add'); setShowModal(true); }}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 rounded-lg font-medium flex items-center gap-2 transition-colors"
                 >
                   <Plus className="w-4 h-4" /> Add IOC
                 </button>
@@ -1189,11 +1359,7 @@ export default function OSINTPlatform() {
                 <div className="flex flex-wrap gap-4">
                   <div className="flex items-center gap-2">
                     <Filter className="w-4 h-4 text-gray-400" />
-                    <select
-                      value={filterType}
-                      onChange={(e) => setFilterType(e.target.value)}
-                      className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm"
-                    >
+                    <select value={filterType} onChange={(e) => setFilterType(e.target.value)} className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm">
                       <option value="all">All Types</option>
                       <option value="IP">IP</option>
                       <option value="DOMAIN">Domain</option>
@@ -1203,12 +1369,7 @@ export default function OSINTPlatform() {
                       <option value="EMAIL">Email</option>
                     </select>
                   </div>
-                  
-                  <select
-                    value={filterSeverity}
-                    onChange={(e) => setFilterSeverity(e.target.value)}
-                    className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm"
-                  >
+                  <select value={filterSeverity} onChange={(e) => setFilterSeverity(e.target.value)} className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm">
                     <option value="all">All Severities</option>
                     <option value="CRITICAL">Critical</option>
                     <option value="HIGH">High</option>
@@ -1216,22 +1377,14 @@ export default function OSINTPlatform() {
                     <option value="LOW">Low</option>
                     <option value="INFO">Info</option>
                   </select>
-                  
-                  <select
-                    value={filterStatus}
-                    onChange={(e) => setFilterStatus(e.target.value)}
-                    className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm"
-                  >
+                  <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm">
                     <option value="all">All Statuses</option>
                     <option value="MALICIOUS">Malicious</option>
                     <option value="SUSPICIOUS">Suspicious</option>
                     <option value="UNKNOWN">Unknown</option>
                     <option value="BENIGN">Benign</option>
                   </select>
-                  
-                  <button onClick={loadIOCs} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm">
-                    Apply Filters
-                  </button>
+                  <button onClick={loadIOCs} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors">Apply Filters</button>
                 </div>
               </div>
 
@@ -1254,66 +1407,37 @@ export default function OSINTPlatform() {
                     </thead>
                     <tbody>
                       {iocs.map((ioc) => (
-                        <tr key={ioc.id} className="border-t border-gray-800 hover:bg-gray-800/50">
-                          <td className="py-3 px-4">
-                            <span className="px-2 py-1 bg-gray-700 rounded text-xs font-mono">{ioc.type}</span>
-                          </td>
-                          <td className="py-3 px-4 font-mono text-sm max-w-[200px] truncate" title={ioc.value}>
-                            {ioc.value}
-                          </td>
-                          <td className="py-3 px-4 text-gray-400 max-w-[250px] truncate" title={ioc.description}>
-                            {ioc.description}
-                          </td>
-                          <td className="py-3 px-4">
-                            <span style={{ color: SEVERITY_COLORS[ioc.severity] }} className="font-medium">
-                              {ioc.severity}
-                            </span>
-                          </td>
-                          <td className="py-3 px-4">
-                            <span style={{ color: STATUS_COLORS[ioc.status] }} className="font-medium">
-                              {ioc.status}
-                            </span>
-                          </td>
+                        <tr key={ioc.id} className="border-t border-gray-800 hover:bg-gray-800/50 transition-colors">
+                          <td className="py-3 px-4"><span className="px-2 py-1 bg-gray-700 rounded text-xs font-mono">{ioc.type}</span></td>
+                          <td className="py-3 px-4 font-mono text-sm max-w-[200px] truncate" title={ioc.value}>{ioc.value}</td>
+                          <td className="py-3 px-4 text-gray-400 max-w-[250px] truncate" title={ioc.description}>{ioc.description}</td>
+                          <td className="py-3 px-4"><span style={{ color: SEVERITY_COLORS[ioc.severity] }} className="font-medium">{ioc.severity}</span></td>
+                          <td className="py-3 px-4"><span style={{ color: STATUS_COLORS[ioc.status] }} className="font-medium">{ioc.status}</span></td>
                           <td className="py-3 px-4">
                             <div className="flex items-center gap-2">
                               <div className="w-16 h-2 bg-gray-700 rounded-full overflow-hidden">
-                                <div 
-                                  className="h-full bg-blue-500"
-                                  style={{ width: `${ioc.confidence}%` }}
-                                />
+                                <div className="h-full bg-blue-500" style={{ width: `${ioc.confidence}%` }} />
                               </div>
                               <span className="text-xs text-gray-400">{ioc.confidence}%</span>
                             </div>
                           </td>
                           <td className="py-3 px-4 text-gray-400 text-xs">{ioc.source || '-'}</td>
-                          <td className="py-3 px-4 text-gray-400 text-xs">
-                            {new Date(ioc.lastUpdated).toLocaleDateString()}
-                          </td>
+                          <td className="py-3 px-4 text-gray-400 text-xs">{new Date(ioc.lastUpdated).toLocaleDateString()}</td>
                           <td className="py-3 px-4 text-right">
                             <div className="flex items-center justify-end gap-1">
-                              <button onClick={() => openDetailModal(ioc)} className="p-1.5 hover:bg-gray-700 rounded" title="View Details">
-                                <Eye className="w-4 h-4" />
-                              </button>
-                              <button onClick={() => openEditModal(ioc)} className="p-1.5 hover:bg-gray-700 rounded" title="Edit">
-                                <Edit3 className="w-4 h-4" />
-                              </button>
-                              <button onClick={() => copyToClipboard(ioc.value)} className="p-1.5 hover:bg-gray-700 rounded" title="Copy">
-                                <Copy className="w-4 h-4" />
-                              </button>
-                              <button onClick={() => handleDeleteIOC(ioc.id)} className="p-1.5 hover:bg-red-500/20 text-red-400 rounded" title="Delete">
-                                <Trash2 className="w-4 h-4" />
-                              </button>
+                              <button onClick={() => openDetailModal(ioc)} className="p-1.5 hover:bg-gray-700 rounded transition-colors" title="View Details"><Eye className="w-4 h-4" /></button>
+                              <button onClick={() => openEditModal(ioc)} className="p-1.5 hover:bg-gray-700 rounded transition-colors" title="Edit"><Edit3 className="w-4 h-4" /></button>
+                              <button onClick={() => copyToClipboard(ioc.value)} className="p-1.5 hover:bg-gray-700 rounded transition-colors" title="Copy"><Copy className="w-4 h-4" /></button>
+                              <button onClick={() => handleDeleteIOC(ioc.id)} className="p-1.5 hover:bg-red-500/20 text-red-400 rounded transition-colors" title="Delete"><Trash2 className="w-4 h-4" /></button>
                             </div>
                           </td>
                         </tr>
                       ))}
                       {iocs.length === 0 && (
-                        <tr>
-                          <td colSpan={9} className="py-12 text-center text-gray-500">
-                            <Database className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                            <p>No IOCs found. Add some manually or run reconnaissance.</p>
-                          </td>
-                        </tr>
+                        <tr><td colSpan={9} className="py-12 text-center text-gray-500">
+                          <Database className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                          <p>No IOCs found. Add some manually or run reconnaissance.</p>
+                        </td></tr>
                       )}
                     </tbody>
                   </table>
@@ -1330,30 +1454,20 @@ export default function OSINTPlatform() {
               </h2>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 hover:border-gray-700 transition-colors">
                   <FileText className="w-10 h-10 text-blue-400 mb-4" />
                   <h3 className="font-semibold text-lg mb-2">JSON Export</h3>
-                  <p className="text-gray-400 text-sm mb-4">
-                    Full structured export with all IOC metadata, analyses, and alerts in machine-readable format.
-                  </p>
-                  <button
-                    onClick={() => handleExport('json')}
-                    className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-medium flex items-center justify-center gap-2"
-                  >
+                  <p className="text-gray-400 text-sm mb-4">Full structured export with all IOC metadata, analyses, and alerts in machine-readable format.</p>
+                  <button onClick={() => handleExport('json')} className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-medium flex items-center justify-center gap-2 transition-colors">
                     <Download className="w-4 h-4" /> Export JSON
                   </button>
                 </div>
 
-                <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 hover:border-gray-700 transition-colors">
                   <FileText className="w-10 h-10 text-green-400 mb-4" />
                   <h3 className="font-semibold text-lg mb-2">CSV Export</h3>
-                  <p className="text-gray-400 text-sm mb-4">
-                    Spreadsheet-compatible format for Excel, SIEM import, or further analysis.
-                  </p>
-                  <button
-                    onClick={() => handleExport('csv')}
-                    className="w-full px-4 py-3 bg-green-600 hover:bg-green-700 rounded-lg font-medium flex items-center justify-center gap-2"
-                  >
+                  <p className="text-gray-400 text-sm mb-4">Spreadsheet-compatible format for Excel, SIEM import, or further analysis.</p>
+                  <button onClick={() => handleExport('csv')} className="w-full px-4 py-3 bg-green-600 hover:bg-green-700 rounded-lg font-medium flex items-center justify-center gap-2 transition-colors">
                     <Download className="w-4 h-4" /> Export CSV
                   </button>
                 </div>
@@ -1364,11 +1478,7 @@ export default function OSINTPlatform() {
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   <div>
                     <label className="block text-sm text-gray-400 mb-2">Filter by Type</label>
-                    <select
-                      value={filterType}
-                      onChange={(e) => setFilterType(e.target.value)}
-                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm"
-                    >
+                    <select value={filterType} onChange={(e) => setFilterType(e.target.value)} className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm">
                       <option value="all">All Types</option>
                       <option value="IP">IP</option>
                       <option value="DOMAIN">Domain</option>
@@ -1379,11 +1489,7 @@ export default function OSINTPlatform() {
                   </div>
                   <div>
                     <label className="block text-sm text-gray-400 mb-2">Filter by Severity</label>
-                    <select
-                      value={filterSeverity}
-                      onChange={(e) => setFilterSeverity(e.target.value)}
-                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm"
-                    >
+                    <select value={filterSeverity} onChange={(e) => setFilterSeverity(e.target.value)} className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm">
                       <option value="all">All Severities</option>
                       <option value="CRITICAL">Critical Only</option>
                       <option value="HIGH">High+</option>
@@ -1413,11 +1519,7 @@ export default function OSINTPlatform() {
                 <h2 className="text-2xl font-bold flex items-center gap-3">
                   <FileText className="w-7 h-7 text-pink-400" /> Executive Reports
                 </h2>
-                <button
-                  onClick={handleGenerateReport}
-                  disabled={loading}
-                  className="px-4 py-2 bg-pink-600 hover:bg-pink-700 rounded-lg font-medium flex items-center gap-2"
-                >
+                <button onClick={handleGenerateReport} disabled={loading} className="px-4 py-2 bg-pink-600 hover:bg-pink-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2 transition-colors">
                   {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
                   Generate Report
                 </button>
@@ -1425,7 +1527,6 @@ export default function OSINTPlatform() {
 
               {apiData?.executiveSummary && (
                 <div className="space-y-6">
-                  {/* Executive Summary Card */}
                   <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-pink-500/30 rounded-xl p-6">
                     <h3 className="font-semibold text-lg mb-4 flex items-center gap-2">
                       <BarChart3 className="w-5 h-5 text-pink-400" /> Executive Summary
@@ -1436,14 +1537,8 @@ export default function OSINTPlatform() {
                       <StatCard label="Critical Items" value={apiData.executiveSummary.criticalIOCs} color="red" />
                       <StatCard label="Malicious" value={apiData.executiveSummary.maliciousIOCs} color="red" />
                     </div>
-                    <div className="mt-4 p-3 bg-gray-800/50 rounded-lg">
-                      <p className="text-sm text-gray-400">
-                        <strong>Sources covered:</strong> {apiData.executiveSummary.sourcesCovered.join(', ') || 'None yet'}
-                      </p>
-                    </div>
                   </div>
 
-                  {/* Charts Row */}
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                       <h3 className="font-semibold mb-4">Severity Breakdown</h3>
@@ -1452,13 +1547,10 @@ export default function OSINTPlatform() {
                           <div key={key} className="flex items-center gap-3">
                             <span className="w-20 text-sm text-gray-400">{key}</span>
                             <div className="flex-1 h-6 bg-gray-800 rounded overflow-hidden">
-                              <div
-                                className="h-full rounded"
-                                style={{
-                                  width: `${(value / Math.max(...Object.values(apiData.severityBreakdown))) * 100}%`,
-                                  backgroundColor: SEVERITY_COLORS[key as Severity]
-                                }}
-                              />
+                              <div className="h-full rounded" style={{
+                                width: `${(value / Math.max(...Object.values(apiData.severityBreakdown))) * 100}%`,
+                                backgroundColor: SEVERITY_COLORS[key as Severity]
+                              }} />
                             </div>
                             <span className="w-10 text-right text-sm font-mono">{value}</span>
                           </div>
@@ -1470,16 +1562,8 @@ export default function OSINTPlatform() {
                       <h3 className="font-semibold mb-4">Type Distribution</h3>
                       <ResponsiveContainer width="100%" height={250}>
                         <PieChart>
-                          <Pie
-                            data={Object.entries(apiData.typeDistribution || {}).map(([name, value]) => ({ name, value }))}
-                            innerRadius={60}
-                            outerRadius={100}
-                            paddingAngle={5}
-                            dataKey="value"
-                          >
-                            {CHART_COLORS.map((color, index) => (
-                              <Cell key={index} fill={color} />
-                            ))}
+                          <Pie data={Object.entries(apiData.typeDistribution || {}).map(([name, value]) => ({ name, value }))} innerRadius={60} outerRadius={100} paddingAngle={5} dataKey="value">
+                            {CHART_COLORS.map((color, index) => (<Cell key={index} fill={color} />))}
                           </Pie>
                           <Tooltip contentStyle={{ backgroundColor: '#1f2937', border: 'none' }} />
                           <Legend />
@@ -1487,68 +1571,6 @@ export default function OSINTPlatform() {
                       </ResponsiveContainer>
                     </div>
                   </div>
-
-                  {/* Top Threats */}
-                  {apiData.topThreats?.length > 0 && (
-                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                      <h3 className="font-semibold mb-4 flex items-center gap-2">
-                        <AlertTriangle className="w-5 h-5 text-yellow-400" /> Top Active Threats
-                      </h3>
-                      <div className="space-y-2">
-                        {apiData.topThreats.map((threat: any, idx: number) => (
-                          <div key={idx} className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
-                            <div className="flex items-center gap-3">
-                              <span className="text-gray-500 text-sm">#{idx + 1}</span>
-                              <span className="font-medium">{threat.title}</span>
-                            </div>
-                            <div className="flex items-center gap-3">
-                              <span className={`px-2 py-1 rounded text-xs ${
-                                threat.severity === 'CRITICAL' ? 'bg-red-500/20 text-red-400' :
-                                threat.severity === 'HIGH' ? 'bg-orange-500/20 text-orange-400' :
-                                'bg-yellow-500/20 text-yellow-400'
-                              }`}>
-                                {threat.severity}
-                              </span>
-                              <span className="text-xs text-gray-500">
-                                {new Date(threat.createdAt).toLocaleDateString()}
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Recent Intelligence */}
-                  {apiData.recentIntelligence?.length > 0 && (
-                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                      <h3 className="font-semibold mb-4">Recent Intelligence</h3>
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="border-b border-gray-800">
-                              <th className="text-left py-2 px-3 text-gray-400">Type</th>
-                              <th className="text-left py-2 px-3 text-gray-400">Value</th>
-                              <th className="text-left py-2 px-3 text-gray-400">Severity</th>
-                              <th className="text-left py-2 px-3 text-gray-400">Status</th>
-                              <th className="text-left py-2 px-3 text-gray-400">Source</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {apiData.recentIntelligence.map((item: any, idx: number) => (
-                              <tr key={idx} className="border-b border-gray-800/50">
-                                <td className="py-2 px-3"><span className="px-2 py-0.5 bg-gray-700 rounded text-xs">{item.type}</span></td>
-                                <td className="py-2 px-3 font-mono text-sm">{item.value}</td>
-                                <td className="py-2 px-3"><span style={{ color: SEVERITY_COLORS[item.severity] }}>{item.severity}</span></td>
-                                <td className="py-2 px-3"><span style={{ color: STATUS_COLORS[item.status] }}>{item.status}</span></td>
-                                <td className="py-2 px-3 text-gray-400 text-xs">{item.source || '-'}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
                 </div>
               )}
 
@@ -1570,11 +1592,8 @@ export default function OSINTPlatform() {
           <div className="bg-gray-900 border border-gray-700 rounded-xl max-w-3xl w-full max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="sticky top-0 bg-gray-900 border-b border-gray-800 p-4 flex items-center justify-between">
               <h3 className="font-bold text-lg">IOC Details</h3>
-              <button onClick={() => setShowModal(false)} className="p-2 hover:bg-gray-800 rounded-lg">
-                <X className="w-5 h-5" />
-              </button>
+              <button onClick={() => setShowModal(false)} className="p-2 hover:bg-gray-800 rounded-lg transition-colors"><X className="w-5 h-5" /></button>
             </div>
-            
             <div className="p-6 space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div><span className="text-gray-400 text-sm">ID:</span><p className="font-mono text-sm">{selectedIOC.id}</p></div>
@@ -1588,35 +1607,25 @@ export default function OSINTPlatform() {
                 <div><span className="text-gray-400 text-sm">First Seen:</span><p>{new Date(selectedIOC.firstSeen).toLocaleString()}</p></div>
                 <div><span className="text-gray-400 text-sm">Last Updated:</span><p>{new Date(selectedIOC.lastUpdated).toLocaleString()}</p></div>
               </div>
-              
               {selectedIOC.tags?.length > 0 && (
                 <div className="flex flex-wrap gap-2 pt-4 border-t border-gray-800">
-                  {selectedIOC.tags.map((tag, idx) => (
-                    <span key={idx} className="px-2 py-1 bg-gray-700 rounded text-xs">{tag}</span>
-                  ))}
+                  {selectedIOC.tags.map((tag, idx) => (<span key={idx} className="px-2 py-1 bg-gray-700 rounded text-xs">{tag}</span>))}
                 </div>
               )}
-
               {selectedIOC.rawResponse && (
                 <details className="pt-4 border-t border-gray-800">
-                  <summary className="cursor-pointer text-sm text-gray-400 hover:text-white">View Raw API Response</summary>
+                  <summary className="cursor-pointer text-sm text-gray-400 hover:text-white flex items-center gap-2">
+                    <ChevronRight className="w-4 h-4" /> View Raw API Response
+                  </summary>
                   <pre className="mt-2 p-4 bg-gray-950 rounded-lg overflow-x-auto text-xs max-h-60 overflow-y-auto">
-                    {typeof selectedIOC.rawResponse === 'string' 
-                      ? JSON.stringify(JSON.parse(selectedIOC.rawResponse), null, 2)
-                      : JSON.stringify(selectedIOC.rawResponse, null, 2)
-                    }
+                    {typeof selectedIOC.rawResponse === 'string' ? JSON.stringify(JSON.parse(selectedIOC.rawResponse), null, 2) : JSON.stringify(selectedIOC.rawResponse, null, 2)}
                   </pre>
                 </details>
               )}
             </div>
-            
             <div className="sticky bottom-0 bg-gray-900 border-t border-gray-800 p-4 flex justify-end gap-3">
-              <button onClick={() => { setModalType('edit'); }} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm">
-                <Edit3 className="w-4 h-4 inline mr-1" /> Edit
-              </button>
-              <button onClick={() => { handleDeleteIOC(selectedIOC.id); setShowModal(false); }} className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-sm">
-                <Trash2 className="w-4 h-4 inline mr-1" /> Delete
-              </button>
+              <button onClick={() => { setModalType('edit'); }} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm transition-colors"><Edit3 className="w-4 h-4 inline mr-1" /> Edit</button>
+              <button onClick={() => { handleDeleteIOC(selectedIOC.id); setShowModal(false); }} className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-sm transition-colors"><Trash2 className="w-4 h-4 inline mr-1" /> Delete</button>
             </div>
           </div>
         </div>
@@ -1628,20 +1637,12 @@ export default function OSINTPlatform() {
           <div className="bg-gray-900 border border-gray-700 rounded-xl max-w-lg w-full" onClick={(e) => e.stopPropagation()}>
             <div className="border-b border-gray-800 p-4 flex items-center justify-between">
               <h3 className="font-bold text-lg">{modalType === 'add' ? 'Add New IOC' : 'Edit IOC'}</h3>
-              <button onClick={() => setShowModal(false)} className="p-2 hover:bg-gray-800 rounded-lg">
-                <X className="w-5 h-5" />
-              </button>
+              <button onClick={() => setShowModal(false)} className="p-2 hover:bg-gray-800 rounded-lg transition-colors"><X className="w-5 h-5" /></button>
             </div>
-            
             <div className="p-6 space-y-4">
               <div>
                 <label className="block text-sm text-gray-400 mb-1">Type *</label>
-                <select
-                  value={formData.type}
-                  onChange={(e) => setFormData({...formData, type: e.target.value})}
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg"
-                  disabled={modalType === 'edit'}
-                >
+                <select value={formData.type} onChange={(e) => setFormData({...formData, type: e.target.value})} className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg" disabled={modalType === 'edit'}>
                   <option value="IP">IP Address</option>
                   <option value="DOMAIN">Domain</option>
                   <option value="URL">URL</option>
@@ -1650,38 +1651,18 @@ export default function OSINTPlatform() {
                   <option value="EMAIL">Email</option>
                 </select>
               </div>
-              
               <div>
                 <label className="block text-sm text-gray-400 mb-1">Value *</label>
-                <input
-                  type="text"
-                  value={formData.value}
-                  onChange={(e) => setFormData({...formData, value: e.target.value})}
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg font-mono"
-                  placeholder={modalType === 'add' ? 'Enter indicator value...' : ''}
-                  disabled={modalType === 'edit'}
-                />
+                <input type="text" value={formData.value} onChange={(e) => setFormData({...formData, value: e.target.value})} className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg font-mono" placeholder={modalType === 'add' ? 'Enter indicator value...' : ''} disabled={modalType === 'edit'} />
               </div>
-              
               <div>
                 <label className="block text-sm text-gray-400 mb-1">Description</label>
-                <textarea
-                  value={formData.description}
-                  onChange={(e) => setFormData({...formData, description: e.target.value})}
-                  rows={3}
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg resize-none"
-                  placeholder="Add context about this indicator..."
-                />
+                <textarea value={formData.description} onChange={(e) => setFormData({...formData, description: e.target.value})} rows={3} className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg resize-none" placeholder="Add context about this indicator..." />
               </div>
-              
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm text-gray-400 mb-1">Severity</label>
-                  <select
-                    value={formData.severity}
-                    onChange={(e) => setFormData({...formData, severity: e.target.value})}
-                    className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg"
-                  >
+                  <select value={formData.severity} onChange={(e) => setFormData({...formData, severity: e.target.value})} className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg">
                     <option value="CRITICAL">Critical</option>
                     <option value="HIGH">High</option>
                     <option value="MEDIUM">Medium</option>
@@ -1689,29 +1670,15 @@ export default function OSINTPlatform() {
                     <option value="INFO">Info</option>
                   </select>
                 </div>
-                
                 <div>
                   <label className="block text-sm text-gray-400 mb-1">Tags (comma separated)</label>
-                  <input
-                    type="text"
-                    value={formData.tags.join(', ')}
-                    onChange={(e) => setFormData({...formData, tags: e.target.value.split(',').map(t => t.trim()).filter(Boolean)})}
-                    className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg"
-                    placeholder="tag1, tag2..."
-                  />
+                  <input type="text" value={formData.tags.join(', ')} onChange={(e) => setFormData({...formData, tags: e.target.value.split(',').map(t => t.trim()).filter(Boolean)})} className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg" placeholder="tag1, tag2..." />
                 </div>
               </div>
             </div>
-            
             <div className="border-t border-gray-800 p-4 flex justify-end gap-3">
-              <button onClick={() => setShowModal(false)} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg">
-                Cancel
-              </button>
-              <button
-                onClick={modalType === 'add' ? handleAddIOC : handleUpdateIOC}
-                disabled={!formData.value}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-lg"
-              >
+              <button onClick={() => setShowModal(false)} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors">Cancel</button>
+              <button onClick={modalType === 'add' ? handleAddIOC : handleUpdateIOC} disabled={!formData.value} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-lg transition-colors">
                 {modalType === 'add' ? <Plus className="w-4 h-4 inline mr-1" /> : <Save className="w-4 h-4 inline mr-1" />}
                 {modalType === 'add' ? 'Add IOC' : 'Save Changes'}
               </button>
@@ -1727,10 +1694,7 @@ export default function OSINTPlatform() {
 function InfoCard({ label, value, icon, alert }: { label: string; value: string | React.ReactNode; icon: React.ReactNode; alert?: boolean }) {
   return (
     <div className={`p-3 bg-gray-800/50 rounded-lg ${alert ? 'border border-red-500/30' : ''}`}>
-      <div className="flex items-center gap-2 text-gray-400 text-xs mb-1">
-        {icon}
-        {label}
-      </div>
+      <div className="flex items-center gap-2 text-gray-400 text-xs mb-1">{icon}{label}</div>
       <div className={`font-medium text-sm ${alert ? 'text-red-400' : ''}`}>{value}</div>
     </div>
   );
@@ -1739,16 +1703,10 @@ function InfoCard({ label, value, icon, alert }: { label: string; value: string 
 function SecurityCheck({ label, pass }: { label: string; pass: boolean }) {
   return (
     <div className={`p-3 rounded-lg flex items-center gap-3 ${pass ? 'bg-green-500/10' : 'bg-red-500/10'}`}>
-      {pass ? (
-        <CheckCircle className="w-5 h-5 text-green-500" />
-      ) : (
-        <XCircle className="w-5 h-5 text-red-500" />
-      )}
+      {pass ? <CheckCircle className="w-5 h-5 text-green-500" /> : <XCircle className="w-5 h-5 text-red-500" />}
       <div>
         <p className="font-medium text-sm">{label}</p>
-        <p className={`text-xs ${pass ? 'text-green-400' : 'text-red-400'}`}>
-          {pass ? 'Configured' : 'Not Found'}
-        </p>
+        <p className={`text-xs ${pass ? 'text-green-400' : 'text-red-400'}`}>{pass ? 'Configured' : 'Not Found'}</p>
       </div>
     </div>
   );
@@ -1757,7 +1715,7 @@ function SecurityCheck({ label, pass }: { label: string; pass: boolean }) {
 function StatCard({ label, value, color = 'blue' }: { label: string; value: number; color?: string }) {
   return (
     <div className="p-4 bg-gray-800/50 rounded-lg text-center">
-      <p className="text-3xl font-bold text-{color}-400">{value}</p>
+      <p className={`text-3xl font-bold text-${color}-400`}>{value}</p>
       <p className="text-sm text-gray-400 mt-1">{label}</p>
     </div>
   );
