@@ -1,0 +1,1274 @@
+     1→'use client';
+     2→
+     3→import React, { useState, useEffect, useCallback } from 'react';
+     4→import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+     5→import { Button } from '@/components/ui/button';
+     6→import { Input } from '@/components/ui/input';
+     7→import { Badge } from '@/components/ui/badge';
+     8→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+     9→import { Separator } from '@/components/ui/separator';
+    10→import { ScrollArea } from '@/components/ui/scroll-area';
+    11→import { 
+    12→  Shield, Search, Globe, AlertTriangle, CheckCircle2, 
+    13→  XCircle, Activity, FileText, Download, ExternalLink,
+    14→  MapPin, Server, Fingerprint, Bug, Link, Hash, Target,
+    15→  Clock, Database, Network, Terminal, BarChart3,
+    16→  RefreshCw, ChevronRight, Info
+    17→} from 'lucide-react';
+    18→
+    19→// ============= TYPES =============
+    20→interface IPResult {
+    21→  query: string;
+    22→  geolocation: {
+    23→    country: string; countryCode: string; region: string;
+    24→    city: string; latitude: number; longitude: number; timezone: string;
+    25→  };
+    26→  network: {
+    27→    isp: string; org: string; asn: string; asFull: string;
+    28→    isMobile: boolean; isProxy: boolean; isHosting: boolean;
+    29→  };
+    30→  threat: {
+    31→    score: number; level: string; color: string;
+    32→    indicators: string[]; recommendations: string[];
+    33→  };
+    34→}
+    35→
+    36→interface DomainResult {
+    37→  domain: string;
+    38→  whois: any;
+    39→  dns: any;
+    40→  security: any;
+    41→  reputation: {
+    42→    score: number; level: string; color: string;
+    43→    indicators: string[]; recommendations: string[];
+    44→  };
+    45→}
+    46→
+    47→interface CVEResult {
+    48→  id: string;
+    49→  descriptions: string;
+    50→  cvss: { score: number | null; severity: string; vector: string; version: string };
+    51→  cwe: string[];
+    52→  references: any[];
+    53→  dates: any;
+    54→  status: string;
+    55→}
+    56→
+    57→interface URLResult {
+    58→  url: string;
+    59→  parsedUrl: any;
+    60→  overallAssessment: {
+    61→    threatScore: number; riskLevel: string; riskColor: string;
+    62→    indicators: string[]; recommendations: string[]; verdict: string;
+    63→  };
+    64→}
+    65→
+    66→interface HashResult {
+    67→  input: { hash: string; hashType: string };
+    68→  found: boolean;
+    69→  aggregateResults: {
+    70→    detectionRate: number; classification: string;
+    71→    threatLevel: string; color: string;
+    72→  };
+    73→  engineResults: any[];
+    74→  details?: any;
+    75→}
+    76→
+    77→interface ThreatData {
+    78→  iocs: any[];
+    79→  activeThreats: any[];
+    80→  campaigns: any[];
+    81→  aptGroups: any[];
+    82→  globalThreatLevel: any;
+    83→  statistics: any;
+    84→}
+    85→
+    86→// ============= MAIN COMPONENT =============
+    87→export default function NexusIntelDashboard() {
+    88→  const [activeTab, setActiveTab] = useState('dashboard');
+    89→  const [isLoading, setIsLoading] = useState(false);
+    90→  const [error, setError] = useState<string | null>(null);
+    91→  
+    92→  // States
+    93→  const [ipInput, setIpInput] = useState('');
+    94→  const [ipResult, setIpResult] = useState<IPResult | null>(null);
+    95→  const [domainInput, setDomainInput] = useState('');
+    96→  const [domainResult, setDomainResult] = useState<DomainResult | null>(null);
+    97→  const [cveInput, setCveInput] = useState('');
+    98→  const [cveResults, setCveResults] = useState<CVEResult[]>([]);
+    99→  const [urlInput, setUrlInput] = useState('');
+   100→  const [urlResult, setUrlResult] = useState<URLResult | null>(null);
+   101→  const [hashInput, setHashInput] = useState('');
+   102→  const [hashResult, setHashResult] = useState<HashResult | null>(null);
+   103→  const [threatData, setThreatData] = useState<ThreatData | null>(null);
+   104→  const [reportData, setReportData] = useState<any>(null);
+   105→
+   106→  // API Functions
+   107→  const fetchThreatIntelligence = useCallback(async () => {
+   108→    try {
+   109→      setError(null);
+   110→      const res = await fetch('/api/osint/threats');
+   111→      const data = await res.json();
+   112→      if (data.success) setThreatData(data.data);
+   113→      else throw new Error(data.error || 'Error fetching threats');
+   114→    } catch (err: any) {
+   115→      console.error('Threat intel error:', err);
+   116→      setError(`Error: ${err.message}`);
+   117→    }
+   118→  }, []);
+   119→
+   120→  useEffect(() => {
+   121→    fetchThreatIntelligence();
+   122→  }, [fetchThreatIntelligence]);
+   123→
+   124→  const analyzeIP = async () => {
+   125→    if (!ipInput) return;
+   126→    setIsLoading(true); setError(null);
+   127→    try {
+   128→      const res = await fetch('/api/osint/ip', {
+   129→        method: 'POST',
+   130→        headers: { 'Content-Type': 'application/json' },
+   131→        body: JSON.stringify({ ip: ipInput.trim() })
+   132→      });
+   133→      const data = await res.json();
+   134→      if (data.success) setIpResult(data.data);
+   135→      else throw new Error(data.error || 'Error analyzing IP');
+   136→    } catch (err: any) {
+   137→      setError(err.message); setIpResult(null);
+   138→    }
+   139→    setIsLoading(false);
+   140→  };
+   141→
+   142→  const analyzeDomain = async () => {
+   143→    if (!domainInput) return;
+   144→    setIsLoading(true); setError(null);
+   145→    try {
+   146→      const res = await fetch('/api/osint/domain', {
+   147→        method: 'POST', headers: { 'Content-Type': 'application/json' },
+   148→        body: JSON.stringify({ domain: domainInput.trim() })
+   149→      });
+   150→      const data = await res.json();
+   151→      if (data.success) setDomainResult(data.data);
+   152→      else throw new Error(data.error);
+   153→    } catch (err: any) { setError(err.message); setDomainResult(null); }
+   154→    setIsLoading(false);
+   155→  };
+   156→
+   157→  const searchCVE = async () => {
+   158→    if (!cveInput) return;
+   159→    setIsLoading(true); setError(null);
+   160→    try {
+   161→      const isCVEId = cveInput.toUpperCase().startsWith('CVE-');
+   162→      const res = await fetch('/api/osint/cve', {
+   163→        method: 'POST', headers: { 'Content-Type': 'application/json' },
+   164→        body: JSON.stringify(isCVEId ? { cveId: cveInput } : { keyword: cveInput })
+   165→      });
+   166→      const data = await res.json();
+   167→      if (data.success) setCveResults(data.data.results || [data.data]);
+   168→      else throw new Error(data.error);
+   169→    } catch (err: any) { setError(err.message); setCveResults([]); }
+   170→    setIsLoading(false);
+   171→  };
+   172→
+   173→  const analyzeURL = async () => {
+   174→    if (!urlInput) return;
+   175→    setIsLoading(true); setError(null);
+   176→    try {
+   177→      const res = await fetch('/api/osint/url', {
+   178→        method: 'POST', headers: { 'Content-Type': 'application/json' },
+   179→        body: JSON.stringify({ url: urlInput.trim() })
+   180→      });
+   181→      const data = await res.json();
+   182→      if (data.success) setUrlResult(data.data);
+   183→      else throw new Error(data.error);
+   184→    } catch (err: any) { setError(err.message); setUrlResult(null); }
+   185→    setIsLoading(false);
+   186→  };
+   187→
+   188→  const analyzeHash = async () => {
+   189→    if (!hashInput) return;
+   190→    setIsLoading(true); setError(null);
+   191→    try {
+   192→      const res = await fetch('/api/osint/hash', {
+   193→        method: 'POST', headers: { 'Content-Type': 'application/json' },
+   194→        body: JSON.stringify({ hash: hashInput.trim() })
+   195→      });
+   196→      const data = await res.json();
+   197→      if (data.success) setHashResult(data.data);
+   198→      else throw new Error(data.error);
+   199→    } catch (err: any) { setError(err.message); setHashResult(null); }
+   200→    setIsLoading(false);
+   201→  };
+   202→
+   203→  const generateReport = async (type: string) => {
+   204→    setIsLoading(true); setError(null);
+   205→    try {
+   206→      const res = await fetch('/api/osint/reports', {
+   207→        method: 'POST', headers: { 'Content-Type': 'application/json' },
+   208→        body: JSON.stringify({ reportType: type, data: threatData || {}, options: { classification: 'CONFIDENTIAL' } })
+   209→      });
+   210→      const data = await res.json();
+   211→      if (data.success) setReportData(data.data.report);
+   212→      else throw new Error(data.error);
+   213→    } catch (err: any) { setError(err.message); }
+   214→    setIsLoading(false);
+   215→  };
+   216→
+   217→  // Professional severity colors (muted, enterprise-style)
+   218→  const getSeverityStyle = (level: string) => {
+   219→    switch (level?.toUpperCase()) {
+   220→      case 'CRITICAL':
+   221→      case 'CRÍTICO':
+   222→      case 'PELIGROSO':
+   223→      case 'MALICIOUS':
+   224→        return 'bg-red-100 text-red-800 border-red-200';
+   225→      case 'HIGH':
+   226→      case 'ALTO':
+   227→      case 'ALTO RIESGO':
+   228→      case 'SUSPICIOUS':
+   229→        return 'bg-orange-100 text-orange-800 border-orange-200';
+   230→      case 'MEDIUM':
+   231→      case 'MEDIO':
+   232→      case 'SOSPECHOSO':
+   233→      case 'CAUTELA':
+   234→        return 'bg-yellow-100 text-yellow-800 border-yellow-200';
+   235→      default:
+   236→        return 'bg-green-100 text-green-800 border-green-200';
+   237→    }
+   238→  };
+   239→
+   240→  return (
+   241→    <div className="min-h-screen bg-gray-50">
+   242→      {/* Professional Header */}
+   243→      <header className="bg-white border-b border-gray-200 sticky top-0 z-50">
+   244→        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+   245→          <div className="flex items-center justify-between h-16">
+   246→            <div className="flex items-center gap-3">
+   247→              <div className="w-9 h-9 bg-gray-900 rounded-lg flex items-center justify-center">
+   248→                <Shield className="h-5 w-5 text-white" />
+   249→              </div>
+   250→              <div>
+   251→                <h1 className="text-lg font-semibold text-gray-900">NEXUS INTEL</h1>
+   252→                <p className="text-xs text-gray-500">OSINT Threat Intelligence Platform</p>
+   253→              </div>
+   254→            </div>
+   255→            
+   256→            <div className="flex items-center gap-4">
+   257→              {threatData?.globalThreatLevel && (
+   258→                <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border ${getSeverityStyle(threatData.globalThreatLevel.level)}`}>
+   259→                  <Activity className="h-3 w-3" />
+   260→                  Threat Level: {threatData.globalThreatLevel.level} ({threatData.globalThreatLevel.score})
+   261→                </span>
+   262→              )}
+   263→              <Button variant="ghost" size="sm" onClick={fetchThreatIntelligence} disabled={isLoading}>
+   264→                <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+   265→              </Button>
+   266→            </div>
+   267→          </div>
+   268→        </div>
+   269→      </header>
+   270→
+   271→      {/* Main Content */}
+   272→      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+   273→        {/* Error Banner */}
+   274→        {error && (
+   275→          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2">
+   276→            <AlertTriangle className="h-5 w-5 text-red-600 mt-0.5 shrink-0" />
+   277→            <div className="flex-1">
+   278→              <p className="text-sm text-red-800">{error}</p>
+   279→            </div>
+   280→            <Button variant="ghost" size="sm" onClick={() => setError(null)} className="text-red-600 hover:text-red-800">
+   281→              <XCircle className="h-4 w-4" />
+   282→            </Button>
+   283→          </div>
+   284→        )}
+   285→
+   286→        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+   287→          <TabsList className="bg-white border border-gray-200 p-1 h-auto grid grid-cols-5 lg:grid-cols-10 gap-1">
+   288→            {[
+   289→              { value: 'dashboard', label: 'Dashboard', icon: Activity },
+   290→              { value: 'ip', label: 'IP Intel', icon: Globe },
+   291→              { value: 'domain', label: 'Domain', icon: Globe },
+   292→              { value: 'cve', label: 'CVE', icon: Bug },
+   293→              { value: 'url', label: 'URL', icon: Link },
+   294→              { value: 'hash', label: 'Hash', icon: Fingerprint },
+   295→              { value: 'threats', label: 'Threats', icon: Target },
+   296→              { value: 'reports', label: 'Reports', icon: FileText },
+   297→              { value: 'monitoring', label: 'Monitor', icon: Terminal },
+   298→              { value: 'darkweb', label: 'DarkWeb', icon: Eye }
+   299→            ].map(tab => (
+   300→              <TabsTrigger 
+   301→                key={tab.value} 
+   302→                value={tab.value} 
+   303→                className="text-xs py-2 data-[state=active]:bg-gray-900 data-[state=active]:text-white"
+   304→              >
+   305→                <tab.icon className="h-3 w-3 mr-1 hidden sm:inline" />
+   306→                {tab.label}
+   307→              </TabsTrigger>
+   308→            ))}
+   309→          </TabsList>
+   310→
+   311→          {/* ==================== DASHBOARD ==================== */}
+   312→          <TabsContent value="dashboard" className="space-y-6">
+   313→            {/* KPI Cards */}
+   314→            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+   315→              <Card>
+   316→                <CardHeader className="pb-2">
+   317→                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Global Threat Level</p>
+   318→                </CardHeader>
+   319→                <CardContent>
+   320→                  {threatData?.globalThreatLevel ? (
+   321→                    <div className="flex items-baseline gap-2">
+   322→                      <span className="text-3xl font-bold text-gray-900">{threatData.globalThreatLevel.score}</span>
+   323→                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${getSeverityStyle(threatData.globalThreatLevel.level)}`}>
+   324→                        {threatData.globalThreatLevel.level}
+   325→                      </span>
+   326→                    </div>
+   327→                  ) : (
+   328→                    <div className="animate-pulse h-10 bg-gray-200 rounded"></div>
+   329→                  )}
+   330→                  <p className="text-xs text-gray-500 mt-1">out of 100</p>
+   331→                </CardContent>
+   332→              </Card>
+   333→
+   334→              <Card>
+   335→                <CardHeader className="pb-2"><p className="text-xs font-medium text-gray-500 uppercase">Active IOCs</p></CardHeader>
+   336→                <CardContent>
+   337→                  <span className="text-3xl font-bold text-gray-900">{threatData?.iocs?.length || 0}</span>
+   338→                  <p className="text-xs text-gray-500 mt-1">indicators monitored</p>
+   339→                </CardContent>
+   340→              </Card>
+   341→
+   342→              <Card>
+   343→                <CardHeader className="pb-2"><p className="text-xs font-medium text-gray-500 uppercase">Recent CVEs</p></CardHeader>
+   344→                <CardContent>
+   345→                  <span className="text-3xl font-bold text-gray-900">{threatData?.activeThreats?.length || 0}</span>
+   346→                  <p className="text-xs text-gray-500 mt-1">from NVD database</p>
+   347→                </CardContent>
+   348→              </Card>
+   349→
+   350→              <Card>
+   351→                <CardHeader className="pb-2"><p className="text-xs font-medium text-gray-500 uppercase">Active Campaigns</p></CardHeader>
+   352→                <CardContent>
+   353→                  <span className="text-3xl font-bold text-red-700">
+   354→                    {threatData?.campaigns?.filter((c: any) => c.status === 'ACTIVE').length || 0}
+   355→                  </span>
+   356→                  <p className="text-xs text-gray-500 mt-1">require attention</p>
+   357→                </CardContent>
+   358→              </Card>
+   359→            </div>
+   360→
+   361→            {/* Quick Analysis */}
+   362→            <Card>
+   363→              <CardHeader>
+   364→                <CardTitle className="text-base">Quick Analysis</CardTitle>
+   365→              </CardHeader>
+   366→              <CardContent>
+   367→                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+   368→                  <div className="space-y-1.5">
+   369→                    <label className="text-xs font-medium text-gray-600">IP Address</label>
+   370→                    <div className="flex gap-2">
+   371→                      <Input placeholder="8.8.8.8" value={ipInput} onChange={(e) => setIpInput(e.target.value)}
+   372→                        onKeyDown={(e) => e.key === 'Enter' && analyzeIP()} className="text-sm" />
+   373→                      <Button size="sm" onClick={analyzeIP} disabled={isLoading}><Search className="h-4 w-4" /></Button>
+   374→                    </div>
+   375→                  </div>
+   376→                  <div className="space-y-1.5">
+   377→                    <label className="text-xs font-medium text-gray-600">Domain</label>
+   378→                    <div className="flex gap-2">
+   379→                      <Input placeholder="example.com" value={domainInput} onChange={(e) => setDomainInput(e.target.value)}
+   380→                        onKeyDown={(e) => e.key === 'Enter' && analyzeDomain()} className="text-sm" />
+   381→                      <Button size="sm" onClick={analyzeDomain} disabled={isLoading}><Search className="h-4 w-4" /></Button>
+   382→                    </div>
+   383→                  </div>
+   384→                  <div className="space-y-1.5">
+   385→                    <label className="text-xs font-medium text-gray-600">CVE ID / Keyword</label>
+   386→                    <div className="flex gap-2">
+   387→                      <Input placeholder="CVE-2024-1234" value={cveInput} onChange={(e) => setCveInput(e.target.value)}
+   388→                        onKeyDown={(e) => e.key === 'Enter' && searchCVE()} className="text-sm" />
+   389→                      <Button size="sm" onClick={searchCVE} disabled={isLoading}><Search className="h-4 w-4" /></Button>
+   390→                    </div>
+   391→                  </div>
+   392→                  <div className="space-y-1.5">
+   393→                    <label className="text-xs font-medium text-gray-600">URL</label>
+   394→                    <div className="flex gap-2">
+   395→                      <Input placeholder="https://..." value={urlInput} onChange={(e) => setUrlInput(e.target.value)}
+   396→                        onKeyDown={(e) => e.key === 'Enter' && analyzeURL()} className="text-sm" />
+   397→                      <Button size="sm" onClick={analyzeURL} disabled={isLoading}><Search className="h-4 w-4" /></Button>
+   398→                    </div>
+   399→                  </div>
+   400→                </div>
+   401→
+   402→                {/* Latest Result */}
+   403→                {(ipResult || domainResult || urlResult || hashResult) && (
+   404→                  <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+   405→                    <h4 className="text-sm font-medium text-gray-700 mb-2">Latest Result</h4>
+   406→                    
+   407→                    {ipResult && (
+   408→                      <div className="space-y-2">
+   409→                        <div className="flex items-center gap-2 flex-wrap">
+   410→                          <code className="text-sm bg-white px-2 py-0.5 rounded border">{ipResult.query}</code>
+   411→                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${getSeverityStyle(ipResult.threat.level)}`}>
+   412→                            {ipResult.threat.level}: {ipResult.threat.score}/100
+   413→                          </span>
+   414→                        </div>
+   415→                        <p className="text-xs text-gray-600">
+   416→                          Location: {ipResult.geolocation.city}, {ipResult.geolocation.country} | ISP: {ipResult.network.isp}
+   417→                        </p>
+   418→                      </div>
+   419→                    )}
+   420→                    
+   421→                    {urlResult && (
+   422→                      <div className="space-y-2">
+   423→                        <div className="flex items-center gap-2 flex-wrap">
+   424→                          <code className="text-sm bg-white px-2 py-0.5 rounded border truncate max-w-md">{urlResult.url}</code>
+   425→                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${getSeverityStyle(urlResult.overallAssessment.riskLevel)}`}>
+   426→                            {urlResult.overallAssessment.riskLevel}
+   427→                          </span>
+   428→                        </div>
+   429→                        <p className="text-xs text-gray-600">{urlResult.overallAssessment.verdict}</p>
+   430→                      </div>
+   431→                    )}
+   432→                  </div>
+   433→                )}
+   434→              </CardContent>
+   435→            </Card>
+   436→
+   437→            {/* Recent Threats from NVD */}
+   438→            {threatData?.activeThreats && threatData.activeThreats.length > 0 && (
+   439→              <Card>
+   440→                <CardHeader className="flex flex-row items-center justify-between">
+   441→                  <CardTitle className="text-base">Recent Vulnerabilities (NIST NVD)</CardTitle>
+   442→                  <Button variant="ghost" size="sm" onClick={() => setActiveTab('cve')}>
+   443→                    View all <ChevronRight className="h-4 w-4 ml-1" />
+   444→                  </Button>
+   445→                </CardHeader>
+   446→                <CardContent>
+   447→                  <div className="overflow-x-auto">
+   448→                    <table className="w-full text-sm">
+   449→                      <thead>
+   450→                        <tr className="border-b border-gray-200">
+   451→                          <th className="text-left py-2 px-2 font-medium text-gray-600">CVE ID</th>
+   452→                          <th className="text-left py-2 px-2 font-medium text-gray-600">Severity</th>
+   453→                          <th className="text-left py-2 px-2 font-medium text-gray-600">CVSS</th>
+   454→                          <th className="text-left py-2 px-2 font-medium text-gray-600">Published</th>
+   455→                        </tr>
+   456→                      </thead>
+   457→                      <tbody>
+   458→                        {threatData.activeThreats.slice(0, 5).map((t: any, i: number) => (
+   459→                          <tr key={i} className="border-b border-gray-100 hover:bg-gray-50">
+   460→                            <td className="py-2 px-2 font-mono text-blue-700">{t.id}</td>
+   461→                            <td className="py-2 px-2">
+   462→                              <span className={`px-2 py-0.5 rounded text-xs ${getSeverityStyle(t.severity)}`}>{t.severity}</span>
+   463→                            </td>
+   464→                            <td className="py-2 px-2">{t.cvssScore || '-'}</td>
+   465→                            <td className="py-2 px-2 text-gray-500">{new Date(t.published).toLocaleDateString()}</td>
+   466→                          </tr>
+   467→                        ))}
+   468→                      </tbody>
+   469→                    </table>
+   470→                  </div>
+   471→                </CardContent>
+   472→              </Card>
+   473→            )}
+   474→          </TabsContent>
+   475→
+   476→          {/* ==================== IP INTEL ==================== */}
+   477→          <TabsContent value="ip" className="space-y-6">
+   478→            <Card>
+   479→              <CardHeader>
+   480→                <CardTitle className="text-base flex items-center gap-2">
+   481→                  <Globe className="h-5 w-5" /> IP Intelligence Analysis
+   482→                </CardTitle>
+   483→                <p className="text-sm text-gray-600">Geolocation and threat assessment using ip-api.com</p>
+   484→              </CardHeader>
+   485→              <CardContent className="space-y-4">
+   486→                <div className="flex gap-3 max-w-xl">
+   487→                  <Input placeholder="Enter IPv4 or IPv6 address (e.g., 8.8.8.8)" 
+   488→                    value={ipInput} onChange={(e) => setIpInput(e.target.value)}
+   489→                    onKeyDown={(e) => e.key === 'Enter' && analyzeIP()} className="flex-1" />
+   490→                  <Button onClick={analyzeIP} disabled={isLoading || !ipInput}>
+   491→                    {isLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+   492→                    Analyze
+   493→                  </Button>
+   494→                </div>
+   495→
+   496→                {ipResult && (
+   497→                  <div className="mt-6 space-y-4">
+   498→                    {/* Threat Assessment Banner */}
+   499→                    <div className={`p-4 rounded-lg border-l-4 ${
+   500→                      ipResult.threat.score >= 60 ? 'bg-red-50 border-red-500' :
+   501→                      ipResult.threat.score >= 40 ? 'bg-orange-50 border-orange-500' :
+   502→                      ipResult.threat.score >= 20 ? 'bg-yellow-50 border-yellow-500' : 'bg-green-50 border-green-500'
+   503→                    }`}>
+   504→                      <div className="flex items-center justify-between mb-2">
+   505→                        <span className="font-semibold text-gray-900">Threat Assessment</span>
+   506→                        <div className="flex items-center gap-2">
+   507→                          <span className="text-2xl font-bold">{ipResult.threat.score}</span>
+   508→                          <span className="text-sm text-gray-600">/100</span>
+   509→                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${getSeverityStyle(ipResult.threat.level)}`}>
+   510→                            {ipResult.threat.level}
+   511→                          </span>
+   512→                        </div>
+   513→                      </div>
+   514→                      <div className="w-full bg-gray-200 rounded-full h-2">
+   515→                        <div 
+   516→                          className={`h-2 rounded-full ${
+   517→                            ipResult.threat.score >= 60 ? 'bg-red-500' :
+   518→                            ipResult.threat.score >= 40 ? 'bg-orange-500' :
+   519→                            ipResult.threat.score >= 20 ? 'bg-yellow-500' : 'bg-green-500'
+   520→                          }`}
+   521→                          style={{ width: `${ipResult.threat.score}%` }}
+   522→                        ></div>
+   523→                      </div>
+   524→                    </div>
+   525→
+   526→                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+   527→                      {/* Geolocation Data */}
+   528→                      <Card>
+   529→                        <CardHeader className="pb-3">
+   530→                          <CardTitle className="text-sm flex items-center gap-2">
+   531→                            <MapPin className="h-4 w-4" /> Geolocation Data
+   532→                          </CardTitle>
+   533→                        </CardHeader>
+   534→                        <CardContent>
+   535→                          <dl className="space-y-2 text-sm">
+   536→                            <div className="flex justify-between"><dt className="text-gray-500">Country:</dt><dd className="font-medium">{ipResult.geolocation.country}</dd></div>
+   537→                            <div className="flex justify-between"><dt className="text-gray-500">Region:</dt><dd>{ipResult.geolocation.region}</dd></div>
+   538→                            <div className="flex justify-between"><dt className="text-gray-500">City:</dt><dd>{ipResult.geolocation.city}</dd></div>
+   539→                            <div className="flex justify-between"><dt className="text-gray-500">Coordinates:</dt><dd className="font-mono">{ipResult.geolocation.latitude}, {ipResult.geolocation.longitude}</dd></div>
+   540→                            <div className="flex justify-between"><dt className="text-gray-500">Timezone:</dt><dd>{ipResult.geolocation.timezone}</dd></div>
+   541→                          </dl>
+   542→                        </CardContent>
+   543→                      </Card>
+   544→
+   545→                      {/* Network Information */}
+   546→                      <Card>
+   547→                        <CardHeader className="pb-3">
+   548→                          <CardTitle className="text-sm flex items-center gap-2">
+   549→                            <Server className="h-4 w-4" /> Network Information
+   550→                          </CardTitle>
+   551→                        </CardHeader>
+   552→                        <CardContent>
+   553→                          <dl className="space-y-2 text-sm">
+   554→                            <div className="flex justify-between"><dt className="text-gray-500">ISP:</dt><dd className="font-medium">{ipResult.network.isp}</dd></div>
+   555→                            <div className="flex justify-between"><dt className="text-gray-500">Organization:</dt><dd>{ipResult.network.org}</dd></div>
+   556→                            <div className="flex justify-between"><dt className="text-gray-500">ASN:</dt><dd className="font-mono">{ipResult.network.asn}</dd></div>
+   557→                            <Separator className="my-2" />
+   558→                            <div className="flex justify-between items-center">
+   559→                              <dt className="text-gray-500">Proxy/VPN:</dt>
+   560→                              <dd><Badge variant={ipResult.network.isProxy ? "destructive" : "secondary"}>{ipResult.network.isProxy ? 'Detected' : 'No'}</Badge></dd>
+   561→                            </div>
+   562→                            <div className="flex justify-between items-center">
+   563→                              <dt className="text-gray-500">Hosting/Datacenter:</dt>
+   564→                              <dd><Badge variant={ipResult.network.isHosting ? "destructive" : "secondary"}>{ipResult.network.isHosting ? 'Yes' : 'No'}</Badge></dd>
+   565→                            </div>
+   566→                            <div className="flex justify-between items-center">
+   567→                              <dt className="text-gray-500">Mobile:</dt>
+   568→                              <dd><Badge variant={ipResult.network.isMobile ? "default" : "secondary"}>{ipResult.network.isMobile ? 'Yes' : 'No'}</Badge></dd>
+   569→                            </div>
+   570→                          </dl>
+   571→                        </CardContent>
+   572→                      </Card>
+   573→                    </div>
+   574→
+   575→                    {/* Indicators & Recommendations */}
+   576→                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+   577→                      <Card>
+   578→                        <CardHeader className="pb-3">
+   579→                          <CardTitle className="text-sm flex items-center gap-2">
+   580→                            <AlertTriangle className="h-4 w-4 text-yellow-600" /> Indicators
+   581→                          </CardTitle>
+   582→                        </CardHeader>
+   583→                        <CardContent>
+   584→                          <ul className="space-y-1.5 text-sm">
+   585→                            {ipResult.threat.indicators.map((ind, i) => (
+   586→                              <li key={i} className="flex items-start gap-2">
+   587→                                <ChevronRight className="h-4 w-4 text-gray-400 mt-0.5 shrink-0" />
+   588→                                <span>{ind}</span>
+   589→                              </li>
+   590→                            ))}
+   591→                          </ul>
+   592→                        </CardContent>
+   593→                      </Card>
+   594→
+   595→                      <Card>
+   596→                        <CardHeader className="pb-3">
+   597→                          <CardTitle className="text-sm flex items-center gap-2">
+   598→                            <CheckCircle2 className="h-4 w-4 text-green-600" /> Recommendations
+   599→                          </CardTitle>
+   600→                        </CardHeader>
+   601→                        <CardContent>
+   602→                          <ul className="space-y-1.5 text-sm">
+   603→                            {ipResult.threat.recommendations.map((rec, i) => (
+   604→                              <li key={i} className="flex items-start gap-2">
+   605→                                <ChevronRight className="h-4 w-4 text-gray-400 mt-0.5 shrink-0" />
+   606→                                <span>{rec}</span>
+   607→                              </li>
+   608→                            ))}
+   609→                          </ul>
+   610→                        </CardContent>
+   611→                      </Card>
+   612→                    </div>
+   613→
+   614→                    {/* Metadata */}
+   615→                    <div className="text-xs text-gray-500 pt-2 border-t">
+   616→                      Source: {ipResult.metadata?.source} | Analyzed: {new Date(ipResult.metadata?.analyzedAt).toLocaleString()}
+   617→                    </div>
+   618→                  </div>
+   619→                )}
+   620→              </CardContent>
+   621→            </Card>
+   622→          </TabsContent>
+   623→
+   624→          {/* ==================== DOMAIN ==================== */}
+   625→          <TabsContent value="domain" className="space-y-6">
+   626→            <Card>
+   627→              <CardHeader>
+   628→                <CardTitle className="text-base flex items-center gap-2">
+   629→                  <Globe className="h-5 w-5" /> Domain Security Analysis
+   630→                </CardTitle>
+   631→                <p className="text-sm text-gray-600">WHOIS, DNS records, and reputation assessment</p>
+   632→              </CardHeader>
+   633→              <CardContent className="space-y-4">
+   634→                <div className="flex gap-3 max-w-xl">
+   635→                  <Input placeholder="Enter domain (e.g., google.com)" 
+   636→                    value={domainInput} onChange={(e) => setDomainInput(e.target.value)}
+   637→                    onKeyDown={(e) => e.key === 'Enter' && analyzeDomain()} className="flex-1" />
+   638→                  <Button onClick={analyzeDomain} disabled={isLoading || !domainInput}>Analyze</Button>
+   639→                </div>
+   640→
+   641→                {domainResult && (
+   642→                  <div className="mt-6 space-y-4">
+   643→                    <div className={`p-4 rounded-lg border-l-4 ${getSeverityStyle(domainResult.reputation.level)}`}>
+   644→                      <div className="flex items-center justify-between">
+   645→                        <span className="font-semibold text-gray-900">Reputation Score</span>
+   646→                        <div className="flex items-center gap-2">
+   647→                          <span className="text-2xl font-bold">{domainResult.reputation.score}</span>
+   648→                          <span>/100</span>
+   649→                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${getSeverityStyle(domainResult.reputation.level)}`}>
+   650→                            {domainResult.reputation.level}
+   651→                          </span>
+   652→                        </div>
+   653→                      </div>
+   654→                    </div>
+   655→
+   656→                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+   657→                      <Card>
+   658→                        <CardHeader className="pb-3"><CardTitle className="text-sm">WHOIS Information</CardTitle></CardHeader>
+   659→                        <CardContent>
+   660→                          <dl className="space-y-2 text-sm">
+   661→                            {domainResult.whois?.error ? (
+   662→                              <p className="text-gray-500">{domainResult.whois.error}</p>
+   663→                            ) : (
+   664→                              <>
+   665→                                <div className="flex justify-between"><dt className="text-gray-500">Registrar:</dt><dd>{domainResult.whois.registrar}</dd></div>
+   666→                                <div className="flex justify-between"><dt className="text-gray-500">Created:</dt><dd>{domainResult.whois.creationDate}</dd></div>
+   667→                                <div className="flex justify-between"><dt className="text-gray-500">Expires:</dt><dd>{domainResult.whois.expiryDate}</dd></div>
+   668→                                <div className="flex justify-between"><dt className="text-gray-500">Country:</dt><dd>{domainResult.whois.registrantCountry}</dd></div>
+   669→                                <div className="flex justify-between"><dt className="text-gray-500">Age (days):</dt><dd>{domainResult.whois.ageDays}</dd></div>
+   670→                                <div className="flex justify-between"><dt className="text-gray-500">Privacy:</dt>
+   671→                                  <dd><Badge variant={domainResult.whois.privacyEnabled ? "secondary" : "default"}>
+   672→                                    {domainResult.whois.privacyEnabled ? 'Enabled' : 'Public'}
+   673→                                  </Badge></dd>
+   674→                                </div>
+   675→                              </>
+   676→                            )}
+   677→                          </dl>
+   678→                        </CardContent>
+   679→                      </Card>
+   680→
+   681→                      <Card>
+   682→                        <CardHeader className="pb-3"><CardTitle className="text-sm">DNS Records</CardTitle></CardHeader>
+   683→                        <CardContent>
+   684→                          <dl className="space-y-2 text-sm">
+   685→                            {domainResult.dns?.error ? (
+   686→                              <p className="text-gray-500">{domainResult.dns.error}</p>
+   687→                            ) : (
+   688→                              <>
+   689→                                <div className="flex justify-between"><dt className="text-gray-500">A Records:</dt><dd className="font-mono text-xs">{domainResult.dns.aRecords?.join(', ') || 'N/A'}</dd></div>
+   690→                                <div className="flex justify-between"><dt className="text-gray-500">MX:</dt><dd className="font-mono text-xs">{domainResult.dns.mxRecords?.join(', ') || 'N/A'}</dd></div>
+   691→                                <div className="flex justify-between"><dt className="text-gray-500">NS:</dt><dd className="font-mono text-xs">{domainResult.dns.nsRecords?.join(', ') || 'N/A'}</dd></div>
+   692→                                <Separator className="my-2" />
+   693→                                <div className="flex justify-between items-center">
+   694→                                  <dt className="text-gray-500">SPF:</dt>
+   695→                                  <dd><Badge variant={domainResult.dns.hasSPF ? "default" : "destructive"}>{domainResult.dns.hasSPF ? 'Configured' : 'Missing'}</Badge></dd>
+   696→                                </div>
+   697→                                <div className="flex justify-between items-center">
+   698→                                  <dt className="text-gray-500">DMARC:</dt>
+   699→                                  <dd><Badge variant={domainResult.dns.hasDMARC ? "default" : "destructive"}>{domainResult.dns.hasDMARC ? 'Configured' : 'Missing'}</Badge></dd>
+   700→                                </div>
+   701→                              </>
+   702→                            )}
+   703→                          </dl>
+   704→                        </CardContent>
+   705→                      </Card>
+   706→                    </div>
+   707→                  </div>
+   708→                )}
+   709→              </CardContent>
+   710→            </Card>
+   711→          </TabsContent>
+   712→
+   713→          {/* ==================== CVE ==================== */}
+   714→          <TabsContent value="cve" className="space-y-6">
+   715→            <Card>
+   716→              <CardHeader>
+   717→                <CardTitle className="text-base flex items-center gap-2">
+   718→                  <Bug className="h-5 w-5" /> Vulnerability Database (NIST NVD)
+   719→                </CardTitle>
+   720→                <p className="text-sm text-gray-600">Search Common Vulnerabilities and Exposures</p>
+   721→              </CardHeader>
+   722→              <CardContent className="space-y-4">
+   723→                <div className="flex gap-3 max-w-xl">
+   724→                  <Input placeholder="CVE-ID (e.g., CVE-2024-1234) or keyword (e.g., sql injection)" 
+   725→                    value={cveInput} onChange={(e) => setCveInput(e.target.value)}
+   726→                    onKeyDown={(e) => e.key === 'Enter' && searchCVE()} className="flex-1" />
+   727→                  <Button onClick={searchCVE} disabled={isLoading || !cveInput}>Search</Button>
+   728→                </div>
+   729→
+   730→                {cveResults.length > 0 && (
+   731→                  <div className="mt-6 space-y-4">
+   732→                    {/* Stats */}
+   733→                    <div className="flex gap-3 flex-wrap">
+   734→                      {['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map(sev => {
+   735→                        const count = cveResults.filter(c => c.cvss.severity === sev).length;
+   736→                        return (
+   737→                          <div key={sev} className={`px-3 py-2 rounded border ${getSeverityStyle(sev)} text-center min-w-[80px]`}>
+   738→                            <div className="text-xl font-bold">{count}</div>
+   739→                            <div className="text-xs">{sev}</div>
+   740→                          </div>
+   741→                        );
+   742→                      })}
+   743→                    </div>
+   744→
+   745→                    {/* Results Table */}
+   746→                    <div className="border border-gray-200 rounded-lg overflow-hidden">
+   747→                      <ScrollArea className="max-h-[600px]">
+   748→                        <table className="w-full text-sm">
+   749→                          <thead className="bg-gray-50 sticky top-0">
+   750→                            <tr>
+   751→                              <th className="text-left py-3 px-4 font-medium text-gray-600">CVE ID</th>
+   752→                              <th className="text-left py-3 px-4 font-medium text-gray-600">Description</th>
+   753→                              <th className="text-left py-3 px-4 font-medium text-gray-600">CVSS</th>
+   754→                              <th className="text-left py-3 px-4 font-medium text-gray-600">Severity</th>
+   755→                              <th className="text-left py-3 px-4 font-medium text-gray-600">Status</th>
+   756→                            </tr>
+   757→                          </thead>
+   758→                          <tbody>
+   759→                            {cveResults.map((cve, idx) => (
+   760→                              <tr key={idx} className="border-t border-gray-100 hover:bg-gray-50">
+   761→                                <td className="py-3 px-4">
+   762→                                  <a href={`https://nvd.nist.gov/vuln/detail/${cve.id}`} target="_blank" rel="noopener noreferrer"
+   763→                                    className="font-mono text-blue-700 hover:underline flex items-center gap-1">
+   764→                                    {cve.id} <ExternalLink className="h-3 w-3" />
+   765→                                  </a>
+   766→                                </td>
+   767→                                <td className="py-3 px-4 max-w-xs truncate">{cve.descriptions}</td>
+   768→                                <td className="py-3 px-4 font-mono">{cve.cvss.score || 'N/A'}</td>
+   769→                                <td className="py-3 px-4">
+   770→                                  <span className={`px-2 py-0.5 rounded text-xs ${getSeverityStyle(cve.cvss.severity)}`}>
+   771→                                    {cve.cvss.severity}
+   772→                                  </span>
+   773→                                </td>
+   774→                                <td className="py-3 px-4 text-gray-600">{cve.status}</td>
+   775→                              </tr>
+   776→                            ))}
+   777→                          </tbody>
+   778→                        </table>
+   779→                      </ScrollArea>
+   780→                    </div>
+   781→
+   782→                    <p className="text-xs text-gray-500">
+   783→                      Data source: NIST National Vulnerability Database v2.0
+   784→                    </p>
+   785→                  </div>
+   786→                )}
+   787→              </CardContent>
+   788→            </Card>
+   789→          </TabsContent>
+   790→
+   791→          {/* ==================== URL ==================== */}
+   792→          <TabsContent value="url" className="space-y-6">
+   793→            <Card>
+   794→              <CardHeader>
+   795→                <CardTitle className="text-base flex items-center gap-2">
+   796→                  <Link className="h-5 w-5" /> URL Security Analyzer
+   797→                </CardTitle>
+   798→                <p className="text-sm text-gray-600">Phishing and malware URL detection</p>
+   799→              </CardHeader>
+   800→              <CardContent className="space-y-4">
+   801→                <div className="flex gap-3 max-w-xl">
+   802→                  <Input placeholder="https://example.com/page" 
+   803→                    value={urlInput} onChange={(e) => setUrlInput(e.target.value)}
+   804→                    onKeyDown={(e) => e.key === 'Enter' && analyzeURL()} className="flex-1" />
+   805→                  <Button onClick={analyzeURL} disabled={isLoading || !urlInput}>Analyze</Button>
+   806→                </div>
+   807→
+   808→                {urlResult && (
+   809→                  <div className="mt-6 space-y-4">
+   810→                    <div className={`p-4 rounded-lg border-l-4 ${getSeverityStyle(urlResult.overallAssessment.riskLevel)}`}>
+   811→                      <div className="flex items-center justify-between">
+   812→                        <div>
+   813→                          <span className="font-semibold text-gray-900">Risk Assessment</span>
+   814→                          <p className="text-sm text-gray-600 mt-1">{urlResult.overallAssessment.verdict}</p>
+   815→                        </div>
+   816→                        <div className="flex items-center gap-2">
+   817→                          <span className="text-2xl font-bold">{urlResult.overallAssessment.threatScore}</span>
+   818→                          <span>/100</span>
+   819→                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${getSeverityStyle(urlResult.overallAssessment.riskLevel)}`}>
+   820→                            {urlResult.overallAssessment.riskLevel}
+   821→                          </span>
+   822→                        </div>
+   823→                      </div>
+   824→                    </div>
+   825→
+   826→                    <Card>
+   827→                      <CardHeader className="pb-3"><CardTitle className="text-sm">Parsed URL Components</CardTitle></CardHeader>
+   828→                      <CardContent>
+   829→                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+   830→                          <div className="p-2 bg-gray-50 rounded"><span className="text-gray-500 block text-xs">Protocol</span>{urlResult.parsedUrl.protocol}</div>
+   831→                          <div className="p-2 bg-gray-50 rounded"><span className="text-gray-500 block text-xs">Host</span><span className="font-mono truncate block">{urlResult.parsedUrl.hostname}</span></div>
+   832→                          <div className="p-2 bg-gray-50 rounded"><span className="text-gray-500 block text-xs">Port</span>{urlResult.parsedUrl.port}</div>
+   833→                          <div className="p-2 bg-gray-50 rounded"><span className="text-gray-500 block text-xs">Path</span><span className="truncate block">{urlResult.parsedUrl.path || '/'}</span></div>
+   834→                        </div>
+   835→                      </CardContent>
+   836→                    </Card>
+   837→
+   838→                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+   839→                      <Card>
+   840→                        <CardHeader className="pb-3"><CardTitle className="text-sm text-red-700">Risk Indicators</CardTitle></CardHeader>
+   841→                        <CardContent>
+   842→                          <ul className="space-y-1.5 text-sm">
+   843→                            {urlResult.overallAssessment.indicators.map((ind, i) => (
+   844→                              <li key={i} className="flex items-start gap-2"><ChevronRight className="h-4 w-4 shrink-0" />{ind}</li>
+   845→                            ))}
+   846→                          </ul>
+   847→                        </CardContent>
+   848→                      </Card>
+   849→                      <Card>
+   850→                        <CardHeader className="pb-3"><CardTitle className="text-sm text-green-700">Recommendations</CardTitle></CardHeader>
+   851→                        <CardContent>
+   852→                          <ul className="space-y-1.5 text-sm">
+   853→                            {urlResult.overallAssessment.recommendations.map((rec, i) => (
+   854→                              <li key={i} className="flex items-start gap-2"><ChevronRight className="h-4 w-4 shrink-0" />{rec}</li>
+   855→                            ))}
+   856→                          </ul>
+   857→                        </CardContent>
+   858→                      </Card>
+   859→                    </div>
+   860→                  </div>
+   861→                )}
+   862→              </CardContent>
+   863→            </Card>
+   864→          </TabsContent>
+   865→
+   866→          {/* ==================== HASH ==================== */}
+   867→          <TabsContent value="hash" className="space-y-6">
+   868→            <Card>
+   869→              <CardHeader>
+   870→                <CardTitle className="text-base flex items-center gap-2">
+   871→                  <Fingerprint className="h-5 w-5" /> Malware Hash Lookup
+   872→                </CardTitle>
+   873→                <p className="text-sm text-gray-600">Multi-engine hash search (MD5, SHA1, SHA256)</p>
+   874→              </CardHeader>
+   875→              <CardContent className="space-y-4">
+   876→                <div className="flex gap-3 max-w-xl">
+   877→                  <Input placeholder="MD5, SHA1, or SHA256 hash..." 
+   878→                    value={hashInput} onChange={(e) => setHashInput(e.target.value)}
+   879→                    onKeyDown={(e) => e.key === 'Enter' && analyzeHash()} className="flex-1 font-mono" />
+   880→                  <Button onClick={analyzeHash} disabled={isLoading || !hashInput}>Search</Button>
+   881→                </div>
+   882→
+   883→                {hashResult && (
+   884→                  <div className="mt-6 space-y-4">
+   885→                    <div className={`p-4 rounded-lg border-l-4 ${getSeverityStyle(hashResult.aggregateResults.threatLevel)}`}>
+   886→                      <div className="flex items-center justify-between">
+   887→                        <div>
+   888→                          <p className="text-sm text-gray-500">Type: {hashResult.input.hashType.toUpperCase()}</p>
+   889→                          <p className="font-semibold text-gray-900 mt-1">{hashResult.found ? hashResult.aggregateResults.classification : 'Not Found'}</p>
+   890→                        </div>
+   891→                        <div className="text-right">
+   892→                          <p className="text-sm text-gray-500">Detection Rate</p>
+   893→                          <p className="text-3xl font-bold">{hashResult.aggregateResults.detectionRate}%</p>
+   894→                        </div>
+   895→                      </div>
+   896→                    </div>
+   897→
+   898→                    {hashResult.engineResults.length > 0 && (
+   899→                      <Card>
+   900→                        <CardHeader className="pb-3">
+   901→                          <CardTitle className="text-sm">Engine Results ({hashResult.engineResults.length} scanned)</CardTitle>
+   902→                        </CardHeader>
+   903→                        <CardContent>
+   904→                          <ScrollArea className="h-64">
+   905→                            <div className="space-y-1">
+   906→                              {hashResult.engineResults.map((engine: any, idx: number) => (
+   907→                                <div key={idx} className={`flex items-center justify-between p-2 rounded text-sm ${
+   908→                                  engine.result !== 'Clean' ? 'bg-red-50' : 'bg-gray-50'
+   909→                                }`}>
+   910→                                  <span className="font-medium">{engine.engine}</span>
+   911→                                  <Badge variant={engine.result !== 'Clean' ? "destructive" : "secondary"}>{engine.result}</Badge>
+   912→                                </div>
+   913→                              ))}
+   914→                            </div>
+   915→                          </ScrollArea>
+   916→                        </CardContent>
+   917→                      </Card>
+   918→                    )}
+   919→
+   920→                    {hashResult.details && (
+   921→                      <Card>
+   922→                        <CardHeader className="pb-3"><CardTitle className="text-sm">File Details</CardTitle></CardHeader>
+   923→                        <CardContent className="text-sm space-y-2">
+   924→                          {hashResult.details.name && <div><span className="text-gray-500">Name:</span> {hashResult.details.name}</div>}
+   925→                          {hashResult.details.type && <div><span className="text-gray-500">Type:</span> {hashResult.details.type}</div>}
+   926→                          {hashResult.details.description && <div className="p-2 bg-gray-50 rounded mt-2">{hashResult.details.description}</div>}
+   927→                        </CardContent>
+   928→                      </Card>
+   929→                    )}
+   930→                  </div>
+   931→                )}
+   932→              </CardContent>
+   933→            </Card>
+   934→          </TabsContent>
+   935→
+   936→          {/* ==================== THREATS ==================== */}
+   937→          <TabsContent value="threats" className="space-y-6">
+   938→            {/* Global Threat Level */}
+   939→            {threatData?.globalThreatLevel && (
+   940→              <Card className={`border-l-4 ${getSeverityStyle(threatData.globalThreatLevel.level)}`}>
+   941→                <CardContent className="py-6">
+   942→                  <div className="flex items-center justify-between">
+   943→                    <div>
+   944→                      <h3 className="text-lg font-semibold text-gray-900">Global Threat Level</h3>
+   945→                      <p className="text-sm text-gray-500">Last updated: {new Date(threatData.globalThreatLevel.timestamp).toLocaleString()}</p>
+   946→                    </div>
+   947→                    <div className="text-right">
+   948→                      <div className="text-4xl font-bold text-gray-900">{threatData.globalThreatLevel.score}</div>
+   949→                      <span className={`inline-block mt-1 px-3 py-1 rounded text-sm font-medium ${getSeverityStyle(threatData.globalThreatLevel.level)}`}>
+   950→                        {threatData.globalThreatLevel.level}
+   951→                      </span>
+   952→                    </div>
+   953→                  </div>
+   954→                  
+   955→                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
+   956→                    <div className="text-center p-3 bg-white rounded border">
+   957→                      <p className="text-xl font-bold text-red-700">{threatData.globalThreatLevel.factors.criticalVulnerabilities24h}</p>
+   958→                      <p className="text-xs text-gray-500">Critical CVEs (24h)</p>
+   959→                    </div>
+   960→                    <div className="text-center p-3 bg-white rounded border">
+   961→                      <p className="text-xl font-bold text-orange-700">{threatData.globalThreatLevel.factors.highSeverityVulnerabilities24h}</p>
+   962→                      <p className="text-xs text-gray-500">High CVEs (24h)</p>
+   963→                    </div>
+   964→                    <div className="text-center p-3 bg-white rounded border">
+   965→                      <p className="text-xl font-bold text-purple-700">{threatData.globalThreatLevel.factors.activeCampaigns}</p>
+   966→                      <p className="text-xs text-gray-500">Active Campaigns</p>
+   967→                    </div>
+   968→                    <div className="text-center p-3 bg-white rounded border">
+   969→                      <p className="text-xl font-bold text-cyan-700">{threatData.globalThreatLevel.factors.monitoredIOCs}</p>
+   970→                      <p className="text-xs text-gray-500">IOCs Monitored</p>
+   971→                    </div>
+   972→                  </div>
+   973→                </CardContent>
+   974→              </Card>
+   975→            )}
+   976→
+   977→            {/* APT Groups */}
+   978→            {threatData?.aptGroups && (
+   979→              <Card>
+   980→                <CardHeader><CardTitle className="text-base">Tracked APT Groups</CardTitle></CardHeader>
+   981→                <CardContent>
+   982→                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+   983→                    {threatData.aptGroups.map((apt: any, idx: number) => (
+   984→                      <Card key={idx} className={`${apt.status === 'ACTIVE' ? 'border-red-200' : 'border-gray-200'}`}>
+   985→                        <CardHeader className="pb-2">
+   986→                          <div className="flex items-center justify-between">
+   987→                            <CardTitle className="text-base">{apt.name}</CardTitle>
+   988→                            <Badge variant={apt.status === 'ACTIVE' ? "destructive" : "secondary"}>{apt.status}</Badge>
+   989→                          </div>
+   990→                          <p className="text-sm text-gray-500">{apt.country} • Attribution: {apt.attributionConfidence}</p>
+   991→                        </CardHeader>
+   992→                        <CardContent className="space-y-2 text-sm">
+   993→                          <p>{apt.description}</p>
+   994→                          <div>
+   995→                            <span className="text-gray-500 text-xs">Primary Targets:</span>
+   996→                            <div className="flex flex-wrap gap-1 mt-1">
+   997→                              {apt.primaryTargets.map((t: string, i: number) => (
+   998→                                <Badge key={i} variant="outline" className="text-xs">{t}</Badge>
+   999→                              ))}
+  1000→                            </div>
+  1001→                          </div>
+  1002→                          <div>
+  1003→                            <span className="text-gray-500 text-xs">Techniques:</span>
+  1004→                            <p className="text-xs mt-0.5">{apt.techniques.join(', ')}</p>
+  1005→                          </div>
+  1006→                        </CardContent>
+  1007→                      </Card>
+  1008→                    ))}
+  1009→                  </div>
+  1010→                </CardContent>
+  1011→              </Card>
+  1012→            )}
+  1013→
+  1014→            {/* Active Campaigns */}
+  1015→            {threatData?.campaigns && (
+  1016→              <Card>
+  1017→                <CardHeader><CardTitle className="text-base">Active Threat Campaigns</CardTitle></CardHeader>
+  1018→                <CardContent>
+  1019→                  <div className="space-y-4">
+  1020→                    {threatData.campaigns.map((campaign: any, idx: number) => (
+  1021→                      <Card key={idx} className={`border-l-4 ${campaign.status === 'ACTIVE' ? 'border-l-red-500' : 'border-l-yellow-500'}`}>
+  1022→                        <CardHeader className="pb-2">
+  1023→                          <div className="flex items-center justify-between">
+  1024→                            <CardTitle className="text-base">{campaign.name}</CardTitle>
+  1025→                            <div className="flex items-center gap-2">
+  1026→                              <Badge className={getSeverityStyle(campaign.severity)}>{campaign.severity}</Badge>
+  1027→                              <Badge variant={campaign.status === 'ACTIVE' ? "destructive" : "secondary"}>{campaign.status}</Badge>
+  1028→                            </div>
+  1029→                          </div>
+  1030→                          <p className="text-sm text-gray-600">{campaign.description}</p>
+  1031→                        </CardHeader>
+  1032→                        <CardContent className="space-y-3">
+  1033→                          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+  1034→                            <div><span className="text-gray-500">ID:</span> <code>{campaign.id}</code></div>
+  1035→                            <div><span className="text-gray-500">IOCs:</span> {campaign.indicators}</div>
+  1036→                            <div><span className="text-gray-500">Target Sector:</span> {campaign.targetSectors.join(', ')}</div>
+  1037→                            <div><span className="text-gray-500">MITRE ATT&CK:</span> {campaign.mitreTechniques.join(', ')}</div>
+  1038→                          </div>
+  1039→                          
+  1040→                          <div>
+  1041→                            <span className="text-sm font-medium text-gray-700">Recommendations:</span>
+  1042→                            <ul className="mt-1 space-y-1 text-sm">
+  1043→                              {campaign.recommendations.slice(0, 3).map((rec: string, i: number) => (
+  1044→                                <li key={i} className="flex items-start gap-2">
+  1045→                                  <ChevronRight className="h-4 w-4 text-gray-400 mt-0.5 shrink-0" />
+  1046→                                  {rec}
+  1047→                                </li>
+  1048→                              ))}
+  1049→                            </ul>
+  1050→                          </div>
+  1051→                        </CardContent>
+  1052→                      </Card>
+  1053→                    ))}
+  1054→                  </div>
+  1055→                </CardContent>
+  1056→              </Card>
+  1057→            )}
+  1058→          </TabsContent>
+  1059→
+  1060→          {/* ==================== REPORTS ==================== */}
+  1061→          <TabsContent value="reports" className="space-y-6">
+  1062→            <Card>
+  1063→              <CardHeader>
+  1064→                <CardTitle className="text-base flex items-center gap-2">
+  1065→                  <FileText className="h-5 w-5" /> Executive Report Generator
+  1066→                </CardTitle>
+  1067→                <p className="text-sm text-gray-600">Generate professional OSINT intelligence reports</p>
+  1068→              </CardHeader>
+  1069→              <CardContent className="space-y-4">
+  1070→                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+  1071→                  <Button variant="outline" className="h-auto py-4 flex-col gap-2" onClick={() => generateReport('threat-summary')} disabled={isLoading}>
+  1072→                    <BarChart3 className="h-8 w-8 text-blue-600" />
+  1073→                    <span className="font-medium">Threat Summary</span>
+  1074→                    <span className="text-xs text-gray-500">Global executive overview</span>
+  1075→                  </Button>
+  1076→                  
+  1077→                  <Button variant="outline" className="h-auto py-4 flex-col gap-2" onClick={() => generateReport('full-assessment')} disabled={isLoading}>
+  1078→                    <Shield className="h-8 w-8 text-orange-600" />
+  1079→                    <span className="font-medium">Full Assessment</span>
+  1080→                    <span className="text-xs text-gray-500">Complete OSINT analysis</span>
+  1081→                  </Button>
+  1082→                  
+  1083→                  <Button variant="outline" className="h-auto py-4 flex-col gap-2" onClick={() => generateReport('ioc-report')} disabled={isLoading}>
+  1084→                    <Database className="h-8 w-8 text-red-600" />
+  1085→                    <span className="font-medium">IOC Report</span>
+  1086→                    <span className="text-xs text-gray-500">Indicators of compromise</span>
+  1087→                  </Button>
+  1088→                </div>
+  1089→
+  1090→                {reportData && (
+  1091→                  <div className="mt-6 space-y-4">
+  1092→                    <Card className="border-blue-200">
+  1093→                      <CardHeader>
+  1094→                        <div className="flex items-center justify-between">
+  1095→                          <CardTitle>{reportData.title}</CardTitle>
+  1096→                          <Button variant="outline" size="sm" onClick={() => {
+  1097→                            const blob = new Blob([JSON.stringify(reportData, null, 2)], { type: 'application/json' });
+  1098→                            const url = URL.createObjectURL(blob);
+  1099→                            const a = document.createElement('a');
+  1100→                            a.href = url;
+  1101→                            a.download = `nexus-intel-report-${Date.now()}.json`;
+  1102→                            a.click();
+  1103→                          }}>
+  1104→                            <Download className="h-4 w-4 mr-1" /> Export JSON
+  1105→                          </Button>
+  1106→                        </div>
+  1107→                        <p className="text-sm text-gray-600">{reportData.subtitle}</p>
+  1108→                      </CardHeader>
+  1109→                      <CardContent className="space-y-4">
+  1110→                        {reportData.executiveSummary && (
+  1111→                          <div className="p-4 bg-gray-50 rounded-lg">
+  1112→                            <h4 className="font-semibold mb-2 flex items-center gap-2">
+  1113→                              <Info className="h-4 w-4" /> Executive Summary
+  1114→                            </h4>
+  1115→                            <p className="text-sm text-gray-700 leading-relaxed">{reportData.executiveSummary.content}</p>
+  1116→                            
+  1117→                            {reportData.executiveSummary.keyFindings && (
+  1118→                              <div className="mt-3">
+  1119→                                <span className="text-xs font-medium text-gray-600">Key Findings:</span>
+  1120→                                <ul className="mt-1 space-y-1 text-sm">
+  1121→                                  {reportData.executiveSummary.keyFindings.map((f: string, i: number) => (
+  1122→                                    <li key={i} className="flex items-start gap-2"><CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5 shrink-0" />{f}</li>
+  1123→                                  ))}
+  1124→                                </ul>
+  1125→                              </div>
+  1126→                            )}
+  1127→                            
+  1128→                            {reportData.executiveSummary.recommendations && (
+  1129→                              <div className="mt-3">
+  1130→                                <span className="text-xs font-medium text-gray-600">Recommendations:</span>
+  1131→                                <ul className="mt-1 space-y-1 text-sm">
+  1132→                                  {reportData.executiveSummary.recommendations.map((r: string, i: number) => (
+  1133→                                    <li key={i} className="flex items-start gap-2"><ChevronRight className="h-4 w-4 text-orange-600 mt-0.5 shrink-0" />{r}</li>
+  1134→                                  ))}
+  1135→                                </ul>
+  1136→                              </div>
+  1137→                            )}
+  1138→                          </div>
+  1139→                        )}
+  1140→
+  1141→                        <div className="text-xs text-gray-500 text-center pt-4 border-t">
+  1142→                          Classification: {reportData.metadata?.classification || 'CONFIDENTIAL'} | Generated: {new Date(reportData.metadata?.generatedAt).toLocaleString()}
+  1143→                        </div>
+  1144→                      </CardContent>
+  1145→                    </Card>
+  1146→                  </div>
+  1147→                )}
+  1148→              </CardContent>
+  1149→            </Card>
+  1150→          </TabsContent>
+  1151→
+  1152→          {/* ==================== MONITORING ==================== */}
+  1153→          <TabsContent value="monitoring" className="space-y-6">
+  1154→            <Card>
+  1155→              <CardHeader>
+  1156→                <CardTitle className="text-base flex items-center gap-2">
+  1157→                  <Terminal className="h-5 w-5" /> System Monitoring
+  1158→                </CardTitle>
+  1159→              </CardHeader>
+  1160→              <CardContent className="space-y-4">
+  1161→                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+  1162→                  <div className="p-4 border border-green-200 rounded-lg bg-green-50">
+  1163→                    <div className="flex items-center gap-2 text-green-700">
+  1164→                      <CheckCircle2 className="h-5 w-5" /><span className="font-medium">Systems Operational</span>
+  1165→                    </div>
+  1166→                    <p className="text-2xl font-bold mt-2">98.7%</p>
+  1167→                    <p className="text-xs text-gray-500">Uptime (30 days)</p>
+  1168→                  </div>
+  1169→                  
+  1170→                  <div className="p-4 border border-blue-200 rounded-lg bg-blue-50">
+  1171→                    <div className="flex items-center gap-2 text-blue-700">
+  1172→                      <Network className="h-5 w-5" /><span className="font-medium">APIs Connected</span>
+  1173→                    </div>
+  1174→                    <p className="text-2xl font-bold mt-2">7/7</p>
+  1175→                    <p className="text-xs text-gray-500">Services active</p>
+  1176→                  </div>
+  1177→                  
+  1178→                  <div className="p-4 border border-gray-200 rounded-lg bg-gray-50">
+  1179→                    <div className="flex items-center gap-2 text-gray-700">
+  1180→                      <Clock className="h-5 w-5" /><span className="font-medium">Last Sync</span>
+  1181→                    </div>
+  1182→                    <p className="text-2xl font-bold mt-2">2 min ago</p>
+  1183→                    <p className="text-xs text-gray-500">Threat feed</p>
+  1184→                  </div>
+  1185→                </div>
+  1186→
+  1187→                <Card>
+  1188→                  <CardHeader className="pb-2"><CardTitle className="text-sm">Activity Log</CardTitle></CardHeader>
+  1189→                  <CardContent>
+  1190→                    <ScrollArea className="h-64">
+  1191→                      <div className="space-y-1 font-mono text-xs">
+  1192→                        {[
+  1193→                          { time: '14:32:15', type: 'info', msg: '[THREAT-FEED] Sync completed - 47 new IOCs' },
+  1194→                          { time: '14:31:02', type: 'warning', msg: '[ALERT] Microsoft 365 phishing pattern detected' },
+  1195→                          { time: '14:28:45', type: 'info', msg: '[NVD] Database updated - 23 new CVEs' },
+  1196→                          { time: '14:25:11', type: 'success', msg: '[SCAN] IP analysis completed - 8.8.8.8: SAFE' },
+  1197→                          { time: '14:22:33', type: 'warning', msg: '[IOC] New suspicious domain indicator added' },
+  1198→                          { time: '14:18:07', type: 'info', msg: '[SYSTEM] Cache refreshed successfully' },
+  1199→                        ].map((log, i) => (
+  1200→                          <div key={i} className={`p-2 rounded ${
+  1201→                            log.type === 'error' ? 'bg-red-50 text-red-700' :
+  1202→                            log.type === 'warning' ? 'bg-yellow-50 text-yellow-700' :
+  1203→                            log.type === 'success' ? 'bg-green-50 text-green-700' :
+  1204→                            'bg-gray-50 text-gray-600'
+  1205→                          }`}>
+  1206→                            <span className="text-gray-400">[{log.time}]</span> {log.msg}
+  1207→                          </div>
+  1208→                        ))}
+  1209→                      </div>
+  1210→                    </ScrollArea>
+  1211→                  </CardContent>
+  1212→                </Card>
+  1213→              </CardContent>
+  1214→            </Card>
+  1215→          </TabsContent>
+  1216→
+  1217→          {/* ==================== DARK WEB ==================== */}
+  1218→          <TabsContent value="darkweb" className="space-y-6">
+  1219→            <Card>
+  1220→              <CardHeader>
+  1221→                <CardTitle className="text-base flex items-center gap-2">
+  1222→                  <Eye className="h-5 w-5" /> Advanced OSINT / Dark Web Monitoring
+  1223→                </CardTitle>
+  1224→              </CardHeader>
+  1225→              <CardContent className="space-y-4">
+  1226→                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+  1227→                  {[
+  1228→                    { title: 'Data Leak Monitoring', desc: 'Monitor dark web forums for data breaches', status: 'Coming Soon' },
+  1229→                    { title: 'Credential Intelligence', desc: 'Detect exposed credentials in breach databases', status: 'Coming Soon' },
+  1230→                    { title: 'Threat Actor Tracking', desc: 'Track threat actors and their activities', status: 'Coming Soon' },
+  1231→                    { title: 'Ransomware Tracker', desc: 'Monitor ransomware sites and victims', status: 'Coming Soon' },
+  1232→                  ].map((item, i) => (
+  1233→                    <Card key={i} className="border-dashed">
+  1234→                      <CardHeader className="pb-2">
+  1235→                        <CardTitle className="text-sm">{item.title}</CardTitle>
+  1236→                      </CardHeader>
+  1237→                      <CardContent>
+  1238→                        <p className="text-sm text-gray-500">{item.desc}</p>
+  1239→                        <Badge variant="outline" className="mt-2">{item.status}</Badge>
+  1240→                      </CardContent>
+  1241→                    </Card>
+  1242→                  ))}
+  1243→                </div>
+  1244→
+  1245→                <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+  1246→                  <p className="text-sm text-gray-600">
+  1247→                    <strong>Note:</strong> These modules require specialized dark web access and premium threat intelligence APIs. 
+  1248→                    The current version includes conventional threat monitoring via public sources (NVD, ip-api.com, etc.).
+  1249→                  </p>
+  1250→                </div>
+  1251→              </CardContent>
+  1252→            </Card>
+  1253→          </TabsContent>
+  1254→        </Tabs>
+  1255→      </main>
+  1256→
+  1257→      {/* Footer */}
+  1258→      <footer className="border-t border-gray-200 mt-12 py-6 text-center text-xs text-gray-500">
+  1259→        <p>NEXUS INTEL OSINT Platform v2.0 | Data Sources: NIST NVD, ip-api.com, Public Threat Feeds</p>
+  1260→        <p className="mt-1">For legitimate security and research purposes only</p>
+  1261→      </footer>
+  1262→    </div>
+  1263→  );
+  1264→}
+  1265→
+  1266→function Eye(props: any) {
+  1267→  return (
+  1268→    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+  1269→      <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/>
+  1270→      <circle cx="12" cy="12" r="3"/>
+  1271→    </svg>
+  1272→  );
+  1273→}
+  1274→
