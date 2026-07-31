@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 // Executive Report Generator API
+// Compatible with Vercel serverless environment
+export const runtime = 'nodejs';
+export const maxDuration = 30;
+
 export async function POST(request: NextRequest) {
   try {
     const { reportType, data, options = {} } = await request.json();

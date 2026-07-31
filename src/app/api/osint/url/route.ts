@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 // URL Security Analysis API
+// Compatible with Vercel serverless environment
+export const runtime = 'nodejs';
+export const maxDuration = 30;
+
 export async function POST(request: NextRequest) {
   try {
     const { url } = await request.json();

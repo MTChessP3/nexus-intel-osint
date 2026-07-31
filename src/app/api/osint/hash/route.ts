@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 // Malware Hash Lookup API
+// Compatible with Vercel serverless environment
+export const runtime = 'nodejs';
+export const maxDuration = 30;
+
 export async function POST(request: NextRequest) {
   try {
     const { hash, hashType = 'auto' } = await request.json();

@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 // Domain Analysis API
+// Uses Google DNS-over-HTTPS for REAL DNS resolution
+// Compatible with Vercel serverless environment
+
+export const runtime = 'nodejs';
+export const maxDuration = 30;
+
 export async function POST(request: NextRequest) {
   try {
     const { domain } = await request.json();
@@ -17,16 +23,33 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Formato de dominio inválido', suggestion: 'Ejemplo: google.com, example.org' }, { status: 400 });
     }
 
-    // Use multiple REAL DNS and WHOIS services
-    const [dnsInfo, whoisInfo, securityInfo] = await Promise.allSettled([
+    // Use multiple REAL DNS services
+    const [dnsInfo, securityInfo] = await Promise.allSettled([
       getDNSInfo(cleanDomain),
-      getWHOISInfo(cleanDomain),
       getSecurityInfo(cleanDomain)
     ]);
 
     const dns = dnsInfo.status === 'fulfilled' ? dnsInfo.value : null;
-    const whois = whoisInfo.status === 'fulfilled' ? whoisInfo.value : null;
     const security = securityInfo.status === 'fulfilled' ? securityInfo.value : null;
+
+    // Try WHOIS but don't fail if it doesn't work
+    let whoisInfo = null;
+    try {
+      const whoisResult = await getWHOISInfo(cleanDomain);
+      whoisInfo = whoisResult;
+    } catch (e) {
+      console.log('[DOMAIN] WHOIS unavailable, continuing without it');
+      whoisInfo = {
+        registrar: 'No disponible',
+        creationDate: null,
+        expiryDate: null,
+        registrantCountry: null,
+        nameServers: [],
+        ageDays: null,
+        privacyEnabled: null,
+        error: 'Servicio WHOIS temporalmente no disponible'
+      };
+    }
 
     // Calculate reputation score
     let reputationScore = 70; // Start neutral
@@ -39,7 +62,7 @@ export async function POST(request: NextRequest) {
       recommendations.push('BLOQUEAR este dominio inmediatamente');
     }
 
-    if (whois?.age && whois.age < 30) {
+    if (whoisInfo?.ageDays && whoisInfo.ageDays < 30 && whoisInfo.ageDays !== null) {
       reputationScore -= 15;
       indicators.push('🟠 Dominio muy reciente (< 30 días)');
       recommendations.push('Mayor sospecha - dominios nuevos son comúnmente maliciosos');
@@ -57,7 +80,7 @@ export async function POST(request: NextRequest) {
       recommendations.push('Implementar DMARC para protección contra phishing');
     }
 
-    if (whois?.privacyEnabled) {
+    if (whoisInfo?.privacyEnabled === true) {
       reputationScore -= 5;
       indicators.push('ℹ️ WHOIS privacy activado');
     }
@@ -76,7 +99,7 @@ export async function POST(request: NextRequest) {
 
     const result = {
       domain: cleanDomain,
-      whois: whois || { error: 'No se pudo obtener información WHOIS' },
+      whois: whoisInfo || { error: 'No se pudo obtener información WHOIS' },
       dns: dns || { error: 'No se pudo obtener registros DNS' },
       security: security || { error: 'No se pudo verificar seguridad' },
       reputation: {
@@ -88,14 +111,14 @@ export async function POST(request: NextRequest) {
       },
       metadata: {
         analyzedAt: new Date().toISOString(),
-        sources: ['DNS Lookup', 'WHOIS Databases', 'Reputation Services']
+        sources: ['Google DNS-over-HTTPS', 'Heuristic Security Analysis']
       }
     };
 
     return NextResponse.json({ success: true, data: result });
 
   } catch (error: any) {
-    console.error('Domain Analysis Error:', error);
+    console.error('[DOMAIN] Error:', error);
     return NextResponse.json(
       { error: 'Error al analizar el dominio', details: error.message },
       { status: 500 }
@@ -103,33 +126,50 @@ export async function POST(request: NextRequest) {
   }
 }
 
-async function getDNSInfo(domain: string) {
+async function getDNSInfo(domain: string): Promise<any> {
   try {
     // Use Google DNS-over-HTTPS for real DNS resolution
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
     const response = await fetch(`https://dns.google/resolve?name=${domain}&type=A`, {
-      headers: { 'Accept': 'application/dns-json' }
+      headers: { 'Accept': 'application/dns-json' },
+      signal: controller.signal
     });
+    
+    clearTimeout(timeout);
+    
+    if (!response.ok) {
+      throw new Error(`DNS lookup failed: ${response.status}`);
+    }
+    
     const data = await response.json();
 
     if (data.Status !== 0) {
-      throw new Error('DNS lookup failed');
+      throw new Error(`DNS Error Code: ${data.Status}`);
     }
 
-    // Check for additional records
-    const [mxResponse, txtResponse, nsResponse] = await Promise.allSettled([
-      fetch(`https://dns.google/resolve?name=${domain}&type=MX`),
-      fetch(`https://dns.google/resolve?name=${domain}&type=TXT`),
-      fetch(`https://dns.google/resolve?name=${domain}&type=NS`)
+    // Check for additional records in parallel
+    const [mxResult, txtResult, nsResult] = await Promise.allSettled([
+      fetch(`https://dns.google/resolve?name=${domain}&type=MX`, {
+        headers: { 'Accept': 'application/dns-json' }
+      }).then(r => r.json()),
+      fetch(`https://dns.google/resolve?name=${domain}&type=TXT`, {
+        headers: { 'Accept': 'application/dns-json' }
+      }).then(r => r.json()),
+      fetch(`https://dns.google/resolve?name=${domain}&type=NS`, {
+        headers: { 'Accept': 'application/dns-json' }
+      }).then(r => r.json())
     ]);
 
-    const mxData = mxResponse.status === 'fulfilled' ? await mxResponse.value.json() : null;
-    const txtData = txtResponse.status === 'fulfilled' ? await txtResponse.value.json() : null;
-    const nsData = nsResponse.status === 'fulfilled' ? await nsResponse.value.json() : null;
+    const mxData = mxResult.status === 'fulfilled' ? mxResult.value : null;
+    const txtData = txtResult.status === 'fulfilled' ? txtResult.value : null;
+    const nsData = nsResult.status === 'fulfilled' ? nsResult.value : null;
 
-    // Check SPF and DMARC
+    // Check SPF and DMARC from TXT records
     const txtRecords = txtData?.Answer || [];
-    const hasSPF = txtRecords.some((r: any) => r.data?.includes('spf'));
-    const hasDMARC = txtRecords.some((r: any) => r.data?.includes('dmarc'));
+    const hasSPF = txtRecords.some((r: any) => r.data?.toLowerCase().includes('spf'));
+    const hasDMARC = txtRecords.some((r: any) => r.data?.toLowerCase().includes('dmarc'));
 
     return {
       aRecords: data.Answer?.map((r: any) => r.data) || [],
@@ -137,19 +177,26 @@ async function getDNSInfo(domain: string) {
       nsRecords: nsData?.Answer?.map((r: any) => r.data) || [],
       txtRecords: txtRecords.map((r: any) => r.data) || [],
       hasSPF,
-      hasDMARC
+      hasDMARC,
+      status: 'OK'
     };
   } catch (error) {
-    console.error('DNS Info Error:', error);
-    return null;
+    console.error('[DNS] Info Error:', error);
+    return {
+      error: 'DNS lookup failed',
+      status: 'ERROR',
+      aRecords: [],
+      hasSPF: false,
+      hasDMARC: false
+    };
   }
 }
 
-async function getWHOISInfo(domain: string) {
+async function getWHOISInfo(domain: string): Promise<any> {
   try {
-    // Use a public WHOIS API
+    // Use a public WHOIS API with timeout
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+    const timeout = setTimeout(() => controller.abort(), 5000); // Shorter timeout
 
     const response = await fetch(`https://whois.freeaiapi.xyz/?hostname=${domain}`, {
       signal: controller.signal
@@ -158,7 +205,7 @@ async function getWHOISInfo(domain: string) {
     clearTimeout(timeout);
 
     if (!response.ok) {
-      throw new Error('WHOIS service unavailable');
+      throw new Error(`WHOIS service returned ${response.status}`);
     }
 
     const text = await response.text();
@@ -181,25 +228,23 @@ async function getWHOISInfo(domain: string) {
       registrantCountry: countryMatch ? countryMatch[1].trim() : null,
       nameServers: nameServerMatch ? nameServerMatch.map((n: string) => n.replace(/Name Server:\s*/i, '').trim()) : [],
       ageDays,
-      privacyEnabled: !countryMatch || text.toLowerCase().includes('redacted') || text.toLowerCase().includes('gdpr')
+      privacyEnabled: !countryMatch || text.toLowerCase().includes('redacted') || text.toLowerCase().includes('gdpr'),
+      status: 'OK'
     };
   } catch (error) {
-    console.error('WHOIS Error:', error);
-    return null;
+    console.error('[WHOIS] Error:', error);
+    throw error; // Re-throw to handle in main function
   }
 }
 
-async function getSecurityInfo(domain: string) {
+async function getSecurityInfo(domain: string): Promise<any> {
   try {
-    // Check against Google Safe Browsing (would need API key)
-    // For now, use heuristic analysis
-    
     // Suspicious TLDs
-    const suspiciousTLDs = ['.xyz', '.top', '.click', '.link', '.work', '.gq', '.ml', '.ga', '.cf'];
+    const suspiciousTLDs = ['.xyz', '.top', '.click', '.link', '.work', '.gq', '.ml', '.ga', '.cf', '.tk', '.pw'];
     const isSuspiciousTLD = suspiciousTLDs.some(tld => domain.endsWith(tld));
     
     // Check for typosquatting patterns
-    const popularDomains = ['google', 'facebook', 'microsoft', 'amazon', 'apple', 'netflix'];
+    const popularDomains = ['google', 'facebook', 'microsoft', 'amazon', 'apple', 'netflix', 'twitter', 'instagram'];
     const isTyposquat = popularDomains.some(pd => 
       domain.includes(pd) && domain !== pd + '.com' && !domain.startsWith(pd + '.')
     );
@@ -211,22 +256,31 @@ async function getSecurityInfo(domain: string) {
     const numericCount = (domain.match(/\d/g) || []).length;
     const isNumericHeavy = numericCount > domain.length * 0.4;
 
-    const malicious = isSuspiciousTLD || isTyposquat || hasRepeatedChars || isNumericHeavy;
+    // Check for homograph/similar characters
+    const hasHomographs = /[àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿ]/.test(domain);
+
+    const malicious = isSuspiciousTLD || isTyposquat || hasRepeatedChars || isNumericHeavy || hasHomographs;
     
     const risks: string[] = [];
     if (isSuspiciousTLD) risks.push('TLD frecuentemente asociado con actividad maliciosa');
     if (isTyposquat) risks.push('Posible typosquatting de marca conocida');
     if (hasRepeatedChars) risks.push('Caracteres repetidos sospechosos');
     if (isNumericHeavy) risks.push('Dominio numérico atípico');
+    if (hasHomographs) risks.push('Posible uso de caracteres homógrafos (IDN spoofing)');
 
     return {
       malicious,
       riskFactors: risks,
       googleSafeBrowsing: 'No verificado (requiere API key)',
-      virusTotalStatus: 'No verificado'
+      virusTotalStatus: 'No verificado',
+      analysisType: 'Heuristic'
     };
   } catch (error) {
-    console.error('Security Info Error:', error);
-    return null;
+    console.error('[SECURITY] Info Error:', error);
+    return {
+      malicious: false,
+      riskFactors: [],
+      error: 'Security analysis unavailable'
+    };
   }
 }
