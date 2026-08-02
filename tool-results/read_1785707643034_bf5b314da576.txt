@@ -1,0 +1,1723 @@
+     1→'use client';
+     2→
+     3→import React, { useState, useEffect, useCallback } from 'react';
+     4→import { 
+     5→  Search, Globe, Shield, Bug, FileText, Download, Upload, 
+     6→  Trash2, Edit3, Plus, Eye, AlertTriangle, CheckCircle, XCircle,
+     7→  Activity, Database, Cpu, Lock, Unlock, RefreshCw, ExternalLink,
+     8→  Copy, Filter, ChevronDown, ChevronRight, Zap, Target, Radar,
+     9→  Fingerprint, Mail, Hash, Server, Clock, MapPin, Wifi,
+    10→  BarChart3, PieChart as PieChartIcon, TrendingUp, Users, Key, Terminal,
+    11→  Save, X, Loader2, Check, Info, AlertCircle, ArrowRight, Ban, WifiOff
+    12→} from 'lucide-react';
+    13→import {
+    14→  AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
+    15→  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
+    16→} from 'recharts';
+    17→
+    18→// ==================== TYPES ====================
+    19→type TabType = 'dashboard' | 'ip' | 'domain' | 'url' | 'hash' | 'cve' | 'ai' | 'threats' | 'iocs' | 'export' | 'reports';
+    20→type Severity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
+    21→type IOCStatus = 'UNKNOWN' | 'BENIGN' | 'SUSPICIOUS' | 'MALICIOUS';
+    22→
+    23→interface IOC {
+    24→  id: string;
+    25→  type: string;
+    26→  value: string;
+    27→  description: string;
+    28→  severity: Severity;
+    29→  confidence: number;
+    30→  status: IOCStatus;
+    31→  source: string;
+    32→  tags: string[];
+    33→  firstSeen: string;
+    34→  lastUpdated: string;
+    35→  analyses?: any[];
+    36→  alerts?: any[];
+    37→}
+    38→
+    39→interface APIResponse {
+    40→  success: boolean;
+    41→  source?: string;
+    42→  timestamp?: string;
+    43→  fetchedLive?: boolean;
+    44→  data?: any;
+    45→  error?: string;
+    46→  details?: string;
+    47→  message?: string;
+    48→  feedStatus?: Record<string, any>;
+    49→  feeds?: any[];
+    50→  vulnerabilities?: any[];
+    51→  analysis?: any;
+    52→  riskAssessment?: any;
+    53→  dns?: any;
+    54→  securityAnalysis?: any;
+    55→  hashType?: string;
+    56→  executiveSummary?: any;
+    57→  severityBreakdown?: any;
+    58→  typeDistribution?: any;
+    59→  topThreats?: any;
+    60→  recentIntelligence?: any;
+    61→  [key: string]: any;
+    62→}
+    63→
+    64→// ==================== CONSTANTS ====================
+    65→const SEVERITY_COLORS: Record<Severity, string> = {
+    66→  CRITICAL: '#dc2626',
+    67→  HIGH: '#f97316',
+    68→  MEDIUM: '#eab308',
+    69→  LOW: '#22c55e',
+    70→  INFO: '#3b82f6'
+    71→};
+    72→
+    73→const STATUS_COLORS: Record<IOCStatus, string> = {
+    74→  UNKNOWN: '#6b7280',
+    75→  BENIGN: '#22c55e',
+    76→  SUSPICIOUS: '#f97316',
+    77→  MALICIOUS: '#dc2626'
+    78→};
+    79→
+    80→const CHART_COLORS = ['#dc2626', '#f97316', '#eab308', '#22c55e', '#3b82f6'];
+    81→
+    82→// ==================== SAMPLE DATA FOR FALLBACK ====================
+    83→const SAMPLE_THREAT_DATA = {
+    84→  cisa: [
+    85→    { cveID: 'CVE-2024-3400', vendorProject: 'Palo Alto Networks', product: 'PAN-OS', vulnerabilityName: 'Command Injection Vulnerability', dateAdded: '2024-04-12', shortDescription: 'PAN-OS GlobalProtect gateway allows authentication bypass leading to command execution.' },
+    86→    { cveID: 'CVE-2024-21887', vendorProject: 'Ivanti', product: 'Connect Secure', vulnerabilityName: 'Request Smuggling RCE', dateAdded: '2024-01-25', shortDescription: 'Authentication bypass allowing remote code execution on vulnerable endpoints.' },
+    87→    { cveID: 'CVE-2023-44428', vendorProject: 'Citrix', product: 'NetScaler ADC', vulnerabilityName: 'RCE Vulnerability', dateAdded: '2023-10-15', shortDescription: 'Critical unauthenticated RCE affecting NetScaler ADC and Gateway appliances.' }
+    88→  ],
+    89→  malware: [
+    90→    { sha256_hash: 'a1b2c3d4e5f6...', md5_hash: 'abc123def456...', file_type: 'PE32+ executable', signature: 'Emotet', first_seen: '2024-01-15', last_seen: '2024-07-20', tags: ['banker', 'trojan'] },
+    91→    { sha256_hash: 'f7e8d9c0b1a2...', md5_hash: '789ghi012jkl...', file_type: 'PDF document', signature: 'Phishing PDF', first_seen: '2024-02-20', last_seen: '2024-07-18', tags: ['phishing', 'pdf'] },
+    92→    { sha256_hash: 'm3n4o5p6q7r8...', md5_hash: 'stu234vwx567y...', file_type: 'Office document', signature: 'TrickBot Loader', first_seen: '2024-03-10', last_seen: '2024-07-19', tags: ['loader', 'banker'] }
+    93→  ],
+    94→  sslbl: [
+    95→    { sha256_fingerprint: '00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb', status: 'bad', listing_reason: 'Malicious SSL certificate detected in phishing campaign' },
+    96→    { sha256_fingerprint: 'aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66', status: 'bad', listing_reason: 'Certificate associated with malware distribution' }
+    97→  ]
+    98→};
+    99→
+   100→// ==================== MAIN COMPONENT ====================
+   101→export default function OSINTPlatform() {
+   102→  // State
+   103→  const [activeTab, setActiveTab] = useState<TabType>('dashboard');
+   104→  const [loading, setLoading] = useState(false);
+   105→  const [apiData, setApiData] = useState<APIResponse | null>(null);
+   106→  const [error, setError] = useState<string | null>(null);
+   107→  const [iocs, setIocs] = useState<IOC[]>([]);
+   108→  const [selectedIOC, setSelectedIOC] = useState<IOC | null>(null);
+   109→  const [showModal, setShowModal] = useState(false);
+   110→  const [modalType, setModalType] = useState<'detail' | 'edit' | 'add' | 'raw'>('detail');
+   111→  const [searchQuery, setSearchQuery] = useState('');
+   112→  const [filterSeverity, setFilterSeverity] = useState<string>('all');
+   113→  const [filterType, setFilterType] = useState<string>('all');
+   114→  const [filterStatus, setFilterStatus] = useState<string>('all');
+   115→  const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+   116→  
+   117→  // Form states
+   118→  const [inputValue, setInputValue] = useState('');
+   119→  const [formData, setFormData] = useState({
+   120→    type: 'IP',
+   121→    value: '',
+   122→    description: '',
+   123→    severity: 'MEDIUM',
+   124→    tags: [] as string[]
+   125→  });
+   126→
+   127→  // Load IOCs on mount and tab change
+   128→  useEffect(() => {
+   129→    loadIOCs();
+   130→  }, [activeTab]);
+   131→
+   132→  // Clear feedback after 3 seconds
+   133→  useEffect(() => {
+   134→    if (actionFeedback) {
+   135→      const timer = setTimeout(() => setActionFeedback(null), 3000);
+   136→      return () => clearTimeout(timer);
+   137→    }
+   138→  }, [actionFeedback]);
+   139→
+   140→  // ==================== API FUNCTIONS ====================
+   141→  const loadIOCs = async () => {
+   142→    try {
+   143→      const params = new URLSearchParams();
+   144→      if (searchQuery) params.set('search', searchQuery);
+   145→      if (filterSeverity !== 'all') params.set('severity', filterSeverity);
+   146→      if (filterType !== 'all') params.set('type', filterType);
+   147→      if (filterStatus !== 'all') params.set('status', filterStatus);
+   148→      
+   149→      const response = await fetch(`/api/osint/iocs?${params}`);
+   150→      const result = await response.json();
+   151→      
+   152→      if (result.success) {
+   153→        setIocs(result.data);
+   154→        showFeedback(`Loaded ${result.data.length} IOCs`);
+   155→      }
+   156→    } catch (err) {
+   157→      console.error('Load IOCs error:', err);
+   158→      showFeedback('Error loading IOCs', 'error');
+   159→    }
+   160→  };
+   161→
+   162→  const callAPI = async (endpoint: string, options?: RequestInit): Promise<APIResponse> => {
+   163→    setLoading(true);
+   164→    setError(null);
+   165→    setActionFeedback('Connecting to API...');
+   166→    
+   167→    try {
+   168→      const response = await fetch(endpoint, {
+   169→        ...options,
+   170→        headers: {
+   171→          'Content-Type': 'application/json',
+   172→          ...options?.headers
+   173→        }
+   174→      });
+   175→      
+   176→      const data = await response.json();
+   177→      setApiData(data);
+   178→      
+   179→      if (!data.success) {
+   180→        setError(data.error || data.details || data.message || 'Unknown error occurred');
+   181→        showFeedback(`Error: ${data.error || data.message || 'API returned error'}`, 'error');
+   182→      } else {
+   183→        showFeedback(`Success! Data received from ${data.source || 'API'}`, 'success');
+   184→        
+   185→        // Reload IOCs after mutations
+   186→        if (options?.method === 'POST' || options?.method === 'DELETE' || options?.method === 'PATCH') {
+   187→          setTimeout(() => loadIOCs(), 500);
+   188→        }
+   189→      }
+   190→      
+   191→      return data;
+   192→    } catch (err) {
+   193→      const errorMsg = err instanceof Error ? err.message : 'Network error';
+   194→      setError(errorMsg);
+   195→      showFeedback(`Network Error: ${errorMsg}`, 'error');
+   196→      return { success: false, error: errorMsg };
+   197→    } finally {
+   198→      setLoading(false);
+   199→    }
+   200→  };
+   201→
+   202→  const showFeedback = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+   203→    setActionFeedback(`${type.toUpperCase()}: ${message}`);
+   204→  };
+   205→
+   206→  // ==================== HANDLERS ====================
+   207→  const handleIPRecon = () => {
+   208→    if (!inputValue) {
+   209→      showFeedback('Please enter an IP address', 'error');
+   210→      return;
+   211→    }
+   212→    showFeedback(`Analyzing IP: ${inputValue}...`, 'info');
+   213→    callAPI(`/api/osint/ip?ip=${encodeURIComponent(inputValue)}`);
+   214→  };
+   215→
+   216→  const handleDomainRecon = () => {
+   217→    if (!inputValue) {
+   218→      showFeedback('Please enter a domain', 'error');
+   219→      return;
+   220→    }
+   221→    showFeedback(`Resolving domain: ${inputValue}...`, 'info');
+   222→    callAPI(`/api/osint/domain?domain=${encodeURIComponent(inputValue)}`);
+   223→  };
+   224→
+   225→  const handleURLAnalysis = () => {
+   226→    if (!inputValue) {
+   227→      showFeedback('Please enter a URL', 'error');
+   228→      return;
+   229→    }
+   230→    showFeedback(`Scanning URL: ${inputValue}...`, 'info');
+   231→    callAPI(`/api/osint/url?url=${encodeURIComponent(inputValue)}`);
+   232→  };
+   233→
+   234→  const handleHashLookup = () => {
+   235→    if (!inputValue) {
+   236→      showFeedback('Please enter a hash', 'error');
+   237→      return;
+   238→    }
+   239→    showFeedback(`Looking up hash: ${inputValue.substring(0, 20)}...`, 'info');
+   240→    callAPI(`/api/osint/hash?hash=${encodeURIComponent(inputValue)}`);
+   241→  };
+   242→
+   243→  const handleCVESearch = () => {
+   244→    if (!inputValue) {
+   245→      showFeedback('Please enter a CVE ID or keyword', 'error');
+   246→      return;
+   247→    }
+   248→    const isCVE = inputValue.toUpperCase().startsWith('CVE-');
+   249→    const endpoint = isCVE 
+   250→      ? `/api/osint/cve?cveId=${encodeURIComponent(inputValue)}`
+   251→      : `/api/osint/cve?keyword=${encodeURIComponent(inputValue)}`;
+   252→    showFeedback(`Searching NIST NVD for: ${inputValue}...`, 'info');
+   253→    callAPI(endpoint);
+   254→  };
+   255→
+   256→  const handleAIAnalysis = async () => {
+   257→    if (!inputValue) {
+   258→      showFeedback('Please enter a target for analysis', 'error');
+   259→      return;
+   260→    }
+   261→    const type = detectInputType(inputValue);
+   262→    showFeedback(`Running AI analysis on ${type}: ${inputValue}...`, 'info');
+   263→    await callAPI('/api/osint/ai', {
+   264→      method: 'POST',
+   265→      body: JSON.stringify({ target: inputValue, type })
+   266→    });
+   267→  };
+   268→
+   269→  const handleThreatFeedLoad = async (feed?: string) => {
+   270→    const feedName = feed || 'ALL';
+   271→    showFeedback(`Loading threat feed: ${feedName}...`, 'info');
+   272→    
+   273→    const endpoint = feed ? `/api/osint/threats?feed=${feed}&limit=20` : '/api/osint/threats?limit=20';
+   274→    const result = await callAPI(endpoint);
+   275→    
+   276→    // If external APIs failed, show sample data with clear notice
+   277→    if (result.success && result.feeds?.length === 0 && !result.error) {
+   278→      showFeedback('External APIs restricted - Showing sample threat data', 'info');
+   279→      
+   280→      // Create sample data structure
+   281→      let sampleFeeds = [];
+   282→      
+   283→      if (!feed || feed === 'cisa' || feed === 'all') {
+   284→        sampleFeeds.push({
+   285→          source: 'CISA-KEV (Sample)',
+   286→          type: 'Known Exploited Vulnerabilities',
+   287→          count: SAMPLE_THREAT_DATA.cisa.length,
+   288→          status: 'sample',
+   289→          entries: SAMPLE_THREAT_DATA.cisa
+   290→        });
+   291→      }
+   292→      
+   293→      if (!feed || feed === 'malwaredl' || feed === 'all') {
+   294→        sampleFeeds.push({
+   295→          source: 'MalwareBazaar (Sample)',
+   296→          type: 'Recent Malware Samples',
+   297→          count: SAMPLE_THREAT_DATA.malware.length,
+   298→          status: 'sample',
+   299→          entries: SAMPLE_THREAT_DATA.malware
+   300→        });
+   301→      }
+   302→      
+   303→      if (!feed || feed === 'abusech' || feed === 'all') {
+   304→        sampleFeeds.push({
+   305→          source: 'AbuseCH-SSLBL (Sample)',
+   306→          type: 'Malicious SSL Certificates',
+   307→          count: SAMPLE_THREAT_DATA.sslbl.length,
+   308→          status: 'sample',
+   309→          entries: SAMPLE_THREAT_DATA.sslbl
+   310→        });
+   311→      }
+   312→      
+   313→      setApiData({
+   314→        ...result,
+   315→        feeds: sampleFeeds,
+   316→        totalFeeds: sampleFeeds.length,
+   317→        message: 'Showing sample data - External APIs may be restricted in this environment'
+   318→      });
+   319→    }
+   320→  };
+   321→
+   322→  const handleAddIOC = async () => {
+   323→    if (!formData.value) {
+   324→      showFeedback('Please enter a value for the IOC', 'error');
+   325→      return;
+   326→    }
+   327→    showFeedback(`Adding ${formData.type}: ${formData.value}...`, 'info');
+   328→    await callAPI('/api/osint/iocs', {
+   329→      method: 'POST',
+   330→      body: JSON.stringify(formData)
+   331→    });
+   332→    setShowModal(false);
+   333→    setFormData({ type: 'IP', value: '', description: '', severity: 'MEDIUM', tags: [] });
+   334→  };
+   335→
+   336→  const handleUpdateIOC = async () => {
+   337→    if (!selectedIOC) return;
+   338→    showFeedback(`Updating IOC: ${selectedIOC.value}...`, 'info');
+   339→    await callAPI('/api/osint/iocs', {
+   340→      method: 'PATCH',
+   341→      body: JSON.stringify({
+   342→        id: selectedIOC.id,
+   343→        description: formData.description,
+   344→        severity: formData.severity,
+   345→        status: formData.status || selectedIOC.status,
+   346→        tags: formData.tags
+   347→      })
+   348→    });
+   349→    setShowModal(false);
+   350→    setSelectedIOC(null);
+   351→  };
+   352→
+   353→  const handleDeleteIOC = async (id: string) => {
+   354→    if (!confirm('Are you sure you want to delete this IOC?')) return;
+   355→    showFeedback('Deleting IOC...', 'info');
+   356→    await callAPI(`/api/osint/iocs?id=${id}`, { method: 'DELETE' });
+   357→  };
+   358→
+   359→  const handleExport = async (format: string) => {
+   360→    showFeedback(`Preparing ${format.toUpperCase()} export...`, 'info');
+   361→    const params = new URLSearchParams({ format });
+   362→    if (filterType !== 'all') params.set('type', filterType);
+   363→    if (filterSeverity !== 'all') params.set('severity', filterSeverity);
+   364→    
+   365→    window.open(`/api/osint/export?${params}`, '_blank');
+   366→    showFeedback(`${format.toUpperCase()} export started`, 'success');
+   367→  };
+   368→
+   369→  const handleGenerateReport = () => {
+   370→    showFeedback('Generating executive report...', 'info');
+   371→    callAPI('/api/osint/reports?type=executive');
+   372→  };
+   373→
+   374→  const openDetailModal = (ioc: IOC) => {
+   375→    setSelectedIOC(ioc);
+   376→    setModalType('detail');
+   377→    setShowModal(true);
+   378→  };
+   379→
+   380→  const openEditModal = (ioc: IOC) => {
+   381→    setSelectedIOC(ioc);
+   382→    setFormData({
+   383→      type: ioc.type,
+   384→      value: ioc.value,
+   385→      description: ioc.description,
+   386→      severity: ioc.severity,
+   387→      tags: ioc.tags
+   388→    });
+   389→    setModalType('edit');
+   390→    setShowModal(true);
+   391→  };
+   392→
+   393→  const copyToClipboard = (text: string) => {
+   394→    navigator.clipboard.writeText(text);
+   395→    showFeedback('Copied to clipboard!', 'success');
+   396→  };
+   397→
+   398→  // ==================== HELPERS ====================
+   399→  const detectInputType = (value: string): string => {
+   400→    if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(value)) return 'ip';
+   401→    if (/^[a-f0-9]{32}$/i.test(value)) return 'hash';
+   402→    if (/^[a-f0-9]{40}$/i.test(value)) return 'hash';
+   403→    if (/^[a-f0-9]{64}$/i.test(value)) return 'hash';
+   404→    if (value.toUpperCase().startsWith('CVE-')) return 'cve';
+   405→    if (/^https?:\/\//.test(value)) return 'url';
+   406→    if (/\.[a-z]{2,}$/.test(value)) return 'domain';
+   407→    if (/@/.test(value)) return 'email';
+   408→    return 'general';
+   409→  };
+   410→
+   411→  // ==================== CHART DATA ====================
+   412→  const severityChartData = Object.entries(
+   413→    iocs.reduce((acc, ioc) => {
+   414→      acc[ioc.severity] = (acc[ioc.severity] || 0) + 1;
+   415→      return acc;
+   416→    }, {} as Record<string, number>)
+   417→  ).map(([name, value]) => ({ name, value }));
+   418→
+   419→  const typeChartData = Object.entries(
+   420→    iocs.reduce((acc, ioc) => {
+   421→      acc[ioc.type] = (acc[ioc.type] || 0) + 1;
+   422→      return acc;
+   423→    }, {} as Record<string, number>)
+   424→  ).map(([name, value]) => ({ name, value }));
+   425→
+   426→  // ==================== RENDER ====================
+   427→  return (
+   428→    <div className="min-h-screen bg-gray-950 text-white">
+   429→      {/* Feedback Toast */}
+   430→      {actionFeedback && (
+   431→        <div className={`fixed top-4 right-4 z-[100] px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 animate-pulse ${
+   432→          actionFeedback.includes('ERROR') ? 'bg-red-600 text-white' :
+   433→          actionFeedback.includes('SUCCESS') ? 'bg-green-600 text-white' :
+   434→          'bg-blue-600 text-white'
+   435→        }`}>
+   436→          {actionFeedback.includes('ERROR') ? <XCircle className="w-4 h-4" /> :
+   437→           actionFeedback.includes('SUCCESS') ? <CheckCircle className="w-4 h-4" /> :
+   438→           <Loader2 className="w-4 h-4 animate-spin" />}
+   439→          <span className="text-sm font-medium">{actionFeedback}</span>
+   440→        </div>
+   441→      )}
+   442→
+   443→      {/* Header */}
+   444→      <header className="bg-gray-900 border-b border-gray-800 sticky top-0 z-50">
+   445→        <div className="max-w-[1800px] mx-auto px-4 py-3">
+   446→          <div className="flex items-center justify-between">
+   447→            <div className="flex items-center gap-3">
+   448→              <Radar className="w-8 h-8 text-red-500" />
+   449→              <div>
+   450→                <h1 className="text-xl font-bold bg-gradient-to-r from-red-500 to-orange-500 bg-clip-text text-transparent">
+   451→                  OSINT Threat Intelligence Platform v8.0
+   452→                </h1>
+   453→                <p className="text-xs text-gray-400">Real-time Open Source Intelligence</p>
+   454→              </div>
+   455→            </div>
+   456→            
+   457→            {/* Global Search */}
+   458→            <div className="flex-1 max-w-md mx-8">
+   459→              <div className="relative">
+   460→                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+   461→                <input
+   462→                  type="text"
+   463→                  placeholder="Search IOCs, IPs, domains, hashes..."
+   464→                  value={searchQuery}
+   465→                  onChange={(e) => setSearchQuery(e.target.value)}
+   466→                  onKeyPress={(e) => e.key === 'Enter' && loadIOCs()}
+   467→                  className="w-full pl-10 pr-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm focus:border-red-500 focus:outline-none"
+   468→                />
+   469→              </div>
+   470→            </div>
+   471→
+   472→            <div className="flex items-center gap-3">
+   473→              <button onClick={() => loadIOCs()} className="p-2 hover:bg-gray-800 rounded-lg" title="Refresh">
+   474→                <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
+   475→              </button>
+   476→              <span className="text-xs text-gray-400">
+   477→                {iocs.length} IOCs indexed
+   478→              </span>
+   479→            </div>
+   480→          </div>
+   481→        </div>
+   482→      </header>
+   483→
+   484→      <div className="max-w-[1800px] mx-auto flex">
+   485→        {/* Sidebar Navigation */}
+   486→        <nav className="w-64 min-h-screen bg-gray-900 border-r border-gray-800 p-4 sticky top-[65px] h-[calc(100vh-65px)] overflow-y-auto">
+   487→          <div className="space-y-1">
+   488→            {[
+   489→              { id: 'dashboard', icon: BarChart3, label: 'Dashboard' },
+   490→              { id: 'ip', icon: Globe, label: 'IP Reconnaissance' },
+   491→              { id: 'domain', icon: Server, label: 'Domain Analysis' },
+   492→              { id: 'url', icon: ExternalLink, label: 'URL Scanner' },
+   493→              { id: 'hash', icon: Fingerprint, label: 'Hash Lookup' },
+   494→              { id: 'cve', icon: Shield, label: 'CVE Database' },
+   495→              { id: 'ai', icon: Cpu, label: 'AI Analyst' },
+   496→              { id: 'threats', icon: AlertTriangle, label: 'Threat Feeds' },
+   497→              { id: 'iocs', icon: Database, label: 'IOC Manager' },
+   498→              { id: 'export', icon: Download, label: 'Export Data' },
+   499→              { id: 'reports', icon: FileText, label: 'Reports' },
+   500→            ].map(({ id, icon: Icon, label }) => (
+   501→              <button
+   502→                key={id}
+   503→                onClick={() => { setActiveTab(id as TabType); showFeedback(`Switched to ${label}`); }}
+   504→                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
+   505→                  activeTab === id
+   506→                    ? 'bg-red-600 text-white'
+   507→                    : 'text-gray-300 hover:bg-gray-800 hover:text-white'
+   508→                }`}
+   509→              >
+   510→                <Icon className="w-4 h-4" />
+   511→                {label}
+   512→              </button>
+   513→            ))}
+   514→          </div>
+   515→
+   516→          {/* Quick Stats */}
+   517→          <div className="mt-8 p-4 bg-gray-800 rounded-lg">
+   518→            <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+   519→              <Activity className="w-4 h-4 text-green-500" /> Live Stats
+   520→            </h3>
+   521→            <div className="space-y-2 text-xs">
+   522→              <div className="flex justify-between">
+   523→                <span className="text-gray-400">Critical</span>
+   524→                <span className="text-red-400 font-bold">{iocs.filter(i => i.severity === 'CRITICAL').length}</span>
+   525→              </div>
+   526→              <div className="flex justify-between">
+   527→                <span className="text-gray-400">Malicious</span>
+   528→                <span className="text-red-400 font-bold">{iocs.filter(i => i.status === 'MALICIOUS').length}</span>
+   529→              </div>
+   530→              <div className="flex justify-between">
+   531→                <span className="text-gray-400">Total Indexed</span>
+   532→                <span className="text-blue-400 font-bold">{iocs.length}</span>
+   533→              </div>
+   534→            </div>
+   535→          </div>
+   536→        </nav>
+   537→
+   538→        {/* Main Content */}
+   539→        <main className="flex-1 p-6">
+   540→          {/* ==================== DASHBOARD TAB ==================== */}
+   541→          {activeTab === 'dashboard' && (
+   542→            <div className="space-y-6">
+   543→              <div className="flex items-center justify-between">
+   544→                <h2 className="text-2xl font-bold">Intelligence Dashboard</h2>
+   545→                <button onClick={() => handleGenerateReport()} className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-sm font-medium transition-colors">
+   546→                  <FileText className="w-4 h-4" /> Generate Report
+   547→                </button>
+   548→              </div>
+   549→
+   550→              {/* KPI Cards */}
+   551→              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+   552→                {[
+   553→                  { label: 'Total IOCs', value: iocs.length, icon: Database, color: 'blue' },
+   554→                  { label: 'Critical Alerts', value: iocs.filter(i => i.severity === 'CRITICAL').length, icon: AlertTriangle, color: 'red' },
+   555→                  { label: 'Malicious', value: iocs.filter(i => i.status === 'MALICIOUS').length, icon: Bug, color: 'red' },
+   556→                  { label: 'Sources Used', value: [...new Set(iocs.map(i => i.source).filter(Boolean))].length, icon: Globe, color: 'green' },
+   557→                ].map(({ label, value, icon: Icon, color }) => (
+   558→                  <div key={label} className="bg-gray-900 border border-gray-800 rounded-xl p-5 hover:border-gray-700 transition-colors cursor-pointer"
+   559→                       onClick={() => setActiveTab('iocs')}>
+   560→                    <div className="flex items-center justify-between">
+   561→                      <div>
+   562→                        <p className="text-gray-400 text-sm">{label}</p>
+   563→                        <p className={`text-3xl font-bold mt-1 text-${color}-400`}>{value}</p>
+   564→                      </div>
+   565→                      <div className={`p-3 rounded-lg bg-${color}-500/10`}>
+   566→                        <Icon className={`w-6 h-6 text-${color}-500`} />
+   567→                      </div>
+   568→                    </div>
+   569→                  </div>
+   570→                ))}
+   571→              </div>
+   572→
+   573→              {/* Charts Row */}
+   574→              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+   575→                <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+   576→                  <h3 className="font-semibold mb-4">Severity Distribution</h3>
+   577→                  {severityChartData.length > 0 ? (
+   578→                    <ResponsiveContainer width="100%" height={250}>
+   579→                      <PieChart>
+   580→                        <Pie data={severityChartData} cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={5} dataKey="value">
+   581→                          {severityChartData.map((_, index) => (<Cell key={index} fill={CHART_COLORS[index % CHART_COLORS.length]} />))}
+   582→                        </Pie>
+   583→                        <Tooltip contentStyle={{ backgroundColor: '#1f2937', border: 'none' }} />
+   584→                        <Legend />
+   585→                      </PieChart>
+   586→                    </ResponsiveContainer>
+   587→                  ) : (
+   588→                    <div className="h-[250px] flex items-center justify-center text-gray-500">
+   589→                      Run reconnaissance to populate charts
+   590→                    </div>
+   591→                  )}
+   592→                </div>
+   593→
+   594→                <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+   595→                  <h3 className="font-semibold mb-4">IOC Types</h3>
+   596→                  {typeChartData.length > 0 ? (
+   597→                    <ResponsiveContainer width="100%" height={250}>
+   598→                      <BarChart data={typeChartData}>
+   599→                        <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+   600→                        <XAxis stroke="#9ca3af" dataKey="name" />
+   601→                        <YAxis stroke="#9ca3af" />
+   602→                        <Tooltip contentStyle={{ backgroundColor: '#1f2937', border: 'none' }} />
+   603→                        <Bar dataKey="value" fill="#ef4444" radius={[4, 4, 0, 0]} />
+   604→                      </BarChart>
+   605→                    </ResponsiveContainer>
+   606→                  ) : (
+   607→                    <div className="h-[250px] flex items-center justify-center text-gray-500">
+   608→                      No data yet - start analyzing!
+   609→                    </div>
+   610→                  )}
+   611→                </div>
+   612→              </div>
+   613→
+   614→              {/* Recent IOCs Table */}
+   615→              <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+   616→                <div className="flex items-center justify-between mb-4">
+   617→                  <h3 className="font-semibold">Recently Added IOCs</h3>
+   618→                  <button onClick={() => setActiveTab('iocs')} className="text-sm text-red-400 hover:text-red-300 transition-colors">
+   619→                    View All →
+   620→                  </button>
+   621→                </div>
+   622→                <div className="overflow-x-auto">
+   623→                  <table className="w-full text-sm">
+   624→                    <thead>
+   625→                      <tr className="border-b border-gray-800">
+   626→                        <th className="text-left py-3 px-2 text-gray-400 font-medium">Type</th>
+   627→                        <th className="text-left py-3 px-2 text-gray-400 font-medium">Value</th>
+   628→                        <th className="text-left py-3 px-2 text-gray-400 font-medium">Severity</th>
+   629→                        <th className="text-left py-3 px-2 text-gray-400 font-medium">Status</th>
+   630→                        <th className="text-left py-3 px-2 text-gray-400 font-medium">Source</th>
+   631→                        <th className="text-left py-3 px-2 text-gray-400 font-medium">Actions</th>
+   632→                      </tr>
+   633→                    </thead>
+   634→                    <tbody>
+   635→                      {iocs.slice(0, 10).map((ioc) => (
+   636→                        <tr key={ioc.id} className="border-b border-gray-800/50 hover:bg-gray-800/30 cursor-pointer transition-colors" onClick={() => openDetailModal(ioc)}>
+   637→                          <td className="py-3 px-2"><span className="px-2 py-1 bg-gray-800 rounded text-xs">{ioc.type}</span></td>
+   638→                          <td className="py-3 px-2 font-mono text-sm">{ioc.value.substring(0, 40)}{ioc.value.length > 40 ? '...' : ''}</td>
+   639→                          <td className="py-3 px-2"><span style={{ color: SEVERITY_COLORS[ioc.severity] }} className="font-medium">{ioc.severity}</span></td>
+   640→                          <td className="py-3 px-2"><span style={{ color: STATUS_COLORS[ioc.status] }} className="font-medium">{ioc.status}</span></td>
+   641→                          <td className="py-3 px-2 text-gray-400 text-xs">{ioc.source || '-'}</td>
+   642→                          <td className="py-3 px-2">
+   643→                            <button onClick={(e) => { e.stopPropagation(); openDetailModal(ioc); }} className="p-1 hover:bg-gray-700 rounded transition-colors">
+   644→                              <Eye className="w-4 h-4" />
+   645→                            </button>
+   646→                          </td>
+   647→                        </tr>
+   648→                      ))}
+   649→                      {iocs.length === 0 && (
+   650→                        <tr><td colSpan={6} className="py-12 text-center text-gray-500">
+   651→                          <Database className="w-12 h-12 mx-auto mb-3 opacity-50" />
+   652→                          No IOCs yet. Start by running reconnaissance or adding manually.
+   653→                        </td></tr>
+   654→                      )}
+   655→                    </tbody>
+   656→                  </table>
+   657→                </div>
+   658→              </div>
+   659→            </div>
+   660→          )}
+   661→
+   662→          {/* ==================== IP RECONNAISSANCE TAB ==================== */}
+   663→          {activeTab === 'ip' && (
+   664→            <div className="space-y-6">
+   665→              <h2 className="text-2xl font-bold flex items-center gap-3">
+   666→                <Globe className="w-7 h-7 text-blue-400" /> IP Reconnaissance
+   667→              </h2>
+   668→              
+   669→              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+   670→                <div className="flex gap-4">
+   671→                  <div className="flex-1">
+   672→                    <input
+   673→                      type="text"
+   674→                      placeholder="Enter IP address (e.g., 8.8.8.8, 1.1.1.1)"
+   675→                      value={inputValue}
+   676→                      onChange={(e) => setInputValue(e.target.value)}
+   677→                      onKeyPress={(e) => e.key === 'Enter' && handleIPRecon()}
+   678→                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-blue-500 focus:outline-none transition-colors"
+   679→                    />
+   680→                  </div>
+   681→                  <button
+   682→                    onClick={handleIPRecon}
+   683→                    disabled={loading || !inputValue}
+   684→                    className="px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg font-medium flex items-center gap-2 transition-colors"
+   685→                  >
+   686→                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+   687→                    Analyze IP
+   688→                  </button>
+   689→                  <button
+   690→                    onClick={() => { setModalType('add'); setFormData({ ...formData, type: 'IP', value: inputValue }); setShowModal(true); }}
+   691→                    className="px-4 py-3 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
+   692→                    title="Add to IOC database"
+   693→                  >
+   694→                    <Plus className="w-4 h-4" />
+   695→                  </button>
+   696→                </div>
+   697→                
+   698→                <p className="mt-3 text-xs text-gray-500">
+   699→                  Real-time geolocation via ip-api.com • ISP detection • Proxy/VPN identification
+   700→                </p>
+   701→              </div>
+   702→
+   703→              {/* Results */}
+   704→              {apiData?.data && apiData.source === 'ip-api.com' && (
+   705→                <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+   706→                  <div className="flex items-center justify-between mb-4">
+   707→                    <h3 className="font-semibold flex items-center gap-2">
+   708→                      <CheckCircle className="w-5 h-5 text-green-500" /> Live Results
+   709→                    </h3>
+   710→                    <div className="flex items-center gap-2 text-xs text-gray-400">
+   711→                      <Clock className="w-3 h-3" /> {new Date(apiData.timestamp || '').toLocaleTimeString()}
+   712→                      <span className="px-2 py-0.5 bg-green-500/20 text-green-400 rounded font-medium">LIVE</span>
+   713→                    </div>
+   714→                  </div>
+   715→                  
+   716→                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+   717→                    {apiData.data.status === 'success' ? (
+   718→                      <>
+   719→                        <InfoCard label="IP Address" value={apiData.data.query} icon={<Globe />} />
+   720→                        <InfoCard label="Country" value={`${apiData.data.country} (${apiData.data.countryCode})`} icon={<MapPin />} />
+   721→                        <InfoCard label="Region" value={`${apiData.data.regionName}, ${apiData.data.city}`} icon={<MapPin />} />
+   722→                        <InfoCard label="ISP" value={apiData.data.isp || 'N/A'} icon={<Wifi />} />
+   723→                        <InfoCard label="Organization" value={apiData.data.org || 'N/A'} icon={<Server />} />
+   724→                        <InfoCard label="AS Number" value={apiData.data.as || 'N/A'} icon={<Server />} />
+   725→                        <InfoCard label="Coordinates" value={apiData.data.lat ? `${apiData.data.lat}, ${apiData.data.lon}` : 'N/A'} icon={<MapPin />} />
+   726→                        <InfoCard label="Timezone" value={apiData.data.timezone || 'N/A'} icon={<Clock />} />
+   727→                        <InfoCard label="Proxy" value={apiData.data.proxy ? 'Yes ⚠️' : 'No ✓'} icon={<Shield />} alert={apiData.data.proxy} />
+   728→                        <InfoCard label="Hosting" value={apiData.data.hosting ? 'Yes ⚠️' : 'No ✓'} icon={<Server />} alert={apiData.data.hosting} />
+   729→                        <InfoCard label="Mobile" value={apiData.data.mobile ? 'Yes' : 'No'} icon={<Wifi />} />
+   730→                        <InfoCard label="Reverse DNS" value={apiData.data.reverse || 'N/A'} icon={<Globe />} />
+   731→                      </>
+   732→                    ) : (
+   733→                      <div className="col-span-full p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+   734→                        <AlertCircle className="inline w-5 h-5 text-yellow-500 mr-2" />
+   735→                        {apiData.data.message || 'IP lookup failed'}
+   736→                      </div>
+   737→                    )}
+   738→                  </div>
+   739→
+   740→                  {/* Raw JSON View */}
+   741→                  <details className="mt-4 group">
+   742→                    <summary className="cursor-pointer text-sm text-gray-400 hover:text-white transition-colors flex items-center gap-2">
+   743→                      <ChevronRight className="w-4 h-4 group-open:rotate-90 transition-transform" />
+   744→                      View Raw JSON Response
+   745→                    </summary>
+   746→                    <pre className="mt-2 p-4 bg-gray-950 rounded-lg overflow-x-auto text-xs max-h-60 overflow-y-auto">
+   747→                      {JSON.stringify(apiData.data, null, 2)}
+   748→                    </pre>
+   749→                  </details>
+   750→                </div>
+   751→              )}
+   752→
+   753→              {error && activeTab === 'ip' && (
+   754→                <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 flex items-center gap-2">
+   755→                  <XCircle className="w-5 h-5 shrink-0" />
+   756→                  <span>{error}</span>
+   757→                </div>
+   758→              )}
+   759→            </div>
+   760→          )}
+   761→
+   762→          {/* ==================== DOMAIN ANALYSIS TAB ==================== */}
+   763→          {activeTab === 'domain' && (
+   764→            <div className="space-y-6">
+   765→              <h2 className="text-2xl font-bold flex items-center gap-3">
+   766→                <Server className="w-7 h-7 text-purple-400" /> Domain Analysis
+   767→              </h2>
+   768→              
+   769→              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+   770→                <div className="flex gap-4">
+   771→                  <div className="flex-1">
+   772→                    <input
+   773→                      type="text"
+   774→                      placeholder="Enter domain (e.g., google.com, example.org)"
+   775→                      value={inputValue}
+   776→                      onChange={(e) => setInputValue(e.target.value)}
+   777→                      onKeyPress={(e) => e.key === 'Enter' && handleDomainRecon()}
+   778→                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-purple-500 focus:outline-none transition-colors"
+   779→                    />
+   780→                  </div>
+   781→                  <button
+   782→                    onClick={handleDomainRecon}
+   783→                    disabled={loading || !inputValue}
+   784→                    className="px-6 py-3 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg font-medium flex items-center gap-2 transition-colors"
+   785→                  >
+   786→                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+   787→                    Analyze Domain
+   788→                  </button>
+   789→                  <button
+   790→                    onClick={() => { setModalType('add'); setFormData({ ...formData, type: 'DOMAIN', value: inputValue }); setShowModal(true); }}
+   791→                    className="px-4 py-3 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
+   792→                  >
+   793→                    <Plus className="w-4 h-4" />
+   794→                  </button>
+   795→                </div>
+   796→                <p className="mt-3 text-xs text-gray-500">
+   797→                  Google DoH resolution • MX/NS/TXT records • SPF & DMARC analysis
+   798→                </p>
+   799→              </div>
+   800→
+   801→              {apiData?.dns && (
+   802→                <div className="space-y-4">
+   803→                  {(['A', 'MX', 'NS', 'TXT', 'AAAA'] as const).map((type) => (
+   804→                    <div key={type} className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+   805→                      <h3 className="font-semibold mb-3 flex items-center gap-2">
+   806→                        <span className="px-2 py-1 bg-purple-500/20 text-purple-400 rounded text-xs">{type} Records</span>
+   807→                        {apiData.dns[type]?.Answer && (
+   808→                          <span className="text-xs text-gray-400">{apiData.dns[type].Answer.length} records</span>
+   809→                        )}
+   810→                      </h3>
+   811→                      
+   812→                      {apiData.dns[type]?.Answer ? (
+   813→                        <div className="space-y-2">
+   814→                          {apiData.dns[type].Answer.map((record: any, idx: number) => (
+   815→                            <div key={idx} className="flex items-center gap-3 p-2 bg-gray-800/50 rounded font-mono text-sm">
+   816→                              <span className="text-gray-400">{record.name}</span>
+   817→                              <ArrowRight className="w-3 h-3 text-gray-600" />
+   818→                              <span className="text-white">{record.data}</span>
+   819→                              <span className="ml-auto text-xs text-gray-500">TTL: {record.TTL}s</span>
+   820→                            </div>
+   821→                          ))}
+   822→                        </div>
+   823→                      ) : (
+   824→                        <p className="text-gray-500 text-sm">No {type} records found</p>
+   825→                      )}
+   826→                    </div>
+   827→                  ))}
+   828→
+   829→                  {apiData.securityAnalysis && (
+   830→                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+   831→                      <h3 className="font-semibold mb-3 flex items-center gap-2">
+   832→                        <Lock className="w-5 h-5 text-yellow-500" /> Security Analysis
+   833→                      </h3>
+   834→                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+   835→                        <SecurityCheck label="SPF Record" pass={apiData.securityAnalysis.hasSPF} />
+   836→                        <SecurityCheck label="DMARC Record" pass={apiData.securityAnalysis.hasDMARC} />
+   837→                        <SecurityCheck label="Mail Servers" pass={!!apiData.securityAnalysis.findings?.find((f: string) => f.includes('Mail servers'))} />
+   838→                      </div>
+   839→                      <div className="mt-4 space-y-2">
+   840→                        {(apiData.securityAnalysis.findings || []).map((finding: string, idx: number) => (
+   841→                          <div key={idx} className={`p-3 rounded-lg text-sm ${finding.includes('WARNING') ? 'bg-yellow-500/10 text-yellow-400' : 'bg-gray-800 text-gray-300'}`}>
+   842→                            {finding.includes('WARNING') && <AlertTriangle className="inline w-4 h-4 mr-2" />}
+   843→                            {finding}
+   844→                          </div>
+   845→                        ))}
+   846→                      </div>
+   847→                    </div>
+   848→                  )}
+   849→                </div>
+   850→              )}
+   851→
+   852→              {error && activeTab === 'domain' && (
+   853→                <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 flex items-center gap-2">
+   854→                  <XCircle className="w-5 h-5 shrink-0" />
+   855→                  <span>{error}</span>
+   856→                </div>
+   857→              )}
+   858→            </div>
+   859→          )}
+   860→
+   861→          {/* ==================== URL SCANNER TAB ==================== */}
+   862→          {activeTab === 'url' && (
+   863→            <div className="space-y-6">
+   864→              <h2 className="text-2xl font-bold flex items-center gap-3">
+   865→                <ExternalLink className="w-7 h-7 text-cyan-400" /> URL Scanner
+   866→              </h2>
+   867→              
+   868→              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+   869→                <div className="flex gap-4">
+   870→                  <div className="flex-1">
+   871→                    <input
+   872→                      type="text"
+   873→                      placeholder="Enter URL (e.g., https://example.com/page)"
+   874→                      value={inputValue}
+   875→                      onChange={(e) => setInputValue(e.target.value)}
+   876→                      onKeyPress={(e) => e.key === 'Enter' && handleURLAnalysis()}
+   877→                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-cyan-500 focus:outline-none transition-colors"
+   878→                    />
+   879→                  </div>
+   880→                  <button
+   881→                    onClick={handleURLAnalysis}
+   882→                    disabled={loading || !inputValue}
+   883→                    className="px-6 py-3 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg font-medium flex items-center gap-2 transition-colors"
+   884→                  >
+   885→                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+   886→                    Scan URL
+   887→                  </button>
+   888→                </div>
+   889→              </div>
+   890→
+   891→              {apiData?.riskAssessment && (
+   892→                <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+   893→                  <div className="flex items-center justify-between mb-4">
+   894→                    <h3 className="font-semibold">Risk Assessment</h3>
+   895→                    <span className={`px-3 py-1 rounded-full text-sm font-bold ${
+   896→                      apiData.riskAssessment.level === 'HIGH' ? 'bg-red-500/20 text-red-400' :
+   897→                      apiData.riskAssessment.level === 'MEDIUM' ? 'bg-yellow-500/20 text-yellow-400' :
+   898→                      'bg-green-500/20 text-green-400'
+   899→                    }`}>
+   900→                      Risk: {apiData.riskAssessment.level}
+   901→                    </span>
+   902→                  </div>
+   903→                  
+   904→                  <div className="mb-4">
+   905→                    <div className="flex justify-between text-sm mb-1">
+   906→                      <span>Risk Score</span>
+   907→                      <span>{apiData.riskAssessment.score}/100</span>
+   908→                    </div>
+   909→                    <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
+   910→                      <div className={`h-full transition-all ${
+   911→                        apiData.riskAssessment.score >= 70 ? 'bg-red-500' :
+   912→                        apiData.riskAssessment.score >= 50 ? 'bg-yellow-500' : 'bg-green-500'
+   913→                      }`} style={{ width: `${apiData.riskAssessment.score}%` }} />
+   914→                    </div>
+   915→                  </div>
+   916→
+   917→                  <div className="space-y-2">
+   918→                    {(apiData.riskAssessment.findings || []).map((finding: string, idx: number) => (
+   919→                      <div key={idx} className={`p-3 rounded text-sm ${
+   920→                        finding.includes('WARNING') || finding.includes('SUSPICIOUS') 
+   921→                          ? 'bg-red-500/10 text-red-300' : 'bg-gray-800 text-gray-300'
+   922→                      }`}>
+   923→                        {finding.includes('WARNING') || finding.includes('SUSPICIOUS') ? (
+   924→                          <AlertTriangle className="inline w-4 h-4 mr-2" />
+   925→                        ) : (
+   926→                          <Info className="inline w-4 h-4 mr-2" />
+   927→                        )}
+   928→                        {finding}
+   929→                      </div>
+   930→                    ))}
+   931→                  </div>
+   932→                </div>
+   933→              )}
+   934→            </div>
+   935→          )}
+   936→
+   937→          {/* ==================== HASH LOOKUP TAB ==================== */}
+   938→          {activeTab === 'hash' && (
+   939→            <div className="space-y-6">
+   940→              <h2 className="text-2xl font-bold flex items-center gap-3">
+   941→                <Fingerprint className="w-7 h-7 text-orange-400" /> Malware Hash Lookup
+   942→              </h2>
+   943→              
+   944→              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+   945→                <div className="flex gap-4">
+   946→                  <div className="flex-1">
+   947→                    <input
+   948→                      type="text"
+   949→                      placeholder="Enter hash (MD5, SHA1, SHA256)"
+   950→                      value={inputValue}
+   951→                      onChange={(e) => setInputValue(e.target.value)}
+   952→                      onKeyPress={(e) => e.key === 'Enter' && handleHashLookup()}
+   953→                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg font-mono focus:border-orange-500 focus:outline-none transition-colors"
+   954→                    />
+   955→                  </div>
+   956→                  <button
+   957→                    onClick={handleHashLookup}
+   958→                    disabled={loading || !inputValue}
+   959→                    className="px-6 py-3 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg font-medium flex items-center gap-2 transition-colors"
+   960→                  >
+   961→                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+   962→                    Lookup Hash
+   963→                  </button>
+   964→                </div>
+   965→                <p className="mt-3 text-xs text-gray-500">
+   966→                  MalwareBazaar • VirusTotal public API • Real malware intelligence
+   967→                </p>
+   968→              </div>
+   969→
+   970→              {apiData?.analysis && (
+   971→                <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+   972→                  <div className="flex items-center justify-between mb-4">
+   973→                    <h3 className="font-semibold">Analysis Result</h3>
+   974→                    <span className={`px-3 py-1 rounded-full text-sm font-bold ${
+   975→                      apiData.analysis.threatLevel === 'CRITICAL' ? 'bg-red-500/20 text-red-400' :
+   976→                      apiData.analysis.threatLevel === 'HIGH' ? 'bg-orange-500/20 text-orange-400' :
+   977→                      'bg-yellow-500/20 text-yellow-400'
+   978→                    }`}>
+   979→                      {apiData.analysis.threatLevel}
+   980→                    </span>
+   981→                  </div>
+   982→                  
+   983→                  <div className="space-y-3">
+   984→                    <div className="p-3 bg-gray-800 rounded-lg">
+   985→                      <span className="text-gray-400 text-sm">Hash Type:</span>
+   986→                      <span className="ml-2 font-mono">{apiData.hashType}</span>
+   987→                    </div>
+   988→                    
+   989→                    {(apiData.analysis.findings || []).map((finding: string, idx: number) => (
+   990→                      <div key={idx} className="p-3 bg-gray-800/50 rounded text-sm text-gray-300">
+   991→                        <CheckCircle className="inline w-4 h-4 text-blue-400 mr-2" />
+   992→                        {finding}
+   993→                      </div>
+   994→                    ))}
+   995→
+   996→                    <div className={`p-4 rounded-lg mt-4 ${
+   997→                      apiData.analysis.recommendation?.includes('ISOLATE') ? 'bg-red-500/10 border border-red-500/30' :
+   998→                      apiData.analysis.recommendation?.includes('Quarantine') ? 'bg-orange-500/10 border border-orange-500/30' :
+   999→                      'bg-blue-500/10 border border-blue-500/30'
+  1000→                    }`}>
+  1001→                      <strong>Recommendation:</strong> {apiData.analysis.recommendation}
+  1002→                    </div>
+  1003→                  </div>
+  1004→                </div>
+  1005→              )}
+  1006→            </div>
+  1007→          )}
+  1008→
+  1009→          {/* ==================== CVE DATABASE TAB ==================== */}
+  1010→          {activeTab === 'cve' && (
+  1011→            <div className="space-y-6">
+  1012→              <h2 className="text-2xl font-bold flex items-center gap-3">
+  1013→                <Shield className="w-7 h-7 text-red-400" /> CVE Database (NIST NVD)
+  1014→              </h2>
+  1015→              
+  1016→              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+  1017→                <div className="flex gap-4">
+  1018→                  <div className="flex-1">
+  1019→                    <input
+  1020→                      type="text"
+  1021→                      placeholder="Enter CVE ID (e.g., CVE-2024-1234) or keyword"
+  1022→                      value={inputValue}
+  1023→                      onChange={(e) => setInputValue(e.target.value)}
+  1024→                      onKeyPress={(e) => e.key === 'Enter' && handleCVESearch()}
+  1025→                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-red-500 focus:outline-none transition-colors"
+  1026→                    />
+  1027→                  </div>
+  1028→                  <button
+  1029→                    onClick={handleCVESearch}
+  1030→                    disabled={loading || !inputValue}
+  1031→                    className="px-6 py-3 bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg font-medium flex items-center gap-2 transition-colors"
+  1032→                  >
+  1033→                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+  1034→                    Search NVD
+  1035→                  </button>
+  1036→                </div>
+  1037→                <p className="mt-3 text-xs text-gray-500">
+  1038→                  Official NIST National Vulnerability Database v2.0 • CVSS scores • CWE classification
+  1039→                </p>
+  1040→              </div>
+  1041→
+  1042→              {apiData?.vulnerabilities && (
+  1043→                <div className="space-y-4">
+  1044→                  <p className="text-sm text-gray-400">
+  1045→                    Found {apiData.totalResults} results (showing {apiData.vulnerabilities.length})
+  1046→                  </p>
+  1047→                  
+  1048→                  {apiData.vulnerabilities.map((vuln: any, idx: number) => {
+  1049→                    const cve = vuln.id || vuln.cve?.id;
+  1050→                    const metrics = vuln.metrics || vuln.cve?.metrics;
+  1051→                    const cvssScore = metrics?.cvssMetricV31?.[0]?.cvssData?.baseScore;
+  1052→                    const descriptions = vuln.descriptions || vuln.cve?.descriptions;
+  1053→                    const desc = descriptions?.find((d: any) => d.lang === 'en')?.value;
+  1054→                    
+  1055→                    return (
+  1056→                      <div key={idx} className="bg-gray-900 border border-gray-800 rounded-xl p-5 hover:border-gray-700 transition-colors">
+  1057→                        <div className="flex items-start justify-between">
+  1058→                          <div className="flex-1">
+  1059→                            <h3 className="font-bold text-lg text-red-400 font-mono">{cve}</h3>
+  1060→                            <p className="text-sm text-gray-300 mt-2 line-clamp-3">{desc}</p>
+  1061→                          </div>
+  1062→                          {cvssScore && (
+  1063→                            <div className={`px-3 py-2 rounded-lg text-center ml-4 shrink-0 ${
+  1064→                              cvssScore >= 9 ? 'bg-red-500/20 text-red-400' :
+  1065→                              cvssScore >= 7 ? 'bg-orange-500/20 text-orange-400' :
+  1066→                              cvssScore >= 4 ? 'bg-yellow-500/20 text-yellow-400' :
+  1067→                              'bg-green-500/20 text-green-400'
+  1068→                            }`}>
+  1069→                              <div className="text-2xl font-bold">{cvssScore}</div>
+  1070→                              <div className="text-xs">CVSS</div>
+  1071→                            </div>
+  1072→                          )}
+  1073→                        </div>
+  1074→                        
+  1075→                        {vuln.references?.length > 0 && (
+  1076→                          <div className="mt-4 flex flex-wrap gap-2">
+  1077→                            {vuln.references.slice(0, 5).map((ref: any, rIdx: number) => (
+  1078→                              <a key={rIdx} href={ref.url} target="_blank" rel="noopener noreferrer"
+  1079→                                className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 transition-colors">
+  1080→                                <ExternalLink className="w-3 h-3" />
+  1081→                                {new URL(ref.url).hostname}
+  1082→                              </a>
+  1083→                            ))}
+  1084→                          </div>
+  1085→                        )}
+  1086→                      </div>
+  1087→                    );
+  1088→                  })}
+  1089→                </div>
+  1090→              )}
+  1091→            </div>
+  1092→          )}
+  1093→
+  1094→          {/* ==================== AI ANALYST TAB ==================== */}
+  1095→          {activeTab === 'ai' && (
+  1096→            <div className="space-y-6">
+  1097→              <h2 className="text-2xl font-bold flex items-center gap-3">
+  1098→                <Cpu className="w-7 h-7 text-emerald-400" /> AI Threat Analyst
+  1099→              </h2>
+  1100→              
+  1101→              <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700 rounded-xl p-6">
+  1102→                <p className="text-gray-300 mb-4">
+  1103→                  Powered by z-ai-web-dev-sdk. Enter any IP, domain, hash, or threat indicator for AI-powered OSINT analysis.
+  1104→                </p>
+  1105→                
+  1106→                <div className="flex gap-4">
+  1107→                  <div className="flex-1">
+  1108→                    <textarea
+  1109→                      placeholder="Enter target for AI analysis...&#10;Examples:&#10;• 185.220.101.34&#10;• suspicious-domain.com&#10;• af35c... (malware hash)&#10;• APT29 tactics"
+  1110→                      value={inputValue}
+  1111→                      onChange={(e) => setInputValue(e.target.value)}
+  1112→                      rows={4}
+  1113→                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-emerald-500 focus:outline-none resize-none transition-colors"
+  1114→                    />
+  1115→                  </div>
+  1116→                </div>
+  1117→                
+  1118→                <div className="flex gap-3 mt-4">
+  1119→                  <button
+  1120→                    onClick={handleAIAnalysis}
+  1121→                    disabled={loading || !inputValue}
+  1122→                    className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg font-medium flex items-center gap-2 transition-colors"
+  1123→                  >
+  1124→                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+  1125→                    Run AI Analysis
+  1126→                  </button>
+  1127→                </div>
+  1128→              </div>
+  1129→
+  1130→              {apiData?.analysis && (
+  1131→                <div className="bg-gray-900 border border-emerald-500/30 rounded-xl p-6">
+  1132→                  <div className="flex items-center gap-2 mb-4">
+  1133→                    <Zap className="w-5 h-5 text-emerald-500" />
+  1134→                    <h3 className="font-semibold">AI Analysis Complete</h3>
+  1135→                    <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded text-xs">AI Generated</span>
+  1136→                  </div>
+  1137→                  
+  1138→                  <div className="space-y-4">
+  1139→                    <div className="p-4 bg-gray-800 rounded-lg">
+  1140→                      <h4 className="text-sm text-gray-400 mb-2">Executive Summary</h4>
+  1141→                      <p className="text-white">{apiData.analysis.summary}</p>
+  1142→                    </div>
+  1143→                    
+  1144→                    <div className="grid grid-cols-2 gap-4">
+  1145→                      <div className="p-4 bg-gray-800 rounded-lg">
+  1146→                        <h4 className="text-sm text-gray-400 mb-2">Threat Level</h4>
+  1147→                        <span className={`text-2xl font-bold ${
+  1148→                          apiData.analysis.threatLevel === 'CRITICAL' ? 'text-red-400' :
+  1149→                          apiData.analysis.threatLevel === 'HIGH' ? 'text-orange-400' : 'text-yellow-400'
+  1150→                        }`}>{apiData.analysis.threatLevel}</span>
+  1151→                      </div>
+  1152→                      <div className="p-4 bg-gray-800 rounded-lg">
+  1153→                        <h4 className="text-sm text-gray-400 mb-2">Confidence</h4>
+  1154→                        <span className="text-2xl font-bold text-blue-400">{apiData.analysis.confidence}%</span>
+  1155→                      </div>
+  1156→                    </div>
+  1157→
+  1158→                    {apiData.analysis.keyFindings?.length > 0 && (
+  1159→                      <div className="p-4 bg-gray-800 rounded-lg">
+  1160→                        <h4 className="text-sm text-gray-400 mb-2">Key Findings</h4>
+  1161→                        <ul className="space-y-2">
+  1162→                          {apiData.analysis.keyFindings.map((finding: string, idx: number) => (
+  1163→                            <li key={idx} className="flex items-start gap-2 text-sm">
+  1164→                              <Target className="w-4 h-4 text-emerald-400 mt-0.5 shrink-0" />
+  1165→                              {finding}
+  1166→                            </li>
+  1167→                          ))}
+  1168→                        </ul>
+  1169→                      </div>
+  1170→                    )}
+  1171→
+  1172→                    {apiData.analysis.indicators?.length > 0 && (
+  1173→                      <div className="p-4 bg-gray-800 rounded-lg">
+  1174→                        <h4 className="text-sm text-gray-400 mb-2">Related Indicators</h4>
+  1175→                        <div className="space-y-2">
+  1176→                          {apiData.analysis.indicators.map((ind: any, idx: number) => (
+  1177→                            <div key={idx} className="flex items-center gap-2 p-2 bg-gray-700/50 rounded font-mono text-sm">
+  1178→                              <span className="px-2 py-0.5 bg-gray-600 rounded text-xs">{ind.type}</span>
+  1179→                              <span>{ind.value}</span>
+  1180→                            </div>
+  1181→                          ))}
+  1182→                        </div>
+  1183→                      </div>
+  1184→                    )}
+  1185→
+  1186→                    {apiData.analysis.recommendations?.length > 0 && (
+  1187→                      <div className="p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+  1188→                        <h4 className="text-sm text-blue-400 mb-2">Recommendations</h4>
+  1189→                        <ul className="space-y-2">
+  1190→                          {apiData.analysis.recommendations.map((rec: string, idx: number) => (
+  1191→                            <li key={idx} className="flex items-start gap-2 text-sm text-blue-200">
+  1192→                              <CheckCircle className="w-4 h-4 mt-0.5 shrink-0" />
+  1193→                              {rec}
+  1194→                            </li>
+  1195→                          ))}
+  1196→                        </ul>
+  1197→                      </div>
+  1198→                    )}
+  1199→                  </div>
+  1200→                </div>
+  1201→              )}
+  1202→            </div>
+  1203→          )}
+  1204→
+  1205→          {/* ==================== THREAT FEEDS TAB ==================== */}
+  1206→          {activeTab === 'threats' && (
+  1207→            <div className="space-y-6">
+  1208→              <h2 className="text-2xl font-bold flex items-center gap-3">
+  1209→                <AlertTriangle className="w-7 h-7 text-yellow-400" /> Live Threat Feeds
+  1210→              </h2>
+  1211→              
+  1212→              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+  1213→                {[
+  1214→                  { id: 'cisa', name: 'CISA KEV', desc: 'Known Exploited Vulnerabilities', icon: Shield, color: 'red' },
+  1215→                  { id: 'abusech', name: 'AbuseCH SSLBL', desc: 'Malicious SSL Certificates', icon: Lock, color: 'orange' },
+  1216→                  { id: 'malwaredl', name: 'MalwareBazaar', desc: 'Recent Malware Samples', icon: Bug, color: 'purple' },
+  1217→                ].map(({ id, name, desc, icon: Icon, color }) => (
+  1218→                  <button
+  1219→                    key={id}
+  1220→                    onClick={() => handleThreatFeedLoad(id)}
+  1221→                    disabled={loading}
+  1222→                    className="p-5 bg-gray-900 border border-gray-800 rounded-xl hover:border-gray-600 transition-all text-left disabled:opacity-50 disabled:cursor-not-allowed group"
+  1223→                  >
+  1224→                    <Icon className={`w-8 h-8 text-${color}-400 mb-3 group-hover:scale-110 transition-transform`} />
+  1225→                    <h3 className="font-semibold">{name}</h3>
+  1226→                    <p className="text-sm text-gray-400 mt-1">{desc}</p>
+  1227→                    <span className="inline-block mt-3 text-xs text-{color}-400 group-hover:underline">Click to load →</span>
+  1228→                  </button>
+  1229→                ))}
+  1230→                
+  1231→                <button
+  1232→                  onClick={() => handleThreatFeedLoad()}
+  1233→                  disabled={loading}
+  1234→                  className="p-5 bg-gray-900 border-2 border-dashed border-gray-700 rounded-xl hover:border-gray-500 hover:bg-gray-800/50 transition-all text-left col-span-full disabled:opacity-50"
+  1235→                >
+  1236→                  <RefreshCw className={`w-8 h-8 text-gray-400 mb-3 ${loading ? 'animate-spin' : ''}`} />
+  1237→                  <h3 className="font-semibold">Load All Feeds</h3>
+  1238→                  <p className="text-sm text-gray-400 mt-1">Fetch latest from all sources simultaneously</p>
+  1239→                </button>
+  1240→              </div>
+  1241→
+  1242→              {/* Loading State */}
+  1243→              {loading && (
+  1244→                <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
+  1245→                  <Loader2 className="w-12 h-12 mx-auto mb-4 text-blue-400 animate-spin" />
+  1246→                  <p className="text-lg font-semibold">Loading threat intelligence...</p>
+  1247→                  <p className="text-sm text-gray-400 mt-2">Fetching data from external sources</p>
+  1248→                </div>
+  1249→              )}
+  1250→
+  1251→              {/* Results or Sample Data */}
+  1252→              {apiData?.feeds && apiData.feeds.length > 0 && (
+  1253→                <div className="space-y-6">
+  1254→                  {/* Notice for sample data */}
+  1255→                  {apiData.message && (
+  1256→                    <div className="p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg flex items-center gap-3">
+  1257→                      <AlertCircle className="w-5 h-5 text-yellow-500 shrink-0" />
+  1258→                      <div>
+  1259→                        <p className="font-medium text-yellow-400">Sample Data Mode</p>
+  1260→                        <p className="text-sm text-yellow-300/80">{apiData.message}</p>
+  1261→                      </div>
+  1262→                    </div>
+  1263→                  )}
+  1264→                  
+  1265→                  {apiData.feeds.map((feed: any, fIdx: number) => (
+  1266→                    <div key={fIdx} className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+  1267→                      <div className="flex items-center justify-between mb-4">
+  1268→                        <h3 className="font-semibold flex items-center gap-2">
+  1269→                          <Globe className="w-5 h-5 text-blue-400" />
+  1270→                          {feed.source}
+  1271→                          <span className="text-xs text-gray-400">({feed.count} entries)</span>
+  1272→                        </h3>
+  1273→                        <span className={`px-2 py-1 rounded text-xs font-medium ${
+  1274→                          feed.status === 'sample' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'
+  1275→                        }`}>
+  1276→                          {feed.status === 'sample' ? 'SAMPLE' : 'LIVE'}
+  1277→                        </span>
+  1278→                      </div>
+  1279→                      
+  1280→                      <div className="overflow-x-auto">
+  1281→                        <table className="w-full text-sm">
+  1282→                          <thead>
+  1283→                            <tr className="border-b border-gray-800">
+  1284→                              {Object.keys(feed.entries[0] || {}).slice(0, 5).map((key) => (
+  1285→                                <th key={key} className="text-left py-2 px-2 text-gray-400 font-medium capitalize">
+  1286→                                  {key.replace(/([A-Z])/g, ' $1').trim()}
+  1287→                                </th>
+  1288→                              ))}
+  1289→                            </tr>
+  1290→                          </thead>
+  1291→                          <tbody>
+  1292→                            {feed.entries.slice(0, 10).map((entry: any, eIdx: number) => (
+  1293→                              <tr key={eIdx} className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors">
+  1294→                                {Object.values(entry).slice(0, 5).map((val: any, vIdx: number) => (
+  1295→                                  <td key={vIdx} className="py-2 px-2 text-gray-300 truncate max-w-[200px]">
+  1296→                                    {typeof val === 'string' && val.length > 40 ? val.substring(0, 40) + '...' : String(val)}
+  1297→                                  </td>
+  1298→                                ))}
+  1299→                              </tr>
+  1300→                            ))}
+  1301→                          </tbody>
+  1302→                        </table>
+  1303→                      </div>
+  1304→                    </div>
+  1305→                  ))}
+  1306→                </div>
+  1307→              )}
+  1308→
+  1309→              {/* Feed Status (when APIs fail) */}
+  1310→              {apiData?.feedStatus && (
+  1311→                <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+  1312→                  <h3 className="font-semibold mb-4">Feed Status</h3>
+  1313→                  <div className="space-y-2">
+  1314→                    {Object.entries(apiData.feedStatus).map(([source, status]: [string, any]) => (
+  1315→                      <div key={source} className={`flex items-center justify-between p-3 rounded-lg ${
+  1316→                        status.status === 'ok' ? 'bg-green-500/10' : 'bg-red-500/10'
+  1317→                      }`}>
+  1318→                        <span className="font-medium">{source}</span>
+  1319→                        <span className={`text-sm ${status.status === 'ok' ? 'text-green-400' : 'text-red-400'}`}>
+  1320→                          {status.status === 'ok' ? '✓ Connected' : `✗ ${status.message || 'Failed'}`}
+  1321→                        </span>
+  1322→                      </div>
+  1323→                    ))}
+  1324→                  </div>
+  1325→                </div>
+  1326→              )}
+  1327→
+  1328→              {/* Empty State with guidance */}
+  1329→              {!loading && !apiData?.feeds && !error && (
+  1330→                <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
+  1331→                  <WifiOff className="w-16 h-16 mx-auto mb-4 text-gray-600" />
+  1332→                  <h3 className="text-lg font-semibold mb-2">No Data Loaded Yet</h3>
+  1333→                  <p className="text-gray-400 mb-4">Click one of the buttons above to load threat intelligence data.</p>
+  1334→                  <p className="text-xs text-gray-500">
+  1335→                    Note: Some external APIs may have access restrictions. Sample data will be shown when APIs are unavailable.
+  1336→                  </p>
+  1337→                </div>
+  1338→              )}
+  1339→            </div>
+  1340→          )}
+  1341→
+  1342→          {/* ==================== IOC MANAGER TAB ==================== */}
+  1343→          {activeTab === 'iocs' && (
+  1344→            <div className="space-y-6">
+  1345→              <div className="flex items-center justify-between">
+  1346→                <h2 className="text-2xl font-bold flex items-center gap-3">
+  1347→                  <Database className="w-7 h-7 text-indigo-400" /> IOC Manager
+  1348→                </h2>
+  1349→                <button
+  1350→                  onClick={() => { setFormData({ type: 'IP', value: '', description: '', severity: 'MEDIUM', tags: [] }); setModalType('add'); setShowModal(true); }}
+  1351→                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 rounded-lg font-medium flex items-center gap-2 transition-colors"
+  1352→                >
+  1353→                  <Plus className="w-4 h-4" /> Add IOC
+  1354→                </button>
+  1355→              </div>
+  1356→
+  1357→              {/* Filters */}
+  1358→              <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+  1359→                <div className="flex flex-wrap gap-4">
+  1360→                  <div className="flex items-center gap-2">
+  1361→                    <Filter className="w-4 h-4 text-gray-400" />
+  1362→                    <select value={filterType} onChange={(e) => setFilterType(e.target.value)} className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm">
+  1363→                      <option value="all">All Types</option>
+  1364→                      <option value="IP">IP</option>
+  1365→                      <option value="DOMAIN">Domain</option>
+  1366→                      <option value="URL">URL</option>
+  1367→                      <option value="HASH">Hash</option>
+  1368→                      <option value="CVE">CVE</option>
+  1369→                      <option value="EMAIL">Email</option>
+  1370→                    </select>
+  1371→                  </div>
+  1372→                  <select value={filterSeverity} onChange={(e) => setFilterSeverity(e.target.value)} className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm">
+  1373→                    <option value="all">All Severities</option>
+  1374→                    <option value="CRITICAL">Critical</option>
+  1375→                    <option value="HIGH">High</option>
+  1376→                    <option value="MEDIUM">Medium</option>
+  1377→                    <option value="LOW">Low</option>
+  1378→                    <option value="INFO">Info</option>
+  1379→                  </select>
+  1380→                  <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm">
+  1381→                    <option value="all">All Statuses</option>
+  1382→                    <option value="MALICIOUS">Malicious</option>
+  1383→                    <option value="SUSPICIOUS">Suspicious</option>
+  1384→                    <option value="UNKNOWN">Unknown</option>
+  1385→                    <option value="BENIGN">Benign</option>
+  1386→                  </select>
+  1387→                  <button onClick={loadIOCs} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors">Apply Filters</button>
+  1388→                </div>
+  1389→              </div>
+  1390→
+  1391→              {/* IOC Table */}
+  1392→              <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+  1393→                <div className="overflow-x-auto">
+  1394→                  <table className="w-full text-sm">
+  1395→                    <thead className="bg-gray-800">
+  1396→                      <tr>
+  1397→                        <th className="text-left py-3 px-4 text-gray-400 font-medium">Type</th>
+  1398→                        <th className="text-left py-3 px-4 text-gray-400 font-medium">Value</th>
+  1399→                        <th className="text-left py-3 px-4 text-gray-400 font-medium">Description</th>
+  1400→                        <th className="text-left py-3 px-4 text-gray-400 font-medium">Severity</th>
+  1401→                        <th className="text-left py-3 px-4 text-gray-400 font-medium">Status</th>
+  1402→                        <th className="text-left py-3 px-4 text-gray-400 font-medium">Confidence</th>
+  1403→                        <th className="text-left py-3 px-4 text-gray-400 font-medium">Source</th>
+  1404→                        <th className="text-left py-3 px-4 text-gray-400 font-medium">Updated</th>
+  1405→                        <th className="text-right py-3 px-4 text-gray-400 font-medium">Actions</th>
+  1406→                      </tr>
+  1407→                    </thead>
+  1408→                    <tbody>
+  1409→                      {iocs.map((ioc) => (
+  1410→                        <tr key={ioc.id} className="border-t border-gray-800 hover:bg-gray-800/50 transition-colors">
+  1411→                          <td className="py-3 px-4"><span className="px-2 py-1 bg-gray-700 rounded text-xs font-mono">{ioc.type}</span></td>
+  1412→                          <td className="py-3 px-4 font-mono text-sm max-w-[200px] truncate" title={ioc.value}>{ioc.value}</td>
+  1413→                          <td className="py-3 px-4 text-gray-400 max-w-[250px] truncate" title={ioc.description}>{ioc.description}</td>
+  1414→                          <td className="py-3 px-4"><span style={{ color: SEVERITY_COLORS[ioc.severity] }} className="font-medium">{ioc.severity}</span></td>
+  1415→                          <td className="py-3 px-4"><span style={{ color: STATUS_COLORS[ioc.status] }} className="font-medium">{ioc.status}</span></td>
+  1416→                          <td className="py-3 px-4">
+  1417→                            <div className="flex items-center gap-2">
+  1418→                              <div className="w-16 h-2 bg-gray-700 rounded-full overflow-hidden">
+  1419→                                <div className="h-full bg-blue-500" style={{ width: `${ioc.confidence}%` }} />
+  1420→                              </div>
+  1421→                              <span className="text-xs text-gray-400">{ioc.confidence}%</span>
+  1422→                            </div>
+  1423→                          </td>
+  1424→                          <td className="py-3 px-4 text-gray-400 text-xs">{ioc.source || '-'}</td>
+  1425→                          <td className="py-3 px-4 text-gray-400 text-xs">{new Date(ioc.lastUpdated).toLocaleDateString()}</td>
+  1426→                          <td className="py-3 px-4 text-right">
+  1427→                            <div className="flex items-center justify-end gap-1">
+  1428→                              <button onClick={() => openDetailModal(ioc)} className="p-1.5 hover:bg-gray-700 rounded transition-colors" title="View Details"><Eye className="w-4 h-4" /></button>
+  1429→                              <button onClick={() => openEditModal(ioc)} className="p-1.5 hover:bg-gray-700 rounded transition-colors" title="Edit"><Edit3 className="w-4 h-4" /></button>
+  1430→                              <button onClick={() => copyToClipboard(ioc.value)} className="p-1.5 hover:bg-gray-700 rounded transition-colors" title="Copy"><Copy className="w-4 h-4" /></button>
+  1431→                              <button onClick={() => handleDeleteIOC(ioc.id)} className="p-1.5 hover:bg-red-500/20 text-red-400 rounded transition-colors" title="Delete"><Trash2 className="w-4 h-4" /></button>
+  1432→                            </div>
+  1433→                          </td>
+  1434→                        </tr>
+  1435→                      ))}
+  1436→                      {iocs.length === 0 && (
+  1437→                        <tr><td colSpan={9} className="py-12 text-center text-gray-500">
+  1438→                          <Database className="w-12 h-12 mx-auto mb-3 opacity-50" />
+  1439→                          <p>No IOCs found. Add some manually or run reconnaissance.</p>
+  1440→                        </td></tr>
+  1441→                      )}
+  1442→                    </tbody>
+  1443→                  </table>
+  1444→                </div>
+  1445→              </div>
+  1446→            </div>
+  1447→          )}
+  1448→
+  1449→          {/* ==================== EXPORT TAB ==================== */}
+  1450→          {activeTab === 'export' && (
+  1451→            <div className="space-y-6">
+  1452→              <h2 className="text-2xl font-bold flex items-center gap-3">
+  1453→                <Download className="w-7 h-7 text-green-400" /> Export Intelligence Data
+  1454→              </h2>
+  1455→              
+  1456→              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+  1457→                <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 hover:border-gray-700 transition-colors">
+  1458→                  <FileText className="w-10 h-10 text-blue-400 mb-4" />
+  1459→                  <h3 className="font-semibold text-lg mb-2">JSON Export</h3>
+  1460→                  <p className="text-gray-400 text-sm mb-4">Full structured export with all IOC metadata, analyses, and alerts in machine-readable format.</p>
+  1461→                  <button onClick={() => handleExport('json')} className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-medium flex items-center justify-center gap-2 transition-colors">
+  1462→                    <Download className="w-4 h-4" /> Export JSON
+  1463→                  </button>
+  1464→                </div>
+  1465→
+  1466→                <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 hover:border-gray-700 transition-colors">
+  1467→                  <FileText className="w-10 h-10 text-green-400 mb-4" />
+  1468→                  <h3 className="font-semibold text-lg mb-2">CSV Export</h3>
+  1469→                  <p className="text-gray-400 text-sm mb-4">Spreadsheet-compatible format for Excel, SIEM import, or further analysis.</p>
+  1470→                  <button onClick={() => handleExport('csv')} className="w-full px-4 py-3 bg-green-600 hover:bg-green-700 rounded-lg font-medium flex items-center justify-center gap-2 transition-colors">
+  1471→                    <Download className="w-4 h-4" /> Export CSV
+  1472→                  </button>
+  1473→                </div>
+  1474→              </div>
+  1475→
+  1476→              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+  1477→                <h3 className="font-semibold mb-4">Export Options</h3>
+  1478→                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+  1479→                  <div>
+  1480→                    <label className="block text-sm text-gray-400 mb-2">Filter by Type</label>
+  1481→                    <select value={filterType} onChange={(e) => setFilterType(e.target.value)} className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm">
+  1482→                      <option value="all">All Types</option>
+  1483→                      <option value="IP">IP</option>
+  1484→                      <option value="DOMAIN">Domain</option>
+  1485→                      <option value="URL">URL</option>
+  1486→                      <option value="HASH">Hash</option>
+  1487→                      <option value="CVE">CVE</option>
+  1488→                    </select>
+  1489→                  </div>
+  1490→                  <div>
+  1491→                    <label className="block text-sm text-gray-400 mb-2">Filter by Severity</label>
+  1492→                    <select value={filterSeverity} onChange={(e) => setFilterSeverity(e.target.value)} className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm">
+  1493→                      <option value="all">All Severities</option>
+  1494→                      <option value="CRITICAL">Critical Only</option>
+  1495→                      <option value="HIGH">High+</option>
+  1496→                      <option value="MEDIUM">Medium+</option>
+  1497→                    </select>
+  1498→                  </div>
+  1499→                </div>
+  1500→              </div>
+  1501→
+  1502→              <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4">
+  1503→                <h4 className="font-medium mb-2 flex items-center gap-2">
+  1504→                  <Info className="w-4 h-4 text-blue-400" /> Export Summary
+  1505→                </h4>
+  1506→                <p className="text-sm text-gray-400">
+  1507→                  Current selection: <strong>{iocs.length} IOCs</strong> will be exported.
+  1508→                  {filterType !== 'all' && ` Filtered by type: ${filterType}`}
+  1509→                  {filterSeverity !== 'all' && ` Filtered by severity: ${filterSeverity}`}
+  1510→                </p>
+  1511→              </div>
+  1512→            </div>
+  1513→          )}
+  1514→
+  1515→          {/* ==================== REPORTS TAB ==================== */}
+  1516→          {activeTab === 'reports' && (
+  1517→            <div className="space-y-6">
+  1518→              <div className="flex items-center justify-between">
+  1519→                <h2 className="text-2xl font-bold flex items-center gap-3">
+  1520→                  <FileText className="w-7 h-7 text-pink-400" /> Executive Reports
+  1521→                </h2>
+  1522→                <button onClick={handleGenerateReport} disabled={loading} className="px-4 py-2 bg-pink-600 hover:bg-pink-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2 transition-colors">
+  1523→                  {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
+  1524→                  Generate Report
+  1525→                </button>
+  1526→              </div>
+  1527→
+  1528→              {apiData?.executiveSummary && (
+  1529→                <div className="space-y-6">
+  1530→                  <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-pink-500/30 rounded-xl p-6">
+  1531→                    <h3 className="font-semibold text-lg mb-4 flex items-center gap-2">
+  1532→                      <BarChart3 className="w-5 h-5 text-pink-400" /> Executive Summary
+  1533→                    </h3>
+  1534→                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+  1535→                      <StatCard label="Total IOCs" value={apiData.executiveSummary.totalIOCs} />
+  1536→                      <StatCard label="Active Alerts" value={apiData.executiveSummary.activeAlerts} color="red" />
+  1537→                      <StatCard label="Critical Items" value={apiData.executiveSummary.criticalIOCs} color="red" />
+  1538→                      <StatCard label="Malicious" value={apiData.executiveSummary.maliciousIOCs} color="red" />
+  1539→                    </div>
+  1540→                  </div>
+  1541→
+  1542→                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+  1543→                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+  1544→                      <h3 className="font-semibold mb-4">Severity Breakdown</h3>
+  1545→                      <div className="space-y-3">
+  1546→                        {Object.entries(apiData.severityBreakdown || {}).map(([key, value]: [string, any]) => (
+  1547→                          <div key={key} className="flex items-center gap-3">
+  1548→                            <span className="w-20 text-sm text-gray-400">{key}</span>
+  1549→                            <div className="flex-1 h-6 bg-gray-800 rounded overflow-hidden">
+  1550→                              <div className="h-full rounded" style={{
+  1551→                                width: `${(value / Math.max(...Object.values(apiData.severityBreakdown))) * 100}%`,
+  1552→                                backgroundColor: SEVERITY_COLORS[key as Severity]
+  1553→                              }} />
+  1554→                            </div>
+  1555→                            <span className="w-10 text-right text-sm font-mono">{value}</span>
+  1556→                          </div>
+  1557→                        ))}
+  1558→                      </div>
+  1559→                    </div>
+  1560→
+  1561→                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+  1562→                      <h3 className="font-semibold mb-4">Type Distribution</h3>
+  1563→                      <ResponsiveContainer width="100%" height={250}>
+  1564→                        <PieChart>
+  1565→                          <Pie data={Object.entries(apiData.typeDistribution || {}).map(([name, value]) => ({ name, value }))} innerRadius={60} outerRadius={100} paddingAngle={5} dataKey="value">
+  1566→                            {CHART_COLORS.map((color, index) => (<Cell key={index} fill={color} />))}
+  1567→                          </Pie>
+  1568→                          <Tooltip contentStyle={{ backgroundColor: '#1f2937', border: 'none' }} />
+  1569→                          <Legend />
+  1570→                        </PieChart>
+  1571→                      </ResponsiveContainer>
+  1572→                    </div>
+  1573→                  </div>
+  1574→                </div>
+  1575→              )}
+  1576→
+  1577→              {!apiData && (
+  1578→                <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
+  1579→                  <FileText className="w-16 h-16 mx-auto mb-4 text-gray-600" />
+  1580→                  <h3 className="text-lg font-semibold mb-2">No Report Generated Yet</h3>
+  1581→                  <p className="text-gray-400 mb-4">Click "Generate Report" to create an executive summary of all collected intelligence.</p>
+  1582→                </div>
+  1583→              )}
+  1584→            </div>
+  1585→          )}
+  1586→        </main>
+  1587→      </div>
+  1588→
+  1589→      {/* ==================== MODAL ==================== */}
+  1590→      {showModal && selectedIOC && modalType === 'detail' && (
+  1591→        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setShowModal(false)}>
+  1592→          <div className="bg-gray-900 border border-gray-700 rounded-xl max-w-3xl w-full max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+  1593→            <div className="sticky top-0 bg-gray-900 border-b border-gray-800 p-4 flex items-center justify-between">
+  1594→              <h3 className="font-bold text-lg">IOC Details</h3>
+  1595→              <button onClick={() => setShowModal(false)} className="p-2 hover:bg-gray-800 rounded-lg transition-colors"><X className="w-5 h-5" /></button>
+  1596→            </div>
+  1597→            <div className="p-6 space-y-4">
+  1598→              <div className="grid grid-cols-2 gap-4">
+  1599→                <div><span className="text-gray-400 text-sm">ID:</span><p className="font-mono text-sm">{selectedIOC.id}</p></div>
+  1600→                <div><span className="text-gray-400 text-sm">Type:</span><p><span className="px-2 py-1 bg-gray-700 rounded text-xs">{selectedIOC.type}</span></p></div>
+  1601→                <div className="col-span-2"><span className="text-gray-400 text-sm">Value:</span><p className="font-mono break-all">{selectedIOC.value}</p></div>
+  1602→                <div><span className="text-gray-400 text-sm">Severity:</span><p style={{ color: SEVERITY_COLORS[selectedIOC.severity] }} className="font-bold">{selectedIOC.severity}</p></div>
+  1603→                <div><span className="text-gray-400 text-sm">Status:</span><p style={{ color: STATUS_COLORS[selectedIOC.status] }} className="font-bold">{selectedIOC.status}</p></div>
+  1604→                <div><span className="text-gray-400 text-sm">Confidence:</span><p>{selectedIOC.confidence}%</p></div>
+  1605→                <div><span className="text-gray-400 text-sm">Source:</span><p>{selectedIOC.source || '-'}</p></div>
+  1606→                <div className="col-span-2"><span className="text-gray-400 text-sm">Description:</span><p>{selectedIOC.description}</p></div>
+  1607→                <div><span className="text-gray-400 text-sm">First Seen:</span><p>{new Date(selectedIOC.firstSeen).toLocaleString()}</p></div>
+  1608→                <div><span className="text-gray-400 text-sm">Last Updated:</span><p>{new Date(selectedIOC.lastUpdated).toLocaleString()}</p></div>
+  1609→              </div>
+  1610→              {selectedIOC.tags?.length > 0 && (
+  1611→                <div className="flex flex-wrap gap-2 pt-4 border-t border-gray-800">
+  1612→                  {selectedIOC.tags.map((tag, idx) => (<span key={idx} className="px-2 py-1 bg-gray-700 rounded text-xs">{tag}</span>))}
+  1613→                </div>
+  1614→              )}
+  1615→              {selectedIOC.rawResponse && (
+  1616→                <details className="pt-4 border-t border-gray-800">
+  1617→                  <summary className="cursor-pointer text-sm text-gray-400 hover:text-white flex items-center gap-2">
+  1618→                    <ChevronRight className="w-4 h-4" /> View Raw API Response
+  1619→                  </summary>
+  1620→                  <pre className="mt-2 p-4 bg-gray-950 rounded-lg overflow-x-auto text-xs max-h-60 overflow-y-auto">
+  1621→                    {typeof selectedIOC.rawResponse === 'string' ? JSON.stringify(JSON.parse(selectedIOC.rawResponse), null, 2) : JSON.stringify(selectedIOC.rawResponse, null, 2)}
+  1622→                  </pre>
+  1623→                </details>
+  1624→              )}
+  1625→            </div>
+  1626→            <div className="sticky bottom-0 bg-gray-900 border-t border-gray-800 p-4 flex justify-end gap-3">
+  1627→              <button onClick={() => { setModalType('edit'); }} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm transition-colors"><Edit3 className="w-4 h-4 inline mr-1" /> Edit</button>
+  1628→              <button onClick={() => { handleDeleteIOC(selectedIOC.id); setShowModal(false); }} className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-sm transition-colors"><Trash2 className="w-4 h-4 inline mr-1" /> Delete</button>
+  1629→            </div>
+  1630→          </div>
+  1631→        </div>
+  1632→      )}
+  1633→
+  1634→      {/* Add/Edit Modal */}
+  1635→      {showModal && (modalType === 'add' || modalType === 'edit') && (
+  1636→        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setShowModal(false)}>
+  1637→          <div className="bg-gray-900 border border-gray-700 rounded-xl max-w-lg w-full" onClick={(e) => e.stopPropagation()}>
+  1638→            <div className="border-b border-gray-800 p-4 flex items-center justify-between">
+  1639→              <h3 className="font-bold text-lg">{modalType === 'add' ? 'Add New IOC' : 'Edit IOC'}</h3>
+  1640→              <button onClick={() => setShowModal(false)} className="p-2 hover:bg-gray-800 rounded-lg transition-colors"><X className="w-5 h-5" /></button>
+  1641→            </div>
+  1642→            <div className="p-6 space-y-4">
+  1643→              <div>
+  1644→                <label className="block text-sm text-gray-400 mb-1">Type *</label>
+  1645→                <select value={formData.type} onChange={(e) => setFormData({...formData, type: e.target.value})} className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg" disabled={modalType === 'edit'}>
+  1646→                  <option value="IP">IP Address</option>
+  1647→                  <option value="DOMAIN">Domain</option>
+  1648→                  <option value="URL">URL</option>
+  1649→                  <option value="HASH">Hash (MD5/SHA)</option>
+  1650→                  <option value="CVE">CVE ID</option>
+  1651→                  <option value="EMAIL">Email</option>
+  1652→                </select>
+  1653→              </div>
+  1654→              <div>
+  1655→                <label className="block text-sm text-gray-400 mb-1">Value *</label>
+  1656→                <input type="text" value={formData.value} onChange={(e) => setFormData({...formData, value: e.target.value})} className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg font-mono" placeholder={modalType === 'add' ? 'Enter indicator value...' : ''} disabled={modalType === 'edit'} />
+  1657→              </div>
+  1658→              <div>
+  1659→                <label className="block text-sm text-gray-400 mb-1">Description</label>
+  1660→                <textarea value={formData.description} onChange={(e) => setFormData({...formData, description: e.target.value})} rows={3} className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg resize-none" placeholder="Add context about this indicator..." />
+  1661→              </div>
+  1662→              <div className="grid grid-cols-2 gap-4">
+  1663→                <div>
+  1664→                  <label className="block text-sm text-gray-400 mb-1">Severity</label>
+  1665→                  <select value={formData.severity} onChange={(e) => setFormData({...formData, severity: e.target.value})} className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg">
+  1666→                    <option value="CRITICAL">Critical</option>
+  1667→                    <option value="HIGH">High</option>
+  1668→                    <option value="MEDIUM">Medium</option>
+  1669→                    <option value="LOW">Low</option>
+  1670→                    <option value="INFO">Info</option>
+  1671→                  </select>
+  1672→                </div>
+  1673→                <div>
+  1674→                  <label className="block text-sm text-gray-400 mb-1">Tags (comma separated)</label>
+  1675→                  <input type="text" value={formData.tags.join(', ')} onChange={(e) => setFormData({...formData, tags: e.target.value.split(',').map(t => t.trim()).filter(Boolean)})} className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg" placeholder="tag1, tag2..." />
+  1676→                </div>
+  1677→              </div>
+  1678→            </div>
+  1679→            <div className="border-t border-gray-800 p-4 flex justify-end gap-3">
+  1680→              <button onClick={() => setShowModal(false)} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors">Cancel</button>
+  1681→              <button onClick={modalType === 'add' ? handleAddIOC : handleUpdateIOC} disabled={!formData.value} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-lg transition-colors">
+  1682→                {modalType === 'add' ? <Plus className="w-4 h-4 inline mr-1" /> : <Save className="w-4 h-4 inline mr-1" />}
+  1683→                {modalType === 'add' ? 'Add IOC' : 'Save Changes'}
+  1684→              </button>
+  1685→            </div>
+  1686→          </div>
+  1687→        </div>
+  1688→      )}
+  1689→    </div>
+  1690→  );
+  1691→}
+  1692→
+  1693→// ==================== SUB-COMPONENTS ====================
+  1694→function InfoCard({ label, value, icon, alert }: { label: string; value: string | React.ReactNode; icon: React.ReactNode; alert?: boolean }) {
+  1695→  return (
+  1696→    <div className={`p-3 bg-gray-800/50 rounded-lg ${alert ? 'border border-red-500/30' : ''}`}>
+  1697→      <div className="flex items-center gap-2 text-gray-400 text-xs mb-1">{icon}{label}</div>
+  1698→      <div className={`font-medium text-sm ${alert ? 'text-red-400' : ''}`}>{value}</div>
+  1699→    </div>
+  1700→  );
+  1701→}
+  1702→
+  1703→function SecurityCheck({ label, pass }: { label: string; pass: boolean }) {
+  1704→  return (
+  1705→    <div className={`p-3 rounded-lg flex items-center gap-3 ${pass ? 'bg-green-500/10' : 'bg-red-500/10'}`}>
+  1706→      {pass ? <CheckCircle className="w-5 h-5 text-green-500" /> : <XCircle className="w-5 h-5 text-red-500" />}
+  1707→      <div>
+  1708→        <p className="font-medium text-sm">{label}</p>
+  1709→        <p className={`text-xs ${pass ? 'text-green-400' : 'text-red-400'}`}>{pass ? 'Configured' : 'Not Found'}</p>
+  1710→      </div>
+  1711→    </div>
+  1712→  );
+  1713→}
+  1714→
+  1715→function StatCard({ label, value, color = 'blue' }: { label: string; value: number; color?: string }) {
+  1716→  return (
+  1717→    <div className="p-4 bg-gray-800/50 rounded-lg text-center">
+  1718→      <p className={`text-3xl font-bold text-${color}-400`}>{value}</p>
+  1719→      <p className="text-sm text-gray-400 mt-1">{label}</p>
+  1720→    </div>
+  1721→  );
+  1722→}
+  1723→
