@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
 function exportJSON(iocs: any[], timestamp: string) {
   const report = {
     metadata: {
-      title: 'OSINT Threat Intelligence Export',
+      title: 'MONITOR-THREAT Export',
       generatedAt: timestamp,
       platform: 'OSINT-Platform v8.0',
       totalIOCs: iocs.length,
@@ -111,7 +111,7 @@ function exportCSV(iocs: any[], timestamp: string) {
   ]);
   
   const csvContent = [
-    `# OSINT Threat Intelligence Export`,
+    `# MONITOR-THREAT Export`,
     `# Generated: ${timestamp}`,
     `# Total IOCs: ${iocs.length}`,
     '',

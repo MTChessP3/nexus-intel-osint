@@ -186,7 +186,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const config: ReportConfig = {
-      title: body.title || 'OSINT Threat Intelligence Report',
+      title: body.title || 'MONITOR-THREAT Intelligence Report',
       modules: body.modules || ['dashboard', 'iocs'],
       format: body.format || 'PDF',
       includeIOCs: body.includeIOCs ?? true,

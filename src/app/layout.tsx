@@ -14,15 +14,15 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "NEXUS INTEL | OSINT Threat Intelligence Platform",
+  title: "MONITOR-THREAT | Cyber Threat Intelligence Platform",
   description: "Professional OSINT threat intelligence platform for cybersecurity analysis, IP geolocation, CVE tracking, and executive reporting.",
   keywords: ["OSINT", "Threat Intelligence", "Cybersecurity", "CVE", "IP Geolocation", "Malware Analysis", "APT Tracking"],
-  authors: [{ name: "NEXUS INTEL Team" }],
+  authors: [{ name: "MONITOR-THREAT Team" }],
   icons: {
     icon: "/logo.svg",
   },
   openGraph: {
-    title: "NEXUS INTEL - OSINT Threat Intelligence Platform",
+    title: "MONITOR-THREAT - Cyber Threat Intelligence Platform",
     description: "Professional-grade threat intelligence for security operations",
     type: "website",
   },

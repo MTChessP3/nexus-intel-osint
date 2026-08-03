@@ -578,7 +578,7 @@ export default function OSINTPlatform() {
               <Radar className="w-8 h-8 text-red-500 animate-pulse" />
               <div>
                 <h1 className="text-xl font-bold bg-gradient-to-r from-red-500 via-orange-500 to-yellow-500 bg-clip-text text-transparent">
-                  OSINT Threat Intelligence Platform v9.0
+                  MONITOR-THREAT v9.0
                 </h1>
                 <p className="text-xs text-gray-400">Real-time Cyber Threat Intelligence • All Modules Active</p>
               </div>
