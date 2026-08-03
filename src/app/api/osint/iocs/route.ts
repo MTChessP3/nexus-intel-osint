@@ -1,7 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import {
+  getIOCs,
+  getIOCByValue,
+  createIOC,
+  updateIOC,
+  deleteIOC,
+  getAnalysesByIOC,
+  getAlerts,
+  getStoreStats
+} from '@/lib/store';
 
-// IOC CRUD Operations - Full database management
+// IOC CRUD Operations - Full in-memory database management
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const type = searchParams.get('type');
@@ -12,56 +21,29 @@ export async function GET(request: NextRequest) {
   const limit = parseInt(searchParams.get('limit') || '50');
   
   try {
-    const where: any = {};
+    const result = await getIOCs({
+      type,
+      status,
+      severity,
+      search,
+      page,
+      limit
+    });
     
-    if (type) where.type = type.toUpperCase();
-    if (status) where.status = status.toUpperCase();
-    if (severity) where.severity = severity.toUpperCase();
-    if (search) {
-      where.OR = [
-        { value: { contains: search } },
-        { description: { contains: search } },
-        { source: { contains: search } }
-      ];
-    }
-    
-    const [iocs, total] = await Promise.all([
-      db.iOC.findMany({
-        where,
-        orderBy: { lastUpdated: 'desc' },
-        skip: (page - 1) * limit,
-        take: limit,
-        include: {
-          analyses: {
-            orderBy: { timestamp: 'desc' },
-            take: 3
-          },
-          alerts: {
-            where: { status: 'ACTIVE' },
-            orderBy: { createdAt: 'desc' },
-            take: 5
-          }
-        }
-      }),
-      db.iOC.count({ where })
-    ]);
+    // Enrich with analyses and alerts
+    const enrichedData = await Promise.all(result.data.map(async (ioc) => ({
+      ...ioc,
+      tags: ioc.tags || [],
+      analyses: await getAnalysesByIOC(ioc.id),
+      alerts: await getAlerts({ iocId: ioc.id, status: 'ACTIVE' })
+    })));
     
     return NextResponse.json({
       success: true,
-      data: iocs.map(ioc => ({
-        ...ioc,
-        tags: JSON.parse(ioc.tags || '[]'),
-        analyses: ioc.analyses.map(a => ({
-          ...a,
-          findings: JSON.parse(a.findings || '[]')
-        }))
-      })),
-      pagination: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit)
-      }
+      data: enrichedData,
+      pagination: result.pagination,
+      stats: getStoreStats(),
+      message: `Found ${result.total} IOC(s)`
     });
     
   } catch (error) {
@@ -82,51 +64,45 @@ export async function POST(request: NextRequest) {
     
     if (!type || !value) {
       return NextResponse.json({ 
-        error: 'Type and value are required', 
-        validTypes: ['IP', 'DOMAIN', 'URL', 'HASH', 'EMAIL', 'CVE'] 
+        success: false,
+        error: 'Type and value are required',
+        validTypes: ['IP', 'DOMAIN', 'URL', 'HASH', 'EMAIL', 'CVE']
       }, { status: 400 });
     }
     
-    const existing = await db.iOC.findUnique({ where: { value } });
+    // Check if already exists
+    const existing = await getIOCByValue(value);
     if (existing) {
       return NextResponse.json({ 
-        error: 'IOC already exists', 
-        existingId: existing.id 
+        success: false,
+        error: 'IOC already exists',
+        existingId: existing.id,
+        existingValue: existing.value
       }, { status: 409 });
     }
     
-    const ioc = await db.iOC.create({
-      data: {
-        type: type.toUpperCase(),
-        value,
-        description: description || `${type}: ${value}`,
-        severity: (severity || 'MEDIUM').toUpperCase(),
-        confidence: confidence || 50,
-        status: 'UNKNOWN',
-        source: source || 'manual',
-        tags: JSON.stringify(tags || [])
-      }
+    const ioc = await createIOC({
+      type,
+      value,
+      description: description || `${type}: ${value}`,
+      severity: severity || 'MEDIUM',
+      confidence: confidence || 50,
+      source: source || 'manual',
+      tags: tags || []
     });
     
-    // Create alert for new IOC
-    await db.alert.create({
-      data: {
-        iocId: ioc.id,
-        title: `New ${type} Added: ${value}`,
-        description: description || `Manually added indicator of compromise`,
-        severity: (severity || 'MEDIUM').toUpperCase() as any,
-        type: 'IOC_DETECTED'
-      }
-    });
+    return NextResponse.json({ 
+      success: true, 
+      ioc,
+      message: `IOC ${value} created successfully`
+    }, { status: 201 });
     
-    return NextResponse.json({ success: true, ioc }, { status: 201 });
-    
-  } catch (error) {
+  } catch (error: any) {
     console.error('Create IOC Error:', error);
     return NextResponse.json({ 
-      success: false, 
-      error: 'Failed to create IOC',
-      details: error instanceof Error ? error.message : 'Unknown error'
+      success: false,
+      error: error.message || 'Failed to create IOC',
+      details: error.message
     }, { status: 500 });
   }
 }
@@ -138,29 +114,39 @@ export async function PATCH(request: NextRequest) {
     const { id, description, severity, status, confidence, tags } = body;
     
     if (!id) {
-      return NextResponse.json({ error: 'IOC ID is required' }, { status: 400 });
+      return NextResponse.json({ 
+        success: false,
+        error: 'IOC ID is required for update' 
+      }, { status: 400 });
     }
     
-    const updateData: any = { lastUpdated: new Date() };
-    if (description !== undefined) updateData.description = description;
-    if (severity) updateData.severity = severity.toUpperCase();
-    if (status) updateData.status = status.toUpperCase();
-    if (confidence !== undefined) updateData.confidence = confidence;
-    if (tags !== undefined) updateData.tags = JSON.stringify(tags);
-    
-    const ioc = await db.iOC.update({
-      where: { id },
-      data: updateData
+    const ioc = await updateIOC(id, {
+      description,
+      severity,
+      status,
+      confidence,
+      tags
     });
     
-    return NextResponse.json({ success: true, ioc });
+    if (!ioc) {
+      return NextResponse.json({ 
+        success: false,
+        error: 'IOC not found' 
+      }, { status: 404 });
+    }
     
-  } catch (error) {
+    return NextResponse.json({ 
+      success: true, 
+      ioc,
+      message: `IOC ${ioc.value} updated successfully`
+    });
+    
+  } catch (error: any) {
     console.error('Update IOC Error:', error);
     return NextResponse.json({ 
-      success: false, 
-      error: 'Failed to update IOC',
-      details: error instanceof Error ? error.message : 'Unknown error'
+      success: false,
+      error: error.message || 'Failed to update IOC',
+      details: error.message
     }, { status: 500 });
   }
 }
@@ -171,23 +157,33 @@ export async function DELETE(request: NextRequest) {
   const id = searchParams.get('id');
   
   if (!id) {
-    return NextResponse.json({ error: 'IOC ID is required' }, { status: 400 });
+    return NextResponse.json({ 
+      success: false,
+      error: 'IOC ID is required for deletion' 
+    }, { status: 400 });
   }
   
   try {
-    // Delete related records first
-    await db.analysis.deleteMany({ where: { iocId: id } });
-    await db.alert.deleteMany({ where: { iocId: id } });
-    await db.iOC.delete({ where: { id } });
+    const deleted = await deleteIOC(id);
     
-    return NextResponse.json({ success: true, message: 'IOC deleted successfully' });
+    if (!deleted) {
+      return NextResponse.json({ 
+        success: false,
+        error: 'IOC not found or already deleted' 
+      }, { status: 404 });
+    }
     
-  } catch (error) {
+    return NextResponse.json({ 
+      success: true, 
+      message: 'IOC deleted successfully'
+    });
+    
+  } catch (error: any) {
     console.error('Delete IOC Error:', error);
     return NextResponse.json({ 
-      success: false, 
-      error: 'Failed to delete IOC',
-      details: error instanceof Error ? error.message : 'Unknown error'
+      success: false,
+      error: error.message || 'Failed to delete IOC',
+      details: error.message
     }, { status: 500 });
   }
 }

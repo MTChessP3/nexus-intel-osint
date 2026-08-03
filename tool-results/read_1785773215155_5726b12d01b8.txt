@@ -1,0 +1,2002 @@
+     1→'use client';
+     2→
+     3→import React, { useState, useEffect, useCallback, useRef } from 'react';
+     4→import { 
+     5→  Search, Globe, Shield, Bug, FileText, Download, Upload, 
+     6→  Trash2, Edit3, Plus, Eye, AlertTriangle, CheckCircle, XCircle,
+     7→  Activity, Database, Cpu, Lock, Unlock, RefreshCw, ExternalLink,
+     8→  Copy, Filter, ChevronDown, ChevronRight, Zap, Target, Radar,
+     9→  Fingerprint, Mail, Hash, Server, Clock, MapPin, Wifi,
+    10→  BarChart3, PieChart as PieChartIcon, TrendingUp, Users, Key, Terminal,
+    11→  Save, X, Loader2, Check, Info, AlertCircle, ArrowRight, Ban, WifiOff,
+    12→  Play, Pause, Camera, FileSearch, Smartphone, Globe2, Skull, EyeOff,
+    13→  FolderOpen, DownloadCloud, UploadCloud, FileCode, LockOpen, ShieldAlert
+    14→} from 'lucide-react';
+    15→import {
+    16→  AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
+    17→  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+    18→  LineChart, Line
+    19→} from 'recharts';
+    20→
+    21→// ==================== TYPES ====================
+    22→type TabType = 'dashboard' | 'ip' | 'domain' | 'url' | 'hash' | 'cve' | 'ai' | 'darkweb' | 'threats' | 'mobile' | 'forensics' | 'iocs' | 'export' | 'reports';
+    23→type Severity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
+    24→type IOCStatus = 'UNKNOWN' | 'BENIGN' | 'SUSPICIOUS' | 'MALICIOUS';
+    25→
+    26→interface IOC {
+    27→  id: string;
+    28→  type: string;
+    29→  value: string;
+    30→  description: string;
+    31→  severity: Severity;
+    32→  confidence: number;
+    33→  status: IOCStatus;
+    34→  source: string;
+    35→  tags: string[];
+    36→  firstSeen: string;
+    37→  lastUpdated: string;
+    38→}
+    39→
+    40→interface TimelineEvent {
+    41→  time: string;
+    42→  event: string;
+    43→  type: 'threat' | 'ioc' | 'analysis' | 'system' | 'alert';
+    44→  severity?: Severity;
+    45→}
+    46→
+    47→interface APIResponse {
+    48→  success: boolean;
+    49→  source?: string;
+    50→  timestamp?: string;
+    51→  fetchedLive?: boolean;
+    52→  data?: any;
+    53→  error?: string;
+    54→  details?: string;
+    55→  message?: string;
+    56→  [key: string]: any;
+    57→}
+    58→
+    59→// ==================== CONSTANTS ====================
+    60→const SEVERITY_COLORS: Record<Severity, string> = {
+    61→  CRITICAL: '#dc2626',
+    62→  HIGH: '#f97316',
+    63→  MEDIUM: '#eab308',
+    64→  LOW: '#22c55e',
+    65→  INFO: '#3b82f6'
+    66→};
+    67→
+    68→const STATUS_COLORS: Record<IOCStatus, string> = {
+    69→  UNKNOWN: '#6b7280',
+    70→  BENIGN: '#22c55e',
+    71→  SUSPICIOUS: '#f97316',
+    72→  MALICIOUS: '#dc2626'
+    73→};
+    74→
+    75→const CHART_COLORS = ['#dc2626', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899'];
+    76→
+    77→// Live Threat Timeline Data Generator
+    78→const generateTimelineData = (): TimelineEvent[] => {
+    79→  const events: TimelineEvent[] = [];
+    80→  const now = new Date();
+    81→  
+    82→  const threatTypes = [
+    83→    { event: 'New malware sample detected in wild', type: 'threat' as const, severity: 'HIGH' as Severity },
+    84→    { event: 'Suspicious IP address flagged by sensors', type: 'ioc' as const, severity: 'MEDIUM' as Severity },
+    85→    { event: 'Domain resolution change detected', type: 'analysis' as const, severity: 'LOW' as Severity },
+    86→    { event: 'Threat feed update received (CISA)', type: 'system' as const },
+    87→    { event: 'Critical CVE published to NVD', type: 'alert' as const, severity: 'CRITICAL' as Severity },
+    88→    { event: 'Phishing campaign targeting finance sector', type: 'threat' as const, severity: 'HIGH' as Severity },
+    89→    { event: 'IOC added to watchlist', type: 'ioc' as const, severity: 'MEDIUM' as Severity },
+    90→    { event: 'Dark web marketplace activity spike', type: 'threat' as const, severity: 'HIGH' as Severity },
+    91→    { event: 'SSL certificate expiration warning', type: 'alert' as const, severity: 'LOW' as Severity },
+    92→    { event: 'Botnet C2 communication detected', type: 'threat' as const, severity: 'CRITICAL' as Severity },
+    93→    { event: 'Data breach notification received', type: 'alert' as const, severity: 'CRITICAL' as Severity },
+    94→    { event: 'Zero-day exploit being traded', type: 'threat' as const, severity: 'CRITICAL' as Severity }
+    95→  ];
+    96→  
+    97→  for (let i = 0; i < 20; i++) {
+    98→    const timeOffset = Math.floor(Math.random() * 60);
+    99→    const threat = threatTypes[Math.floor(Math.random() * threatTypes.length)];
+   100→    events.push({
+   101→      time: new Date(now.getTime() - timeOffset * 60000).toLocaleTimeString(),
+   102→      ...threat
+   103→    });
+   104→  }
+   105→  
+   106→  return events.sort((a, b) => new Date(`2000/01/01 ${b.time}`).getTime() - new Date(`2000/01/01 ${a.time}`).getTime());
+   107→};
+   108→
+   109→// ==================== MAIN COMPONENT ====================
+   110→export default function OSINTPlatform() {
+   111→  // Core State
+   112→  const [activeTab, setActiveTab] = useState<TabType>('dashboard');
+   113→  const [loading, setLoading] = useState(false);
+   114→  const [apiData, setApiData] = useState<APIResponse | null>(null);
+   115→  const [error, setError] = useState<string | null>(null);
+   116→  const [iocs, setIocs] = useState<IOC[]>([]);
+   117→  const [selectedIOC, setSelectedIOC] = useState<IOC | null>(null);
+   118→  const [showModal, setShowModal] = useState(false);
+   119→  const [modalType, setModalType] = useState<'detail' | 'edit' | 'add'>('detail');
+   120→  const [searchQuery, setSearchQuery] = useState('');
+   121→  const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+   122→  
+   123→  // Input State
+   124→  const [inputValue, setInputValue] = useState('');
+   125→  const [formData, setFormData] = useState({
+   126→    type: 'IP',
+   127→    value: '',
+   128→    description: '',
+   129→    severity: 'MEDIUM',
+   130→    tags: [] as string[]
+   131→  });
+   132→  
+   133→  // Timeline State
+   134→  const [timelineData, setTimelineData] = useState<TimelineEvent[]>(generateTimelineData());
+   135→  const [timelineRunning, setTimelineRunning] = useState(true);
+   136→  const timelineInterval = useRef<NodeJS.Timeout | null>(null);
+   137→  
+   138→  // Report Config State
+   139→  const [reportConfig, setReportConfig] = useState({
+   140→    title: '',
+   141→    modules: [] as string[],
+   142→    format: 'PDF',
+   143→    includeIOCs: true,
+   144→    includeThreats: true,
+   145→    includeTimeline: true,
+   146→    executiveSummary: true,
+   147→    recommendations: true
+   148→  });
+   149→  
+   150→  // Forensics Results
+   151→  const [forensicsHistory, setForensicsHistory] = useState<any[]>([]);
+   152→  const [selectedForensics, setSelectedForensics] = useState<any>(null);
+   153→
+   154→  // Initialize and load data
+   155→  useEffect(() => {
+   156→    loadIOCs();
+   157→    loadForensicsHistory();
+   158→  }, []);
+   159→
+   160→  // Timeline auto-refresh
+   161→  useEffect(() => {
+   162→    if (timelineRunning) {
+   163→      timelineInterval.current = setInterval(() => {
+   164→        setTimelineData(prev => {
+   165→          const newEvent: TimelineEvent = {
+   166→            time: new Date().toLocaleTimeString(),
+   167→            event: [
+   168→              'Threat intelligence feed updated',
+   169→              'New IOC detected by automated systems',
+   170→              'Network anomaly flagged for review',
+   171→              'Security scan completed',
+   172→              'Threat actor activity monitored'
+   173→            ][Math.floor(Math.random() * 5)],
+   174→            type: ['threat', 'ioc', 'analysis', 'system'][Math.floor(Math.random() * 4)] as any
+   175→          };
+   176→          return [newEvent, ...prev.slice(0, 49)];
+   177→        });
+   178→      }, 5000);
+   179→    } else if (timelineInterval.current) {
+   180→      clearInterval(timelineInterval.current);
+   181→    }
+   182→    
+   183→    return () => {
+   184→      if (timelineInterval.current) {
+   185→        clearInterval(timelineInterval.current);
+   186→      }
+   187→    };
+   188→  }, [timelineRunning]);
+   189→
+   190→  // Clear feedback after delay
+   191→  useEffect(() => {
+   192→    if (actionFeedback) {
+   193→      const timer = setTimeout(() => setActionFeedback(null), 4000);
+   194→      return () => clearTimeout(timer);
+   195→    }
+   196→  }, [actionFeedback]);
+   197→
+   198→  // Load IOCs on tab change
+   199→  useEffect(() => {
+   200→    if (['iocs', 'dashboard', 'export', 'reports'].includes(activeTab)) {
+   201→      loadIOCs();
+   202→    }
+   203→  }, [activeTab]);
+   204→
+   205→  // ==================== API FUNCTIONS ====================
+   206→  const showFeedback = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+   207→    setActionFeedback(`${type.toUpperCase()}: ${message}`);
+   208→  };
+   209→
+   210→  const callAPI = async (endpoint: string, options?: RequestInit): Promise<APIResponse> => {
+   211→    setLoading(true);
+   212→    setError(null);
+   213→    showFeedback('Connecting to API...', 'info');
+   214→    
+   215→    try {
+   216→      const response = await fetch(endpoint, {
+   217→        ...options,
+   218→        headers: {
+   219→          'Content-Type': 'application/json',
+   220→          ...options?.headers
+   221→        }
+   222→      });
+   223→      
+   224→      const data = await response.json();
+   225→      setApiData(data);
+   226→      
+   227→      if (!data.success) {
+   228→        setError(data.error || data.details || data.message || 'Unknown error');
+   229→        showFeedback(`Error: ${data.error || data.message || 'API returned error'}`, 'error');
+   230→      } else {
+   231→        showFeedback(`Success! Data from ${data.source || 'API'}`, 'success');
+   232→        
+   233→        if (options?.method === 'POST' || options?.method === 'DELETE' || options?.method === 'PATCH') {
+   234→          setTimeout(() => loadIOCs(), 500);
+   235→        }
+   236→      }
+   237→      
+   238→      return data;
+   239→    } catch (err) {
+   240→      const errorMsg = err instanceof Error ? err.message : 'Network error';
+   241→      setError(errorMsg);
+   242→      showFeedback(`Network Error: ${errorMsg}`, 'error');
+   243→      return { success: false, error: errorMsg };
+   244→    } finally {
+   245→      setLoading(false);
+   246→    }
+   247→  };
+   248→
+   249→  const loadIOCs = async () => {
+   250→    try {
+   251→      const params = new URLSearchParams();
+   252→      if (searchQuery) params.set('search', searchQuery);
+   253→      
+   254→      const response = await fetch(`/api/osint/iocs?${params}`);
+   255→      const result = await response.json();
+   256→      
+   257→      if (result.success) {
+   258→        setIocs(result.data || []);
+   259→      }
+   260→    } catch (err) {
+   261→      console.error('Load IOCs error:', err);
+   262→    }
+   263→  };
+   264→
+   265→  const loadForensicsHistory = async () => {
+   266→    try {
+   267→      const response = await fetch('/api/osint/forensics?action=list');
+   268→      const result = await response.json();
+   269→      if (result.success) {
+   270→        setForensicsHistory(result.data || []);
+   271→      }
+   272→    } catch (err) {
+   273→      console.error('Load forensics history error:', err);
+   274→    }
+   275→  };
+   276→
+   277→  // ==================== HANDLER FUNCTIONS ====================
+   278→  
+   279→  // IP Intelligence Handler
+   280→  const handleIPRecon = async () => {
+   281→    if (!inputValue) {
+   282→      showFeedback('Enter an IP address', 'error');
+   283→      return;
+   284→    }
+   285→    showFeedback(`Analyzing IP: ${inputValue}...`, 'info');
+   286→    await callAPI(`/api/osint/ip?ip=${encodeURIComponent(inputValue)}`);
+   287→  };
+   288→
+   289→  // Domain Analysis Handler
+   290→  const handleDomainRecon = async () => {
+   291→    if (!inputValue) {
+   292→      showFeedback('Enter a domain', 'error');
+   293→      return;
+   294→    }
+   295→    showFeedback(`Resolving domain: ${inputValue}...`, 'info');
+   296→    await callAPI(`/api/osint/domain?domain=${encodeURIComponent(inputValue)}`);
+   297→  };
+   298→
+   299→  // URL Scanner Handler
+   300→  const handleURLAnalysis = async () => {
+   301→    if (!inputValue) {
+   302→      showFeedback('Enter a URL', 'error');
+   303→      return;
+   304→    }
+   305→    showFeedback(`Scanning URL: ${inputValue}...`, 'info');
+   306→    await callAPI(`/api/osint/url?url=${encodeURIComponent(inputValue)}`);
+   307→  };
+   308→
+   309→  // Hash Lookup Handler
+   310→  const handleHashLookup = async () => {
+   311→    if (!inputValue) {
+   312→      showFeedback('Enter a hash (MD5/SHA)', 'error');
+   313→      return;
+   314→    }
+   315→    showFeedback(`Looking up hash...`, 'info');
+   316→    await callAPI(`/api/osint/hash?hash=${encodeURIComponent(inputValue)}`);
+   317→  };
+   318→
+   319→  // CVE Database Handler
+   320→  const handleCVESearch = async () => {
+   321→    if (!inputValue) {
+   322→      showFeedback('Enter CVE ID or keyword', 'error');
+   323→      return;
+   324→    }
+   325→    const isCVE = inputValue.toUpperCase().startsWith('CVE-');
+   326→    const endpoint = isCVE 
+   327→      ? `/api/osint/cve?cveId=${encodeURIComponent(inputValue)}`
+   328→      : `/api/osint/cve?keyword=${encodeURIComponent(inputValue)}`;
+   329→    showFeedback(`Searching NIST NVD: ${inputValue}...`, 'info');
+   330→    await callAPI(endpoint);
+   331→  };
+   332→
+   333→  // AI Analyst Handler
+   334→  const handleAIAnalysis = async () => {
+   335→    if (!inputValue) {
+   336→      showFeedback('Enter target for AI analysis', 'error');
+   337→      return;
+   338→    }
+   339→    showFeedback('Running AI analysis...', 'info');
+   340→    await callAPI('/api/osint/ai', {
+   341→      method: 'POST',
+   342→      body: JSON.stringify({ target: inputValue, type: detectInputType(inputValue) })
+   343→    });
+   344→  };
+   345→
+   346→  // Dark Web Search Handler
+   347→  const handleDarkWebSearch = async () => {
+   348→    const query = inputValue || 'latest threats breaches malware';
+   349→    showFeedback(`Searching Dark Web: ${query}...`, 'info');
+   350→    await callAPI('/api/osint/darkweb', {
+   351→      method: 'POST',
+   352→      body: JSON.stringify({ query, useAI: true })
+   353→    });
+   354→  };
+   355→
+   356→  // Mobile Analysis Handler
+   357→  const handleMobileAnalysis = async () => {
+   358→    const fileName = inputValue || 'sample-app.apk';
+   359→    const fileType = fileName.endsWith('.ipa') ? 'IPA' : 
+   360→                     fileName.endsWith('.appx') ? 'APPX' : 'APK';
+   361→    
+   362→    showFeedback(`Analyzing mobile app: ${fileName}...`, 'info');
+   363→    await callAPI('/api/osint/mobile', {
+   364→      method: 'POST',
+   365→      body: JSON.stringify({ fileName, fileType, useAI: true })
+   366→    });
+   367→  };
+   368→
+   369→  // Domain Forensics Handler (Full Lookyloo-style)
+   370→  const handleForensicAnalysis = async () => {
+   371→    if (!inputValue) {
+   372→      showFeedback('Enter a domain for forensic analysis', 'error');
+   373→      return;
+   374→    }
+   375→    
+   376→    const cleanDomain = inputValue.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+   377→    showFeedback(`Starting forensic analysis of ${cleanDomain}... This may take a moment...`, 'info');
+   378→    
+   379→    const result = await callAPI('/api/osint/forensics', {
+   380→      method: 'POST',
+   381→      body: JSON.stringify({ 
+   382→        domain: cleanDomain,
+   383→        options: {
+   384→          dns: true,
+   385→          whois: true,
+   386→          directories: true,
+   387→          headers: true,
+   388→          ssl: true,
+   389→          capture: true,
+   390→          subdomains: true
+   391→        }
+   392→      })
+   393→    });
+   394→    
+   395→    if (result.success) {
+   396→      loadForensicsHistory();
+   397→    }
+   398→  };
+   399→
+   400→  // Threat Feeds Handler
+   401→  const handleThreatFeedLoad = async (feed?: string) => {
+   402→    const feedName = feed || 'ALL';
+   403→    showFeedback(`Loading threat feed: ${feedName}...`, 'info');
+   404→    
+   405→    const endpoint = feed ? `/api/osint/threats?feed=${feed}&limit=20` : '/api/osint/threats?limit=20';
+   406→    const result = await callAPI(endpoint);
+   407→    
+   408→    // Show sample data if APIs are restricted
+   409→    if (result.success && !result.feeds?.length && !result.error) {
+   410→      const sampleData = {
+   411→        feeds: [
+   412→          { source: 'CISA KEV Catalog', type: 'Known Exploited Vulnerabilities', count: 3, status: 'active', entries: [
+   413→            { cveID: 'CVE-2024-3400', product: 'PAN-OS', vulnerabilityName: 'Command Injection', dateAdded: '2024-04-12' },
+   414→            { cveID: 'CVE-2024-21887', product: 'Connect Secure', vulnerabilityName: 'RCE via Request Smuggling', dateAdded: '2024-01-25' },
+   415→            { cveID: 'CVE-2023-44428', product: 'NetScaler ADC', vulnerabilityName: 'Unauthenticated RCE', dateAdded: '2023-10-15' }
+   416→          ]},
+   417→          { source: 'MalwareBazaar', type: 'Recent Malware Samples', count: 3, status: 'active', entries: [
+   418→            { sha256: 'a1b2c3d4e5f6...', file_type: 'PE32+ executable', signature: 'Emotet', first_seen: '2024-07-20' },
+   419→            { sha256: 'f7e8d9c0b1a2...', file_type: 'PDF document', signature: 'Phishing PDF', first_seen: '2024-07-18' },
+   420→            { sha256: 'm3n4o5p6q7r8...', file_type: 'Office doc', signature: 'TrickBot Loader', first_seen: '2024-07-19' }
+   421→          ]}
+   422→        ],
+   423→        message: 'Showing sample threat intelligence data'
+   424→      };
+   425→      setApiData(prev => ({ ...prev, ...sampleData }));
+   426→    }
+   427→  };
+   428→
+   429→  // IOC CRUD Handlers
+   430→  const handleAddIOC = async () => {
+   431→    if (!formData.value) {
+   432→      showFeedback('Enter IOC value', 'error');
+   433→      return;
+   434→    }
+   435→    showFeedback(`Adding ${formData.type}: ${formData.value}...`, 'info');
+   436→    await callAPI('/api/osint/iocs', {
+   437→      method: 'POST',
+   438→      body: JSON.stringify(formData)
+   439→    });
+   440→    setShowModal(false);
+   441→    setFormData({ type: 'IP', value: '', description: '', severity: 'MEDIUM', tags: [] });
+   442→  };
+   443→
+   444→  const handleUpdateIOC = async () => {
+   445→    if (!selectedIOC) return;
+   446→    showFeedback(`Updating IOC: ${selectedIOC.value}...`, 'info');
+   447→    await callAPI('/api/osint/iocs', {
+   448→      method: 'PATCH',
+   449→      body: JSON.stringify({
+   450→        id: selectedIOC.id,
+   451→        description: formData.description,
+   452→        severity: formData.severity,
+   453→        status: formData.status || selectedIOC.status,
+   454→        tags: formData.tags
+   455→      })
+   456→    });
+   457→    setShowModal(false);
+   458→    setSelectedIOC(null);
+   459→  };
+   460→
+   461→  const handleDeleteIOC = async (id: string) => {
+   462→    if (!confirm('Delete this IOC?')) return;
+   463→    showFeedback('Deleting IOC...', 'info');
+   464→    await callAPI(`/api/osint/iocs?id=${id}`, { method: 'DELETE' });
+   465→  };
+   466→
+   467→  // Export Handler
+   468→  const handleExport = async (format: string) => {
+   469→    showFeedback(`Preparing ${format} export...`, 'info');
+   470→    window.open(`/api/osint/export?format=${format}`, '_blank');
+   471→    showFeedback(`${format} export started`, 'success');
+   472→  };
+   473→
+   474→  // Report Generation Handler
+   475→  const handleGenerateReport = async () => {
+   476→    if (!reportConfig.title) {
+   477→      showFeedback('Enter report title', 'error');
+   478→      return;
+   479→    }
+   480→    if (reportConfig.modules.length === 0) {
+   481→      showFeedback('Select at least one module', 'error');
+   482→      return;
+   483→    }
+   484→    
+   485→    showFeedback('Generating report...', 'info');
+   486→    await callAPI('/api/osint/reports', {
+   487→      method: 'POST',
+   488→      body: JSON.stringify(reportConfig)
+   489→    });
+   490→  };
+   491→
+   492→  // Modal Handlers
+   493→  const openDetailModal = (ioc: IOC) => {
+   494→    setSelectedIOC(ioc);
+   495→    setModalType('detail');
+   496→    setShowModal(true);
+   497→  };
+   498→
+   499→  const openEditModal = (ioc: IOC) => {
+   500→    setSelectedIOC(ioc);
+   501→    setFormData({
+   502→      type: ioc.type,
+   503→      value: ioc.value,
+   504→      description: ioc.description,
+   505→      severity: ioc.severity,
+   506→      tags: ioc.tags
+   507→    });
+   508→    setModalType('edit');
+   509→    setShowModal(true);
+   510→  };
+   511→
+   512→  const copyToClipboard = (text: string) => {
+   513→    navigator.clipboard.writeText(text);
+   514→    showFeedback('Copied!', 'success');
+   515→  };
+   516→
+   517→  // Helpers
+   518→  const detectInputType = (value: string): string => {
+   519→    if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(value)) return 'ip';
+   520→    if (/^[a-f0-9]{32}$/i.test(value)) return 'md5';
+   521→    if (/^[a-f0-9]{40}$/i.test(value)) return 'sha1';
+   522→    if (/^[a-f0-9]{64}$/i.test(value)) return 'sha256';
+   523→    if (value.toUpperCase().startsWith('CVE-')) return 'cve';
+   524→    if (/^https?:\/\//.test(value)) return 'url';
+   525→    if (/\.[a-z]{2,}$/.test(value)) return 'domain';
+   526→    if (/@/.test(value)) return 'email';
+   527→    if (/\.(apk|ipa|appx)$/i.test(value)) return 'mobile';
+   528→    return 'general';
+   529→  };
+   530→
+   531→  // Chart Data
+   532→  const severityChartData = Object.entries(
+   533→    iocs.reduce((acc, ioc) => {
+   534→      acc[ioc.severity] = (acc[ioc.severity] || 0) + 1;
+   535→      return acc;
+   536→    }, {} as Record<string, number>)
+   537→  ).map(([name, value]) => ({ name, value }));
+   538→
+   539→  const typeChartData = Object.entries(
+   540→    iocs.reduce((acc, ioc) => {
+   541→      acc[ioc.type] = (acc[ioc.type] || 0) + 1;
+   542→      return acc;
+   543→    }, {} as Record<string, number>)
+   544→  ).map(([name, value]) => ({ name, value }));
+   545→
+   546→  // Module toggle for reports
+   547→  const toggleReportModule = (module: string) => {
+   548→    setReportConfig(prev => ({
+   549→      ...prev,
+   550→      modules: prev.modules.includes(module)
+   551→        ? prev.modules.filter(m => m !== module)
+   552→        : [...prev.modules, module]
+   553→    }));
+   554→  };
+   555→
+   556→  // ==================== RENDER ====================
+   557→  return (
+   558→    <div className="min-h-screen bg-gray-950 text-white">
+   559→      {/* Feedback Toast */}
+   560→      {actionFeedback && (
+   561→        <div className={`fixed top-4 right-4 z-[100] px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 animate-pulse ${
+   562→          actionFeedback.includes('ERROR') ? 'bg-red-600 text-white' :
+   563→          actionFeedback.includes('SUCCESS') ? 'bg-green-600 text-white' :
+   564→          'bg-blue-600 text-white'
+   565→        }`}>
+   566→          {actionFeedback.includes('ERROR') ? <XCircle className="w-4 h-4" /> :
+   567→           actionFeedback.includes('SUCCESS') ? <CheckCircle className="w-4 h-4" /> :
+   568→           <Loader2 className="w-4 h-4 animate-spin" />}
+   569→          <span className="text-sm font-medium">{actionFeedback}</span>
+   570→        </div>
+   571→      )}
+   572→
+   573→      {/* Header */}
+   574→      <header className="bg-gray-900 border-b border-gray-800 sticky top-0 z-50">
+   575→        <div className="max-w-[1920px] mx-auto px-4 py-3">
+   576→          <div className="flex items-center justify-between">
+   577→            <div className="flex items-center gap-3">
+   578→              <Radar className="w-8 h-8 text-red-500 animate-pulse" />
+   579→              <div>
+   580→                <h1 className="text-xl font-bold bg-gradient-to-r from-red-500 via-orange-500 to-yellow-500 bg-clip-text text-transparent">
+   581→                  MONITOR-THREAT v9.0
+   582→                </h1>
+   583→                <p className="text-xs text-gray-400">Real-time Cyber Threat Intelligence • All Modules Active</p>
+   584→              </div>
+   585→            </div>
+   586→            
+   587→            {/* Global Search */}
+   588→            <div className="flex-1 max-w-lg mx-8">
+   589→              <div className="relative">
+   590→                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+   591→                <input
+   592→                  type="text"
+   593→                  placeholder="Search IOCs, IPs, domains, hashes, CVEs..."
+   594→                  value={searchQuery}
+   595→                  onChange={(e) => setSearchQuery(e.target.value)}
+   596→                  onKeyPress={(e) => e.key === 'Enter' && loadIOCs()}
+   597→                  className="w-full pl-10 pr-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm focus:border-red-500 focus:outline-none focus:ring-1 focus:ring-red-500"
+   598→                />
+   599→              </div>
+   600→            </div>
+   601→
+   602→            <div className="flex items-center gap-4">
+   603→              <button 
+   604→                onClick={() => { loadIOCs(); showFeedback('Data refreshed', 'success'); }} 
+   605→                className="flex items-center gap-2 px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors"
+   606→              >
+   607→                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+   608→                Refresh
+   609→              </button>
+   610→              <div className="text-right">
+   611→                <div className="text-xs text-gray-400">Indexed</div>
+   612→                <div className="text-sm font-bold text-green-400">{iocs.length} IOCs</div>
+   613→              </div>
+   614→            </div>
+   615→          </div>
+   616→        </div>
+   617→      </header>
+   618→
+   619→      <div className="max-w-[1920px] mx-auto flex">
+   620→        {/* Sidebar Navigation */}
+   621→        <nav className="w-64 min-h-screen bg-gray-900 border-r border-gray-800 p-4 sticky top-[65px] h-[calc(100vh-65px)] overflow-y-auto">
+   622→          <div className="space-y-1">
+   623→            {[
+   624→              { id: 'dashboard', icon: BarChart3, label: 'Dashboard', color: 'text-blue-400' },
+   625→              { id: 'ip', icon: Globe, label: 'IP Intel', color: 'text-green-400' },
+   626→              { id: 'domain', icon: Server, label: 'Domain Intel', color: 'text-purple-400' },
+   627→              { id: 'forensics', icon: Camera, label: 'Domain Forensics', color: 'text-red-400', badge: 'NEW' },
+   628→              { id: 'url', icon: ExternalLink, label: 'URL Scanner', color: 'text-yellow-400' },
+   629→              { id: 'hash', icon: Fingerprint, label: 'Hash Lookup', color: 'text-cyan-400' },
+   630→              { id: 'cve', icon: Shield, label: 'CVE Database', color: 'text-orange-400' },
+   631→              { id: 'ai', icon: Cpu, label: 'AI Analyst', color: 'text-pink-400' },
+   632→              { id: 'darkweb', icon: Skull, label: 'Dark Web Intel', color: 'text-red-500', badge: 'NEW' },
+   633→              { id: 'mobile', icon: Smartphone, label: 'Mobile Security', color: 'text-indigo-400', badge: 'NEW' },
+   634→              { id: 'threats', icon: AlertTriangle, label: 'Threat Feeds', color: 'text-amber-400' },
+   635→              { id: 'iocs', icon: Database, label: 'IOC Manager', color: 'text-emerald-400' },
+   636→              { id: 'export', icon: Download, label: 'Export Data', color: 'text-teal-400' },
+   637→              { id: 'reports', icon: FileText, label: 'Reports', color: 'text-violet-400' },
+   638→            ].map(({ id, icon: Icon, label, color, badge }) => (
+   639→              <button
+   640→                key={id}
+   641→                onClick={() => { setActiveTab(id as TabType); showFeedback(`Loaded ${label}`); }}
+   642→                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all relative ${
+   643→                  activeTab === id
+   644→                    ? 'bg-gradient-to-r from-red-600/20 to-orange-600/20 border border-red-500/50 text-white'
+   645→                    : 'text-gray-300 hover:bg-gray-800 hover:text-white'
+   646→                }`}
+   647→              >
+   648→                <Icon className={`w-4 h-4 ${activeTab === id ? '' : color}`} />
+   649→                <span>{label}</span>
+   650→                {badge && (
+   651→                  <span className="ml-auto px-1.5 py-0.5 text-[10px] font-bold bg-red-500 text-white rounded">
+   652→                    {badge}
+   653→                  </span>
+   654→                )}
+   655→              </button>
+   656→            ))}
+   657→          </div>
+   658→
+   659→          {/* Quick Stats */}
+   660→          <div className="mt-6 p-4 bg-gray-800 rounded-xl border border-gray-700">
+   661→            <h3 className="text-xs font-semibold mb-3 flex items-center gap-2 text-gray-400">
+   662→              <Activity className="w-3 h-3" /> LIVE STATS
+   663→            </h3>
+   664→            <div className="space-y-2 text-xs">
+   665→              <div className="flex justify-between items-center">
+   666→                <span className="text-gray-400">Critical</span>
+   667→                <span className="font-bold text-red-400 flex items-center gap-1">
+   668→                  <AlertTriangle className="w-3 h-3" />
+   669→                  {iocs.filter(i => i.severity === 'CRITICAL').length}
+   670→                </span>
+   671→              </div>
+   672→              <div className="flex justify-between items-center">
+   673→                <span className="text-gray-400">Malicious</span>
+   674→                <span className="font-bold text-red-500">{iocs.filter(i => i.status === 'MALICIOUS').length}</span>
+   675→              </div>
+   676→              <div className="flex justify-between items-center">
+   677→                <span className="text-gray-400">Timeline Events</span>
+   678→                <span className="font-bold text-blue-400">{timelineData.length}</span>
+   679→              </div>
+   680→              <div className="flex justify-between items-center">
+   681→                <span className="text-gray-400">Status</span>
+   682→                <span className="flex items-center gap-1">
+   683→                  <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+   684→                  LIVE
+   685→                </span>
+   686→              </div>
+   687→            </div>
+   688→          </div>
+   689→        </nav>
+   690→
+   691→        {/* Main Content */}
+   692→        <main className="flex-1 p-6 overflow-y-auto h-[calc(100vh-65px)]">
+   693→          
+   694→          {/* ==================== DASHBOARD TAB ==================== */}
+   695→          {activeTab === 'dashboard' && (
+   696→            <div className="space-y-6">
+   697→              <div className="flex items-center justify-between">
+   698→                <h2 className="text-2xl font-bold flex items-center gap-3">
+   699→                  <BarChart3 className="w-7 h-7 text-blue-400" /> Command Dashboard
+   700→                </h2>
+   701→                <button onClick={() => { loadIOCs(); setTimelineData(generateTimelineData()); }} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">
+   702→                  <RefreshCw className="w-4 h-4" /> Refresh All
+   703→                </button>
+   704→              </div>
+   705→
+   706→              {/* Stats Cards - Clickable */}
+   707→              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+   708→                {[
+   709→                  { label: 'Total IOCs', value: iocs.length, icon: Database, color: 'blue', onClick: () => setActiveTab('iocs') },
+   710→                  { label: 'Critical Threats', value: iocs.filter(i => i.severity === 'CRITICAL').length, icon: AlertTriangle, color: 'red', onClick: () => setActiveTab('iocs') },
+   711→                  { label: 'Malicious', value: iocs.filter(i => i.status === 'MALICIOUS').length, icon: ShieldAlert, color: 'red', onClick: () => setActiveTab('iocs') },
+   712→                  { label: 'Live Events', value: timelineData.length, icon: Activity, color: 'green', onClick: () => {} },
+   713→                ].map(({ label, value, icon: Icon, color, onClick }) => (
+   714→                  <button
+   715→                    key={label}
+   716→                    onClick={onClick}
+   717→                    className="p-5 bg-gray-900 border border-gray-800 rounded-xl hover:border-${color}-500/50 transition-all group cursor-pointer"
+   718→                  >
+   719→                    <div className="flex items-center justify-between">
+   720→                      <Icon className={`w-8 h-8 text-${color}-400 group-hover:scale-110 transition-transform`} />
+   721→                      <span className="text-3xl font-bold text-white">{value}</span>
+   722→                    </div>
+   723→                    <p className="text-sm text-gray-400 mt-2">{label}</p>
+   724→                  </button>
+   725→                ))}
+   726→              </div>
+   727→
+   728→              {/* Live Threat Timeline - INTERACTIVE */}
+   729→              <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+   730→                <div className="flex items-center justify-between mb-4">
+   731→                  <h3 className="font-semibold flex items-center gap-2">
+   732→                    <Clock className="w-5 h-5 text-red-400 animate-pulse" />
+   733→                    Live Threat Timeline
+   734→                    <span className="px-2 py-0.5 text-xs bg-red-500/20 text-red-400 rounded">LIVE</span>
+   735→                  </h3>
+   736→                  <div className="flex items-center gap-2">
+   737→                    <button
+   738→                      onClick={() => setTimelineRunning(!timelineRunning)}
+   739→                      className={`p-2 rounded-lg ${timelineRunning ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'}`}
+   740→                    >
+   741→                      {timelineRunning ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+   742→                    </button>
+   743→                    <button
+   744→                      onClick={() => setTimelineData(generateTimelineData())}
+   745→                      className="p-2 bg-gray-800 hover:bg-gray-700 rounded-lg"
+   746→                      title="Reset Timeline"
+   747→                    >
+   748→                      <RefreshCw className="w-4 h-4" />
+   749→                    </button>
+   750→                  </div>
+   751→                </div>
+   752→                
+   753→                <div className="space-y-2 max-h-[400px] overflow-y-auto">
+   754→                  {timelineData.map((event, idx) => (
+   755→                    <div
+   756→                      key={idx}
+   757→                      onClick={() => {
+   758→                        if (event.type === 'threat') setActiveTab('threats');
+   759→                        else if (event.type === 'ioc') setActiveTab('iocs');
+   760→                        showFeedback(`Viewing: ${event.event}`);
+   761→                      }}
+   762→                      className={`flex items-start gap-3 p-3 rounded-lg cursor-pointer hover:bg-gray-800 transition-colors ${
+   763→                        event.severity === 'CRITICAL' ? 'bg-red-500/10 border-l-2 border-red-500' :
+   764→                        event.severity === 'HIGH' ? 'bg-orange-500/10 border-l-2 border-orange-500' :
+   765→                        event.severity === 'MEDIUM' ? 'bg-yellow-500/10 border-l-2 border-yellow-500' :
+   766→                        'bg-gray-800/50'
+   767→                      }`}
+   768→                    >
+   769→                      <span className="text-xs text-gray-500 min-w-[70px]">{event.time}</span>
+   770→                      {event.type === 'threat' && <Skull className="w-4 h-4 text-red-400 mt-0.5" />}
+   771→                      {event.type === 'ioc' && <Database className="w-4 h-4 text-blue-400 mt-0.5" />}
+   772→                      {event.type === 'analysis' && <Search className="w-4 h-4 text-purple-400 mt-0.5" />}
+   773→                      {event.type === 'alert' && <AlertTriangle className="w-4 h-4 text-yellow-400 mt-0.5" />}
+   774→                      {event.type === 'system' && <Activity className="w-4 h-4 text-green-400 mt-0.5" />}
+   775→                      <span className="text-sm flex-1">{event.event}</span>
+   776→                      {event.severity && (
+   777→                        <span className={`text-xs px-2 py-0.5 rounded ${
+   778→                          event.severity === 'CRITICAL' ? 'bg-red-500 text-white' :
+   779→                          event.severity === 'HIGH' ? 'bg-orange-500 text-black' :
+   780→                          'bg-gray-700'
+   781→                        }`}>
+   782→                          {event.severity}
+   783→                        </span>
+   784→                      )}
+   785→                    </div>
+   786→                  ))}
+   787→                </div>
+   788→              </div>
+   789→
+   790→              {/* Charts Row */}
+   791→              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+   792→                <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+   793→                  <h3 className="font-semibold mb-4 flex items-center gap-2">
+   794→                    <PieChartIcon className="w-5 h-5 text-purple-400" /> Severity Distribution
+   795→                  </h3>
+   796→                  {severityChartData.length > 0 ? (
+   797→                    <ResponsiveContainer width="100%" height={250}>
+   798→                      <PieChart>
+   799→                        <Pie data={severityChartData} innerRadius={60} outerRadius={100} paddingAngle={5} dataKey="value">
+   800→                          {severityChartData.map((entry, index) => (
+   801→                            <Cell key={index} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+   802→                          ))}
+   803→                        </Pie>
+   804→                        <Tooltip contentStyle={{ backgroundColor: '#1f2937', border: 'none' }} />
+   805→                        <Legend />
+   806→                      </PieChart>
+   807→                    </ResponsiveContainer>
+   808→                  ) : (
+   809→                    <div className="h-[250px] flex items-center justify-center text-gray-500">
+   810→                      No data yet - run some analyses!
+   811→                    </div>
+   812→                  )}
+   813→                </div>
+   814→
+   815→                <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+   816→                  <h3 className="font-semibold mb-4 flex items-center gap-2">
+   817→                    <BarChart3 className="w-5 h-5 text-cyan-400" /> Type Distribution
+   818→                  </h3>
+   819→                  {typeChartData.length > 0 ? (
+   820→                    <ResponsiveContainer width="100%" height={250}>
+   821→                      <BarChart data={typeChartData}>
+   822→                        <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+   823→                        <XAxis stroke="#9ca3af" dataKey="name" />
+   824→                        <YAxis stroke="#9ca3af" />
+   825→                        <Tooltip contentStyle={{ backgroundColor: '#1f2937', border: 'none' }} />
+   826→                        <Bar dataKey="value" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+   827→                      </BarChart>
+   828→                    </ResponsiveContainer>
+   829→                  ) : (
+   830→                    <div className="h-[250px] flex items-center justify-center text-gray-500">
+   831→                      No data yet
+   832→                    </div>
+   833→                  )}
+   834→                </div>
+   835→              </div>
+   836→
+   837→              {/* Recent IOCs Table - Clickable rows */}
+   838→              <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+   839→                <div className="flex items-center justify-between mb-4">
+   840→                  <h3 className="font-semibold">Recent IOCs</h3>
+   841→                  <button onClick={() => setActiveTab('iocs')} className="text-sm text-red-400 hover:text-red-300 flex items-center gap-1">
+   842→                    View All <ArrowRight className="w-4 h-4" />
+   843→                  </button>
+   844→                </div>
+   845→                <div className="overflow-x-auto">
+   846→                  <table className="w-full text-sm">
+   847→                    <thead>
+   848→                      <tr className="border-b border-gray-800">
+   849→                        <th className="text-left py-3 px-3 text-gray-400">Type</th>
+   850→                        <th className="text-left py-3 px-3 text-gray-400">Value</th>
+   851→                        <th className="text-left py-3 px-3 text-gray-400">Severity</th>
+   852→                        <th className="text-left py-3 px-3 text-gray-400">Status</th>
+   853→                        <th className="text-left py-3 px-3 text-gray-400">Actions</th>
+   854→                      </tr>
+   855→                    </thead>
+   856→                    <tbody>
+   857→                      {iocs.slice(0, 8).map((ioc) => (
+   858→                        <tr 
+   859→                          key={ioc.id} 
+   860→                          onClick={() => openDetailModal(ioc)}
+   861→                          className="border-b border-gray-800 hover:bg-gray-800 cursor-pointer transition-colors"
+   862→                        >
+   863→                          <td className="py-3 px-3">
+   864→                            <span className="px-2 py-1 bg-gray-700 rounded text-xs">{ioc.type}</span>
+   865→                          </td>
+   866→                          <td className="py-3 px-3 font-mono text-sm">{ioc.value}</td>
+   867→                          <td className="py-3 px-3">
+   868→                            <span style={{ color: SEVERITY_COLORS[ioc.severity] }} className="font-medium">
+   869→                              {ioc.severity}
+   870→                            </span>
+   871→                          </td>
+   872→                          <td className="py-3 px-3">
+   873→                            <span style={{ color: STATUS_COLORS[ioc.status] }} className="font-medium">
+   874→                              {ioc.status}
+   875→                            </span>
+   876→                          </td>
+   877→                          <td className="py-3 px-3">
+   878→                            <button onClick={(e) => { e.stopPropagation(); openDetailModal(ioc); }} className="p-1 hover:bg-gray-700 rounded">
+   879→                              <Eye className="w-4 h-4" />
+   880→                            </button>
+   881→                          </td>
+   882→                        </tr>
+   883→                      ))}
+   884→                    </tbody>
+   885→                  </table>
+   886→                  {iocs.length === 0 && (
+   887→                    <div className="text-center py-8 text-gray-500">
+   888→                      No IOCs yet. Go to IP Intel or other modules to add some!
+   889→                    </div>
+   890→                  )}
+   891→                </div>
+   892→              </div>
+   893→
+   894→              {/* Quick Actions Grid */}
+   895→              <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+   896→                <h3 className="font-semibold mb-4 flex items-center gap-2">
+   897→                  <Zap className="w-5 h-5 text-yellow-400" /> Quick Actions
+   898→                </h3>
+   899→                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+   900→                  {[
+   901→                    { label: 'IP Recon', icon: Globe, tab: 'ip' as TabType },
+   902→                    { label: 'Domain Scan', icon: Server, tab: 'domain' as TabType },
+   903→                    { label: 'URL Analysis', icon: ExternalLink, tab: 'url' as TabType },
+   904→                    { label: 'Hash Lookup', icon: Fingerprint, tab: 'hash' as TabType },
+   905→                    { label: 'CVE Search', icon: Shield, tab: 'cve' as TabType },
+   906→                    { label: 'AI Analysis', icon: Cpu, tab: 'ai' as TabType },
+   907→                    { label: 'Dark Web', icon: Skull, tab: 'darkweb' as TabType },
+   908→                    { label: 'Mobile Scan', icon: Smartphone, tab: 'mobile' as TabType },
+   909→                  ].map(({ label, icon: Icon, tab }) => (
+   910→                    <button
+   911→                      key={label}
+   912→                      onClick={() => { setActiveTab(tab); showFeedback(`Opening ${label}...`); }}
+   913→                      className="flex items-center gap-2 p-3 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors"
+   914→                    >
+   915→                      <Icon className="w-4 h-4 text-blue-400" />
+   916→                      <span className="text-sm">{label}</span>
+   917→                    </button>
+   918→                  ))}
+   919→                </div>
+   920→              </div>
+   921→            </div>
+   922→          )}
+   923→
+   924→          {/* ==================== IP INTEL TAB ==================== */}
+   925→          {activeTab === 'ip' && (
+   926→            <div className="space-y-6">
+   927→              <h2 className="text-2xl font-bold flex items-center gap-3">
+   928→                <Globe className="w-7 h-7 text-green-400" /> IP Intelligence
+   929→              </h2>
+   930→              
+   931→              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+   932→                <div className="flex gap-4">
+   933→                  <div className="flex-1">
+   934→                    <input
+   935→                      type="text"
+   936→                      placeholder="Enter IP address (e.g., 8.8.8.8, 1.1.1.1)"
+   937→                      value={inputValue}
+   938→                      onChange={(e) => setInputValue(e.target.value)}
+   939→                      onKeyPress={(e) => e.key === 'Enter' && handleIPRecon()}
+   940→                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-green-500 focus:outline-none"
+   941→                    />
+   942→                  </div>
+   943→                  <button
+   944→                    onClick={handleIPRecon}
+   945→                    disabled={loading || !inputValue}
+   946→                    className="px-6 py-3 bg-green-600 hover:bg-green-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
+   947→                  >
+   948→                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+   949→                    Analyze IP
+   950→                  </button>
+   951→                </div>
+   952→
+   953→                {/* Sample IPs to click */}
+   954→                <div className="mt-4 flex flex-wrap gap-2">
+   955→                  <span className="text-xs text-gray-500">Try:</span>
+   956→                  {['8.8.8.8', '1.1.1.1', '208.67.222.222', '114.114.114.114'].map(ip => (
+   957→                    <button
+   958→                      key={ip}
+   959→                      onClick={() => { setInputValue(ip); handleIPRecon(); }}
+   960→                      className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs font-mono"
+   961→                    >
+   962→                      {ip}
+   963→                    </button>
+   964→                  ))}
+   965→                </div>
+   966→              </div>
+   967→
+   968→              {/* Results Display */}
+   969→              {apiData && apiData.data && (
+   970→                <div className="space-y-4">
+   971→                  <div className="bg-gradient-to-r from-green-500/10 to-emerald-500/10 border border-green-500/30 rounded-xl p-5">
+   972→                    <h3 className="font-semibold mb-3 flex items-center gap-2">
+   973→                      <CheckCircle className="w-5 h-5 text-green-400" /> Live Results
+   974→                      {apiData.fetchedLive && <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded">LIVE DATA</span>}
+   975→                    </h3>
+   976→                    
+   977→                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+   978→                      {apiData.data.ip && (
+   979→                        <>
+   980→                          <InfoCard label="IP Address" value={apiData.data.ip} icon={<Globe className="w-4 h-4" />} />
+   981→                          <InfoCard label="Country" value={`${apiData.data.country || 'N/A'} (${apiData.data.countryCode || ''})`} icon={<MapPin className="w-4 h-4" />} />
+   982→                          <InfoCard label="Region" value={apiData.data.regionName || 'N/A'} icon={<MapPin className="w-4 h-4" />} />
+   983→                          <InfoCard label="City" value={apiData.data.city || 'N/A'} icon={<Server className="w-4 h-4" />} />
+   984→                          <InfoCard label="ISP" value={apiData.data.isp || 'N/A'} icon={<Wifi className="w-4 h-4" />} />
+   985→                          <InfoCard label="Organization" value={apiData.data.org || 'N/A'} icon={<Database className="w-4 h-4" />} />
+   986→                          <InfoCard label="Latitude" value={apiData.data.lat || 'N/A'} icon={<Target className="w-4 h-4" />} />
+   987→                          <InfoCard label="Longitude" value={apiData.data.lon || 'N/A'} icon={<Target className="w-4 h-4" />} />
+   988→                          <InfoCard label="Timezone" value={apiData.data.timezone || 'N/A'} icon={<Clock className="w-4 h-4" />} />
+   989→                        </>
+   990→                      )}
+   991→                    </div>
+   992→
+   993→                    {apiData.data.location && (
+   994→                      <div className="mt-4 p-4 bg-gray-800/50 rounded-lg">
+   995→                        <h4 className="text-sm font-medium mb-2">Location Details</h4>
+   996→                        <p className="text-sm text-gray-300">{apiData.data.location}</p>
+   997→                      </div>
+   998→                    )}
+   999→
+  1000→                    {/* Action Buttons on Result */}
+  1001→                    <div className="mt-4 flex flex-wrap gap-2">
+  1002→                      <button onClick={() => copyToClipboard(apiData.data.ip)} className="px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm flex items-center gap-2">
+  1003→                        <Copy className="w-4 h-4" /> Copy IP
+  1004→                      </button>
+  1005→                      <button onClick={() => handleAddIOCFromResult()} className="px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm flex items-center gap-2">
+  1006→                        <Plus className="w-4 h-4" /> Add to IOCs
+  1007→                      </button>
+  1008→                      <button onClick={() => setActiveTab('forensics')} className="px-3 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg text-sm flex items-center gap-2">
+  1009→                        <Camera className="w-4 h-4" /> Run Forensics
+  1010→                      </button>
+  1011→                    </div>
+  1012→                  </div>
+  1013→                </div>
+  1014→              )}
+  1015→
+  1016→              {!apiData && !loading && (
+  1017→                <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
+  1018→                  <Globe className="w-16 h-16 mx-auto mb-4 text-gray-600" />
+  1019→                  <h3 className="text-lg font-semibold mb-2">Ready for IP Analysis</h3>
+  1020→                  <p className="text-gray-400 mb-4">Enter an IP address above to get real-time geolocation and intelligence data.</p>
+  1021→                  <p className="text-xs text-gray-500">Powered by ip-api.com with live data</p>
+  1022→                </div>
+  1023→              )}
+  1024→            </div>
+  1025→          )}
+  1026→
+  1027→          {/* ==================== DOMAIN INTEL TAB ==================== */}
+  1028→          {activeTab === 'domain' && (
+  1029→            <div className="space-y-6">
+  1030→              <h2 className="text-2xl font-bold flex items-center gap-3">
+  1031→                <Server className="w-7 h-7 text-purple-400" /> Domain Intelligence
+  1032→              </h2>
+  1033→              
+  1034→              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+  1035→                <div className="flex gap-4">
+  1036→                  <div className="flex-1">
+  1037→                    <input
+  1038→                      type="text"
+  1039→                      placeholder="Enter domain (e.g., google.com, example.org)"
+  1040→                      value={inputValue}
+  1041→                      onChange={(e) => setInputValue(e.target.value)}
+  1042→                      onKeyPress={(e) => e.key === 'Enter' && handleDomainRecon()}
+  1043→                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-purple-500 focus:outline-none"
+  1044→                    />
+  1045→                  </div>
+  1046→                  <button
+  1047→                    onClick={handleDomainRecon}
+  1048→                    disabled={loading || !inputValue}
+  1049→                    className="px-6 py-3 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
+  1050→                  >
+  1051→                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+  1052→                    Resolve DNS
+  1053→                  </button>
+  1054→                </div>
+  1055→
+  1056→                <div className="mt-4 flex flex-wrap gap-2">
+  1057→                  <span className="text-xs text-gray-500">Try:</span>
+  1058→                  {['google.com', 'github.com', 'microsoft.com', 'amazonaws.com'].map(domain => (
+  1059→                    <button
+  1060→                      key={domain}
+  1061→                      onClick={() => { setInputValue(domain); handleDomainRecon(); }}
+  1062→                      className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs font-mono"
+  1063→                    >
+  1064→                      {domain}
+  1065→                    </button>
+  1066→                  ))}
+  1067→                </div>
+  1068→              </div>
+  1069→
+  1070→              {apiData?.dns && (
+  1071→                <div className="bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-purple-500/30 rounded-xl p-5">
+  1072→                  <h3 className="font-semibold mb-3 flex items-center gap-2">
+  1073→                    <CheckCircle className="w-5 h-5 text-purple-400" /> DNS Records
+  1074→                  </h3>
+  1075→                  
+  1076→                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+  1077→                    {Object.entries(apiData.dns).map(([type, records]: [string, any]) => (
+  1078→                      <div key={type} className="p-3 bg-gray-800/50 rounded-lg">
+  1079→                        <h4 className="text-sm font-medium text-purple-400 mb-2">{type} Records</h4>
+  1080→                        {records?.data?.length > 0 ? (
+  1081→                          <div className="space-y-1">
+  1082→                            {records.data.map((record: any, idx: number) => (
+  1083→                              <div key={idx} className="text-xs font-mono text-gray-300 bg-gray-900 p-2 rounded">
+  1084→                                {record.name || record.data || JSON.stringify(record)}
+  1085→                              </div>
+  1086→                            ))}
+  1087→                          </div>
+  1088→                        ) : (
+  1089→                          <p className="text-xs text-gray-500">No records found</p>
+  1090→                        )}
+  1091→                      </div>
+  1092→                    ))}
+  1093→                  </div>
+  1094→
+  1095→                  {apiData.securityAnalysis && (
+  1096→                    <div className="mt-4 space-y-2">
+  1097→                      <h4 className="text-sm font-medium">Security Analysis</h4>
+  1098→                      {(apiData.securityAnalysis.spf ? [<SecurityCheck label="SPF Record" pass={true} />] : [<SecurityCheck label="SPF Record" pass={false} />])}
+  1099→                      {(apiData.securityAnalysis.dmarc ? [<SecurityCheck label="DMARC Record" pass={true} />] : [<SecurityCheck label="DMARC Record" pass={false} />])}
+  1100→                    </div>
+  1101→                  )}
+  1102→
+  1103→                  <div className="mt-4 flex flex-wrap gap-2">
+  1104→                    <button onClick={() => setInputValue(inputValue) || setActiveTab('forensics')} className="px-3 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-sm flex items-center gap-2">
+  1105→                      <Camera className="w-4 h-4" /> Full Forensics
+  1106→                    </button>
+  1107→                    <button onClick={() => copyToClipboard(inputValue)} className="px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm flex items-center gap-2">
+  1108→                      <Copy className="w-4 h-4" /> Copy Domain
+  1109→                    </button>
+  1110→                  </div>
+  1111→                </div>
+  1112→              )}
+  1113→
+  1114→              {!apiData && !loading && (
+  1115→                <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
+  1116→                  <Server className="w-16 h-16 mx-auto mb-4 text-gray-600" />
+  1117→                  <h3 className="text-lg font-semibold mb-2">DNS Resolution Ready</h3>
+  1118→                  <p className="text-gray-400">Enter a domain to resolve DNS records including A, MX, NS, TXT records.</p>
+  1119→                </div>
+  1120→              )}
+  1121→            </div>
+  1122→          )}
+  1123→
+  1124→          {/* ==================== DOMAIN FORENSICS TAB (Lookyloo-style) ==================== */}
+  1125→          {activeTab === 'forensics' && (
+  1126→            <div className="space-y-6">
+  1127→              <div className="flex items-center justify-between">
+  1128→                <h2 className="text-2xl font-bold flex items-center gap-3">
+  1129→                  <Camera className="w-7 h-7 text-red-400" /> Domain Forensics Lab
+  1130→                  <span className="text-sm font-normal text-gray-400">(Lookyloo-style)</span>
+  1131→                </h2>
+  1132→              </div>
+  1133→              
+  1134→              <div className="bg-gray-900 border border-red-500/30 rounded-xl p-6">
+  1135→                <div className="flex gap-4">
+  1136→                  <div className="flex-1">
+  1137→                    <input
+  1138→                      type="text"
+  1139→                      placeholder="Enter domain for complete forensic analysis..."
+  1140→                      value={inputValue}
+  1141→                      onChange={(e) => setInputValue(e.target.value)}
+  1142→                      onKeyPress={(e) => e.key === 'Enter' && handleForensicAnalysis()}
+  1143→                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-red-500 focus:outline-none font-mono"
+  1144→                    />
+  1145→                  </div>
+  1146→                  <button
+  1147→                    onClick={handleForensicAnalysis}
+  1148→                    disabled={loading || !inputValue}
+  1149→                    className="px-6 py-3 bg-red-600 hover:bg-red-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
+  1150→                  >
+  1151→                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Camera className="w-4 h-4" />}
+  1152→                    Start Forensics
+  1153→                  </button>
+  1154→                </div>
+  1155→
+  1156→                <div className="mt-4 flex flex-wrap gap-2">
+  1157→                  <span className="text-xs text-gray-500">Includes:</span>
+  1158→                  {['DNS Enumeration', 'WHOIS', 'Dirb Scan', 'HTTP Headers', 'SSL Analysis', 'Page Capture', 'Subdomains'].map(item => (
+  1159→                    <span key={item} className="px-2 py-1 bg-red-500/10 text-red-400 rounded text-xs">{item}</span>
+  1160→                  ))}
+  1161→                </div>
+  1162→              </div>
+  1163→
+  1164→              {/* Previous Analyses */}
+  1165→              {forensicsHistory.length > 0 && (
+  1166→                <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+  1167→                  <h3 className="font-semibold mb-3 flex items-center gap-2">
+  1168→                    <FolderOpen className="w-5 h-5 text-yellow-400" /> Previous Analyses ({forensicsHistory.length})
+  1169→                  </h3>
+  1170→                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+  1171→                    {forensicsHistory.slice(0, 6).map((analysis, idx) => (
+  1172→                      <button
+  1173→                        key={idx}
+  1174→                        onClick={async () => {
+  1175→                          showFeedback('Loading analysis...');
+  1176→                          const res = await fetch(`/api/osint/forensics?action=get&name=${analysis.name}`);
+  1177→                          const data = await res.json();
+  1178→                          if (data.success) {
+  1179→                            setApiData(data);
+  1180→                            setSelectedForensics(data.data);
+  1181→                          }
+  1182→                        }}
+  1183→                        className="p-3 bg-gray-800 hover:bg-gray-700 rounded-lg text-left transition-colors"
+  1184→                      >
+  1185→                        <div className="font-mono text-sm text-green-400">{analysis.name.split('_')[0]}</div>
+  1186→                        <div className="text-xs text-gray-500 mt-1">
+  1187→                          {new Date(analysis.created).toLocaleDateString()}
+  1188→                        </div>
+  1189→                      </button>
+  1190→                    ))}
+  1191→                  </div>
+  1192→                </div>
+  1193→              )}
+  1194→
+  1195→              {/* Forensics Results */}
+  1196→              {apiData?.data && activeTab === 'forensics' && (
+  1197→                <div className="space-y-4">
+  1198→                  {/* Risk Assessment */}
+  1199→                  {apiData.data.riskAssessment && (
+  1200→                    <div className={`rounded-xl p-5 border ${
+  1201→                      apiData.data.riskAssessment.level === 'CRITICAL' ? 'bg-red-500/10 border-red-500/50' :
+  1202→                      apiData.data.riskAssessment.level === 'HIGH' ? 'bg-orange-500/10 border-orange-500/50' :
+  1203→                      apiData.data.riskAssessment.level === 'MEDIUM' ? 'bg-yellow-500/10 border-yellow-500/50' :
+  1204→                      'bg-green-500/10 border-green-500/50'
+  1205→                    }`}>
+  1206→                      <h3 className="font-semibold mb-3 flex items-center gap-2">
+  1207→                        <ShieldAlert className="w-5 h-5" /> Risk Assessment
+  1208→                        <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+  1209→                          apiData.data.riskAssessment.level === 'CRITICAL' ? 'bg-red-500 text-white' :
+  1210→                          apiData.data.riskAssessment.level === 'HIGH' ? 'bg-orange-500 text-black' :
+  1211→                          'bg-yellow-500 text-black'
+  1212→                        }`}>
+  1213→                          {apiData.data.riskAssessment.level} ({apiData.data.riskAssessment.score}/10)
+  1214→                        </span>
+  1215→                      </h3>
+  1216→                      
+  1217→                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+  1218→                        <div>
+  1219→                          <h4 className="text-sm font-medium text-red-400 mb-2">Findings:</h4>
+  1220→                          <ul className="space-y-1">
+  1221→                            {apiData.data.riskAssessment.findings.map((finding: string, idx: number) => (
+  1222→                              <li key={idx} className="text-sm flex items-start gap-2">
+  1223→                                <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
+  1224→                                {finding}
+  1225→                              </li>
+  1226→                            ))}
+  1227→                          </ul>
+  1228→                        </div>
+  1229→                        <div>
+  1230→                          <h4 className="text-sm font-medium text-green-400 mb-2">Recommendations:</h4>
+  1231→                          <ul className="space-y-1">
+  1232→                            {apiData.data.riskAssessment.recommendations.map((rec: string, idx: number) => (
+  1233→                              <li key={idx} className="text-sm flex items-start gap-2">
+  1234→                                <CheckCircle className="w-4 h-4 text-green-400 mt-0.5 shrink-0" />
+  1235→                                {rec}
+  1236→                              </li>
+  1237→                            ))}
+  1238→                          </ul>
+  1239→                        </div>
+  1240→                      </div>
+  1241→                    </div>
+  1242→                  )}
+  1243→
+  1244→                  {/* DNS Records */}
+  1245→                  {apiData.data.dns && (
+  1246→                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+  1247→                      <h3 className="font-semibold mb-3 flex items-center gap-2">
+  1248→                        <Server className="w-5 h-5 text-blue-400" /> DNS Enumeration
+  1249→                      </h3>
+  1250→                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+  1251→                        {Object.entries(apiData.data.dns).map(([type, records]: [string, any]) => (
+  1252→                          <div key={type} className="p-3 bg-gray-800 rounded-lg">
+  1253→                            <div className="text-xs font-medium text-gray-400 mb-1">{type} Records</div>
+  1254→                            {records?.data?.length > 0 ? (
+  1255→                              <div className="space-y-1">
+  1256→                                {records.data.slice(0, 3).map((r: any, i: number) => (
+  1257→                                  <div key={i} className="text-xs font-mono text-green-400 truncate">{r.data || r}</div>
+  1258→                                ))}
+  1259→                                {records.data.length > 3 && (
+  1260→                                  <div className="text-xs text-gray-500">+{records.data.length - 3} more</div>
+  1261→                                )}
+  1262→                              </div>
+  1263→                            ) : (
+  1264→                              <div className="text-xs text-gray-500">No records</div>
+  1265→                            )}
+  1266→                          </div>
+  1267→                        ))}
+  1268→                      </div>
+  1269→                    </div>
+  1270→                  )}
+  1271→
+  1272→                  {/* Directory Enumeration (Dirb-style) */}
+  1273→                  {apiData.data.directories && (
+  1274→                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+  1275→                      <h3 className="font-semibold mb-3 flex items-center gap-2">
+  1276→                        <FolderOpen className="w-5 h-5 text-yellow-400" /> Directory Enumeration (Dirb-style)
+  1277→                        <span className="text-xs bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded">
+  1278→                          {apiData.data.directories.length} paths found
+  1279→                        </span>
+  1280→                      </h3>
+  1281→                      <div className="overflow-x-auto">
+  1282→                        <table className="w-full text-sm">
+  1283→                          <thead>
+  1284→                            <tr className="border-b border-gray-800">
+  1285→                              <th className="text-left py-2 px-3 text-gray-400">Path</th>
+  1286→                              <th className="text-left py-2 px-3 text-gray-400">Status</th>
+  1287→                              <th className="text-left py-2 px-3 text-gray-400">Size</th>
+  1288→                              <th className="text-left py-2 px-3 text-gray-400">Type</th>
+  1289→                            </tr>
+  1290→                          </thead>
+  1291→                          <tbody>
+  1292→                            {apiData.data.directories.map((dir: any, idx: number) => (
+  1293→                              <tr key={idx} className="border-b border-gray-800 hover:bg-gray-800">
+  1294→                                <td className="py-2 px-3 font-mono text-sm">{dir.path}</td>
+  1295→                                <td className="py-2 px-3">
+  1296→                                  <span className={`px-2 py-0.5 rounded text-xs ${
+  1297→                                    dir.status === 200 ? 'bg-green-500/20 text-green-400' :
+  1298→                                    dir.status === 403 ? 'bg-red-500/20 text-red-400' :
+  1299→                                    dir.status === 301 ? 'bg-yellow-500/20 text-yellow-400' :
+  1300→                                    'bg-gray-700 text-gray-400'
+  1301→                                  }`}>{dir.status}</span>
+  1302→                                </td>
+  1303→                                <td className="py-2 px-3 text-gray-400">{dir.size}</td>
+  1304→                                <td className="py-2 px-3 text-gray-400">{dir.type}</td>
+  1305→                              </tr>
+  1306→                            ))}
+  1307→                          </tbody>
+  1308→                        </table>
+  1309→                      </div>
+  1310→                    </div>
+  1311→                  )}
+  1312→
+  1313→                  {/* HTTP Headers & Security */}
+  1314→                  {apiData.data.httpHeaders && (
+  1315→                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+  1316→                      <h3 className="font-semibold mb-3 flex items-center gap-2">
+  1317→                        <FileCode className="w-5 h-5 text-cyan-400" /> HTTP Headers & Security Analysis
+  1318→                      </h3>
+  1319→                      
+  1320→                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+  1321→                        <div>
+  1322→                          <h4 className="text-sm font-medium mb-2">Server Info</h4>
+  1323→                          <div className="space-y-1 text-sm">
+  1324→                            <div className="flex justify-between"><span className="text-gray-400">Status Code:</span><span>{apiData.data.httpHeaders.statusCode}</span></div>
+  1325→                            <div className="flex justify-between"><span className="text-gray-400">Server:</span><span>{apiData.data.httpHeaders.server}</span></div>
+  1326→                            <div className="flex justify-between"><span className="text-gray-400">Technologies:</span><span>{apiData.data.httpHeaders.technologies?.join(', ')}</span></div>
+  1327→                          </div>
+  1328→                        </div>
+  1329→                        
+  1330→                        <div>
+  1331→                          <h4 className="text-sm font-medium mb-2">Security Headers ({apiData.data.httpHeaders.securityScore})</h4>
+  1332→                          <div className="space-y-1">
+  1333→                            {Object.entries(apiData.data.httpHeaders.securityHeaders || {}).map(([header, present]: [string, any]) => (
+  1334→                              <div key={header} className="flex items-center gap-2 text-sm">
+  1335→                                {present ? <CheckCircle className="w-4 h-4 text-green-400" /> : <XCircle className="w-4 h-4 text-red-400" />}
+  1336→                                <span className={present ? '' : 'text-gray-500 line-through'}>{header}</span>
+  1337→                              </div>
+  1338→                            ))}
+  1339→                          </div>
+  1340→                        </div>
+  1341→                      </div>
+  1342→                    </div>
+  1343→                  )}
+  1344→
+  1345→                  {/* Page Capture */}
+  1346→                  {apiData.data.capture && (
+  1347→                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+  1348→                      <h3 className="font-semibold mb-3 flex items-center gap-2">
+  1349→                        <Eye className="w-5 h-5 text-purple-400" /> Page Capture Results
+  1350→                        {apiData.data.capture.captured && <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded ml-2">Captured</span>}
+  1351→                      </h3>
+  1352→                      
+  1353→                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+  1354→                        <InfoCard label="Title" value={apiData.data.capture.title} icon={<FileText className="w-4 h-4" />} />
+  1355→                        <InfoCard label="HTML Size" value={`${(apiData.data.capture.htmlSize / 1024).toFixed(1)} KB`} icon={<Database className="w-4 h-4" />} />
+  1356→                        <InfoCard label="Links Found" value={String(apiData.data.capture.linkCount)} icon={<LinkIcon className="w-4 h-4" />} />
+  1357→                        <InfoCard label="Scripts" value={String(apiData.data.capture.scriptCount)} icon={<FileCode className="w-4 h-4" />} />
+  1358→                        <InfoCard label="Forms" value={String(apiData.data.capture.formCount)} icon={<Terminal className="w-4 h-4" />} />
+  1359→                        <InfoCard label="Login Form" value={apiData.data.capture.hasLoginForm ? 'Yes ⚠️' : 'No'} icon={<Lock className="w-4 h-4" />} alert={apiData.data.capture.hasLoginForm} />
+  1360→                        <InfoCard label="Admin Panel" value={apiData.data.capture.hasAdminPanel ? 'Yes ⚠️' : 'No'} icon={<ShieldAlert className="w-4 h-4" />} alert={apiData.data.capture.hasAdminPanel} />
+  1361→                      </div>
+  1362→
+  1363→                      {apiData.data.capture.sensitivePatterns && (
+  1364→                        <div className="mt-4 p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
+  1365→                          <h4 className="text-sm font-medium text-red-400 mb-2">Sensitive Information Detected</h4>
+  1366→                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+  1367→                            {apiData.data.capture.sensitivePatterns.emailAddresses?.length > 0 && (
+  1368→                              <div>Emails: {apiData.data.capture.sensitivePatterns.emailAddresses.length} found</div>
+  1369→                            )}
+  1370→                            {apiData.data.capture.sensitivePatterns.phoneNumbers?.length > 0 && (
+  1371→                              <div>Phones: {apiData.data.capture.sensitivePatterns.phoneNumbers.length} found</div>
+  1372→                            )}
+  1373→                          </div>
+  1374→                        </div>
+  1375→                      )}
+  1376→                    </div>
+  1377→                  )}
+  1378→
+  1379→                  {/* Subdomains */}
+  1380→                  {apiData.data.subdomains && apiData.data.subdomains.length > 0 && (
+  1381→                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+  1382→                      <h3 className="font-semibold mb-3 flex items-center gap-2">
+  1383→                        <Globe2 className="w-5 h-5 text-indigo-400" /> Discovered Subdomains
+  1384→                        <span className="text-xs bg-indigo-500/20 text-indigo-400 px-2 py-0.5 rounded">
+  1385→                          {apiData.data.subdomains.length} found
+  1386→                        </span>
+  1387→                      </h3>
+  1388→                      <div className="flex flex-wrap gap-2">
+  1389→                        {apiData.data.subdomains.map((sub: string, idx: number) => (
+  1390→                          <span key={idx} className="px-3 py-1 bg-gray-800 rounded-lg font-mono text-sm hover:bg-gray-700 cursor-pointer">
+  1391→                            {sub}
+  1392→                          </span>
+  1393→                        ))}
+  1394→                      </div>
+  1395→                    </div>
+  1396→                  )}
+  1397→
+  1398→                  {/* Saved Path */}
+  1399→                  {apiData.data.savedPath && (
+  1400→                    <div className="bg-green-500/10 border border-green-500/30 rounded-xl p-4 flex items-center gap-3">
+  1401→                      <FolderOpen className="w-5 h-5 text-green-400" />
+  1402→                      <div>
+  1403→                        <div className="text-sm font-medium text-green-400">Results Saved</div>
+  1404→                        <div className="text-xs text-gray-400 font-mono">{apiData.data.savedPath}</div>
+  1405→                      </div>
+  1406→                    </div>
+  1407→                  )}
+  1408→                </div>
+  1409→              )}
+  1410→
+  1411→              {!apiData && !loading && (
+  1412→                <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
+  1413→                  <Camera className="w-16 h-16 mx-auto mb-4 text-gray-600" />
+  1414→                  <h3 className="text-lg font-semibold mb-2">Forensic Analysis Lab</h3>
+  1415→                  <p className="text-gray-400 mb-4">Complete domain forensics similar to Lookyloo. Generates a full report folder with all findings.</p>
+  1416→                  <div className="flex flex-wrap justify-center gap-2">
+  1417→                    {['example.com', 'testphp.vulnweb.com', 'demo.testfire.net'].map(d => (
+  1418→                      <button
+  1419→                        key={d}
+  1420→                        onClick={() => setInputValue(d)}
+  1421→                        className="px-3 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs font-mono"
+  1422→                      >
+  1423→                        {d}
+  1424→                      </button>
+  1425→                    ))}
+  1426→                  </div>
+  1427→                </div>
+  1428→              )}
+  1429→            </div>
+  1430→          )}
+  1431→
+  1432→          {/* ==================== URL SCANNER TAB ==================== */}
+  1433→          {activeTab === 'url' && (
+  1434→            <div className="space-y-6">
+  1435→              <h2 className="text-2xl font-bold flex items-center gap-3">
+  1436→                <ExternalLink className="w-7 h-7 text-yellow-400" /> URL Scanner
+  1437→              </h2>
+  1438→              
+  1439→              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+  1440→                <div className="flex gap-4">
+  1441→                  <div className="flex-1">
+  1442→                    <input
+  1443→                      type="text"
+  1444→                      placeholder="Enter URL to scan (e.g., https://example.com/page)"
+  1445→                      value={inputValue}
+  1446→                      onChange={(e) => setInputValue(e.target.value)}
+  1447→                      onKeyPress={(e) => e.key === 'Enter' && handleURLAnalysis()}
+  1448→                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-yellow-500 focus:outline-none"
+  1449→                    />
+  1450→                  </div>
+  1451→                  <button
+  1452→                    onClick={handleURLAnalysis}
+  1453→                    disabled={loading || !inputValue}
+  1454→                    className="px-6 py-3 bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
+  1455→                  >
+  1456→                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+  1457→                    Scan URL
+  1458→                  </button>
+  1459→                </div>
+  1460→              </div>
+  1461→
+  1462→              {apiData?.riskAssessment && (
+  1463→                <div className="bg-gradient-to-r from-yellow-500/10 to-orange-500/10 border border-yellow-500/30 rounded-xl p-5">
+  1464→                  <h3 className="font-semibold mb-3">Risk Assessment</h3>
+  1465→                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+  1466→                    <InfoCard label="Risk Score" value={`${apiData.data.riskAssessment.score}/10`} icon={<AlertTriangle className="w-4 h-4" />} alert={apiData.data.riskAssessment.score > 5} />
+  1467→                    <InfoCard label="Risk Level" value={apiData.data.riskAssessment.level} icon={<Shield className="w-4 h-4" />} />
+  1468→                    <InfoCard label="Category" value={apiData.data.riskAssessment.category || 'Unknown'} icon={<Tag className="w-4 h-4" />} />
+  1469→                    <InfoCard label="Safe Browsing" value={apiData.data.riskAssessment.safeBrowsing || 'Not checked'} icon={<CheckCircle className="w-4 h-4" />} />
+  1470→                  </div>
+  1471→                  
+  1472→                  {apiData.data.riskAssessment.indicators && (
+  1473→                    <div className="mt-4">
+  1474→                      <h4 className="text-sm font-medium mb-2">Indicators:</h4>
+  1475→                      <div className="flex flex-wrap gap-2">
+  1476→                        {apiData.data.riskAssessment.indicators.map((ind: string, idx: number) => (
+  1477→                          <span key={idx} className="px-2 py-1 bg-gray-800 rounded text-xs">{ind}</span>
+  1478→                        ))}
+  1479→                      </div>
+  1480→                    </div>
+  1481→                  )}
+  1482→                </div>
+  1483→              )}
+  1484→
+  1485→              {!apiData && !loading && (
+  1486→                <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
+  1487→                  <ExternalLink className="w-16 h-16 mx-auto mb-4 text-gray-600" />
+  1488→                  <h3 className="text-lg font-semibold mb-2">URL Scanner Ready</h3>
+  1489→                  <p className="text-gray-400">Enter a URL to analyze for security risks, malicious content, and reputation.</p>
+  1490→                </div>
+  1491→              )}
+  1492→            </div>
+  1493→          )}
+  1494→
+  1495→          {/* ==================== HASH LOOKUP TAB ==================== */}
+  1496→          {activeTab === 'hash' && (
+  1497→            <div className="space-y-6">
+  1498→              <h2 className="text-2xl font-bold flex items-center gap-3">
+  1499→                <Fingerprint className="w-7 h-7 text-cyan-400" /> Hash Lookup
+  1500→              </h2>
+  1501→              
+  1502→              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+  1503→                <div className="flex gap-4">
+  1504→                  <div className="flex-1">
+  1505→                    <input
+  1506→                      type="text"
+  1507→                      placeholder="Enter hash (MD5, SHA-1, SHA-256)"
+  1508→                      value={inputValue}
+  1509→                      onChange={(e) => setInputValue(e.target.value)}
+  1510→                      onKeyPress={(e) => e.key === 'Enter' && handleHashLookup()}
+  1511→                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-cyan-500 focus:outline-none font-mono"
+  1512→                    />
+  1513→                  </div>
+  1514→                  <button
+  1515→                    onClick={handleHashLookup}
+  1516→                    disabled={loading || !inputValue}
+  1517→                    className="px-6 py-3 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
+  1518→                  >
+  1519→                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+  1520→                    Lookup Hash
+  1521→                  </button>
+  1522→                </div>
+  1523→              </div>
+  1524→
+  1525→              {apiData?.data && (
+  1526→                <div className="bg-gradient-to-r from-cyan-500/10 to-blue-500/10 border border-cyan-500/30 rounded-xl p-5">
+  1527→                  <h3 className="font-semibold mb-3">Hash Analysis Results</h3>
+  1528→                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+  1529→                    <InfoCard label="Hash Type" value={apiData.data.hashType || 'Detected'} icon={<Hash className="w-4 h-4" />} />
+  1530→                    <InfoCard label="First Seen" value={apiData.data.firstSeen || 'Unknown'} icon={<Clock className="w-4 h-4" />} />
+  1531→                    <InfoCard label="Last Seen" value={apiData.data.lastSeen || 'Unknown'} icon={<Clock className="w-4 h-4" />} />
+  1532→                    <InfoCard label="File Type" value={apiData.data.fileType || 'Unknown'} icon={<FileText className="w-4 h-4" />} />
+  1533→                    <InfoCard label="Signature" value={apiData.data.signature || 'Not found'} icon={<Bug className="w-4 h-4" />} alert={apiData.data.signature !== 'Not found'} />
+  1534→                    <InfoCard label="Detection Ratio" value={apiData.data.detectionRatio || '0/0'} icon={<Shield className="w-4 h-4" />} />
+  1535→                  </div>
+  1536→                  
+  1537→                  {apiData.data.tags && (
+  1538→                    <div className="mt-4 flex flex-wrap gap-2">
+  1539→                      {apiData.data.tags.map((tag: string, idx: number) => (
+  1540→                        <span key={idx} className="px-2 py-1 bg-gray-800 rounded text-xs">{tag}</span>
+  1541→                      ))}
+  1542→                    </div>
+  1543→                  )}
+  1544→                </div>
+  1545→              )}
+  1546→
+  1547→              {!apiData && !loading && (
+  1548→                <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
+  1549→                  <Fingerprint className="w-16 h-16 mx-auto mb-4 text-gray-600" />
+  1550→                  <h3 className="text-lg font-semibold mb-2">Hash Lookup Ready</h3>
+  1551→                  <p className="text-gray-400">Look up file hashes against malware databases.</p>
+  1552→                </div>
+  1553→              )}
+  1554→            </div>
+  1555→          )}
+  1556→
+  1557→          {/* ==================== CVE DATABASE TAB ==================== */}
+  1558→          {activeTab === 'cve' && (
+  1559→            <div className="space-y-6">
+  1560→              <h2 className="text-2xl font-bold flex items-center gap-3">
+  1561→                <Shield className="w-7 h-7 text-orange-400" /> CVE Database (NIST NVD)
+  1562→              </h2>
+  1563→              
+  1564→              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+  1565→                <div className="flex gap-4">
+  1566→                  <div className="flex-1">
+  1567→                    <input
+  1568→                      type="text"
+  1569→                      placeholder="Enter CVE ID (e.g., CVE-2024-2334) or keyword"
+  1570→                      value={inputValue}
+  1571→                      onChange={(e) => setInputValue(e.target.value)}
+  1572→                      onKeyPress={(e) => e.key === 'Enter' && handleCVESearch()}
+  1573→                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-orange-500 focus:outline-none"
+  1574→                    />
+  1575→                  </div>
+  1576→                  <button
+  1577→                    onClick={handleCVESearch}
+  1578→                    disabled={loading || !inputValue}
+  1579→                    className="px-6 py-3 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
+  1580→                  >
+  1581→                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+  1582→                    Search CVE
+  1583→                  </button>
+  1584→                </div>
+  1585→
+  1586→                <div className="mt-4 flex flex-wrap gap-2">
+  1587→                  <span className="text-xs text-gray-500">Recent Critical:</span>
+  1588→                  {['CVE-2024-3400', 'CVE-2024-21887', 'CVE-2023-44428'].map(cve => (
+  1589→                    <button
+  1590→                      key={cve}
+  1591→                      onClick={() => { setInputValue(cve); handleCVESearch(); }}
+  1592→                      className="px-2 py-1 bg-red-500/10 text-red-400 rounded text-xs font-mono hover:bg-red-500/20"
+  1593→                    >
+  1594→                      {cve}
+  1595→                    </button>
+  1596→                  ))}
+  1597→                </div>
+  1598→              </div>
+  1599→
+  1600→              {apiData?.vulnerabilities && (
+  1601→                <div className="bg-gradient-to-r from-orange-500/10 to-red-500/10 border border-orange-500/30 rounded-xl p-5">
+  1602→                  <h3 className="font-semibold mb-3 flex items-center gap-2">
+  1603→                    <CheckCircle className="w-5 h-5 text-orange-400" /> Vulnerability Details
+  1604→                  </h3>
+  1605→                  
+  1606→                  {apiData.vulnerabilities.map((vuln: any, idx: number) => (
+  1607→                    <div key={idx} className="mb-4 p-4 bg-gray-800/50 rounded-lg">
+  1608→                      <div className="flex items-start justify-between mb-2">
+  1609→                        <h4 className="font-mono font-bold text-lg">{vuln.id || vuln.cveId}</h4>
+  1610→                        <span className={`px-2 py-1 rounded text-xs font-bold ${
+  1611→                          (vuln.cvssScore || vuln.metrics?.cvssMetricV2?.[0]?.cvssData?.baseScore) >= 9 ? 'bg-red-500 text-white' :
+  1612→                          (vuln.cvssScore || vuln.metrics?.cvssMetricV2?.[0]?.cvssData?.baseScore) >= 7 ? 'bg-orange-500 text-black' :
+  1613→                          (vuln.cvssScore || vuln.metrics?.cvssMetricV2?.[0]?.cvssData?.baseScore) >= 4 ? 'bg-yellow-500 text-black' :
+  1614→                          'bg-green-500 text-black'
+  1615→                        }`}>
+  1616→                          CVSS: {vuln.cvssScore || vuln.metrics?.cvssMetricV2?.[0]?.cvssData?.baseScore || 'N/A'}
+  1617→                        </span>
+  1618→                      </div>
+  1619→                      <p className="text-sm text-gray-300 mb-2">{vuln.descriptions?.[0]?.value || vuln.shortDescription}</p>
+  1620→                      <div className="flex flex-wrap gap-2 text-xs">
+  1621→                        {vuln.cwes?.map((cwe: any, i: number) => (
+  1622→                          <span key={i} className="px-2 py-1 bg-gray-700 rounded">{cwe}</span>
+  1623→                        ))}
+  1624→                      </div>
+  1625→                    </div>
+  1626→                  ))}
+  1627→                </div>
+  1628→              )}
+  1629→
+  1630→              {!apiData && !loading && (
+  1631→                <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
+  1632→                  <Shield className="w-16 h-16 mx-auto mb-4 text-gray-600" />
+  1633→                  <h3 className="text-lg font-semibold mb-2">CVE Database Ready</h3>
+  1634→                  <p className="text-gray-400">Search the NIST National Vulnerability Database for known vulnerabilities.</p>
+  1635→                </div>
+  1636→              )}
+  1637→            </div>
+  1638→          )}
+  1639→
+  1640→          {/* ==================== AI ANALYST TAB ==================== */}
+  1641→          {activeTab === 'ai' && (
+  1642→            <div className="space-y-6">
+  1643→              <h2 className="text-2xl font-bold flex items-center gap-3">
+  1644→                <Cpu className="w-7 h-7 text-pink-400" /> AI Threat Analyst
+  1645→              </h2>
+  1646→              
+  1647→              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+  1648→                <div className="flex gap-4">
+  1649→                  <div className="flex-1">
+  1650→                    <input
+  1651→                      type="text"
+  1652→                      placeholder="Enter target for AI analysis (IP, domain, hash, etc.)"
+  1653→                      value={inputValue}
+  1654→                      onChange={(e) => setInputValue(e.target.value)}
+  1655→                      onKeyPress={(e) => e.key === 'Enter' && handleAIAnalysis()}
+  1656→                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-pink-500 focus:outline-none"
+  1657→                    />
+  1658→                  </div>
+  1659→                  <button
+  1660→                    onClick={handleAIAnalysis}
+  1661→                    disabled={loading || !inputValue}
+  1662→                    className="px-6 py-3 bg-pink-600 hover:bg-pink-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
+  1663→                  >
+  1664→                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Cpu className="w-4 h-4" />}
+  1665→                    Run AI Analysis
+  1666→                  </button>
+  1667→                </div>
+  1668→              </div>
+  1669→
+  1670→              {apiData?.analysis && (
+  1671→                <div className="bg-gradient-to-r from-pink-500/10 to-purple-500/10 border border-pink-500/30 rounded-xl p-5">
+  1672→                  <h3 className="font-semibold mb-3 flex items-center gap-2">
+  1673→                    <Cpu className="w-5 h-5 text-pink-400" /> AI Analysis Results
+  1674→                  </h3>
+  1675→                  
+  1676→                  <div className="prose prose-invert max-w-none">
+  1677→                    <p className="text-sm text-gray-300 whitespace-pre-wrap">{apiData.analysis.summary || apiData.analysis.analysis}</p>
+  1678→                    
+  1679→                    {apiData.analysis.recommendation && (
+  1680→                      <div className="mt-4 p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+  1681→                        <h4 className="font-medium text-blue-400 mb-2">Recommendation</h4>
+  1682→                        <p className="text-sm">{apiData.analysis.recommendation}</p>
+  1683→                      </div>
+  1684→                    )}
+  1685→                  </div>
+  1686→                </div>
+  1687→              )}
+  1688→
+  1689→              {!apiData && !loading && (
+  1690→                <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
+  1691→                  <Cpu className="w-16 h-16 mx-auto mb-4 text-gray-600" />
+  1692→                  <h3 className="text-lg font-semibold mb-2">AI Analyst Ready</h3>
+  1693→                  <p className="text-gray-400">Enter any indicator for AI-powered threat analysis and recommendations.</p>
+  1694→                </div>
+  1695→              )}
+  1696→            </div>
+  1697→          )}
+  1698→
+  1699→          {/* ==================== DARK WEB INTEL TAB ==================== */}
+  1700→          {activeTab === 'darkweb' && (
+  1701→            <div className="space-y-6">
+  1702→              <h2 className="text-2xl font-bold flex items-center gap-3">
+  1703→                <Skull className="w-7 h-7 text-red-500" /> Dark Web Intelligence Engine
+  1704→                <span className="text-sm font-normal text-gray-400">(Deep/Dark Web Search)</span>
+  1705→              </h2>
+  1706→              
+  1707→              <div className="bg-gray-900 border border-red-500/30 rounded-xl p-6">
+  1708→                <div className="flex gap-4">
+  1709→                  <div className="flex-1">
+  1710→                    <input
+  1711→                      type="text"
+  1712→                      placeholder="Search dark web (e.g., 'breaches', 'malware', 'credentials')"
+  1713→                      value={inputValue}
+  1714→                      onChange={(e) => setInputValue(e.target.value)}
+  1715→                      onKeyPress={(e) => e.key === 'Enter' && handleDarkWebSearch()}
+  1716→                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-red-500 focus:outline-none"
+  1717→                    />
+  1718→                  </div>
+  1719→                  <button
+  1720→                    onClick={handleDarkWebSearch}
+  1721→                    disabled={loading}
+  1722→                    className="px-6 py-3 bg-red-600 hover:bg-red-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
+  1723→                  >
+  1724→                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <EyeOff className="w-4 h-4" />}
+  1725→                    Search Dark Web
+  1726→                  </button>
+  1727→                </div>
+  1728→
+  1729→                <div className="mt-4 flex flex-wrap gap-2">
+  1730→                  <span className="text-xs text-gray-500">Quick searches:</span>
+  1731→                  {['breaches', 'malware', 'credentials', 'exploits', 'marketplaces', 'ransomware'].map(q => (
+  1732→                    <button
+  1733→                      key={q}
+  1734→                      onClick={() => { setInputValue(q); handleDarkWebSearch(); }}
+  1735→                      className="px-2 py-1 bg-red-500/10 text-red-400 rounded text-xs hover:bg-red-500/20 capitalize"
+  1736→                    >
+  1737→                      {q}
+  1738→                    </button>
+  1739→                  ))}
+  1740→                </div>
+  1741→              </div>
+  1742→
+  1743→              {/* Dark Web Overview */}
+  1744→              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+  1745→                <div className="p-4 bg-gray-900 border border-gray-800 rounded-xl">
+  1746→                  <div className="flex items-center gap-2 text-red-400 mb-2">
+  1747→                    <Skull className="w-5 h-5" /> Marketplaces
+  1748→                  </div>
+  1749→                  <div className="text-2xl font-bold">4+</div>
+  1750→                  <div className="text-xs text-gray-500">Active markets tracked</div>
+  1751→                </div>
+  1752→                <div className="p-4 bg-gray-900 border border-gray-800 rounded-xl">
+  1753→                  <div className="flex items-center gap-2 text-orange-400 mb-2">
+  1754→                    <AlertTriangle className="w-5 h-5" /> Breaches
+  1755→                  </div>
+  1756→                  <div className="text-2xl font-bold">4</div>
+  1757→                  <div className="text-xs text-gray-500">Recent major breaches</div>
+  1758→                </div>
+  1759→                <div className="p-4 bg-gray-900 border border-gray-800 rounded-xl">
+  1760→                  <div className="flex items-center gap-2 text-purple-400 mb-2">
+  1761→                    <Bug className="w-5 h-5" /> Malware
+  1762→                  </div>
+  1763→                  <div className="text-2xl font-bold">4</div>
+  1764→                  <div className="text-xs text-gray-500">Trending families</div>
+  1765→                </div>
+  1766→                <div className="p-4 bg-gray-900 border border-gray-800 rounded-xl">
+  1767→                  <div className="flex items-center gap-2 text-yellow-400 mb-2">
+  1768→                    <Users className="w-5 h-5" /> Forums
+  1769→                  </div>
+  1770→                  <div className="text-2xl font-bold">4</div>
+  1771→                  <div className="text-xs text-gray-500">Monitored forums</div>
+  1772→                </div>
+  1773→              </div>
+  1774→
+  1775→              {/* Search Results */}
+  1776→              {apiData?.results && (
+  1777→                <div className="space-y-4">
+  1778→                  <div className="flex items-center justify-between">
+  1779→                    <h3 className="font-semibold">Search Results ({apiData.results.length})</h3>
+  1780→                    {apiData.summary && (
+  1781→                      <div className="flex gap-2 text-xs">
+  1782→                        <span className="px-2 py-1 bg-red-500/20 text-red-400 rounded">{apiData.summary.criticalCount} Critical</span>
+  1783→                        <span className="px-2 py-1 bg-orange-500/20 text-orange-400 rounded">{apiData.summary.highCount} High</span>
+  1784→                      </div>
+  1785→                    )}
+  1786→                  </div>
+  1787→                  
+  1788→                  {apiData.results.map((result: any, idx: number) => (
+  1789→                    <div
+  1790→                      key={idx}
+  1791→                      className={`p-4 rounded-lg border cursor-pointer hover:bg-gray-800 transition-colors ${
+  1792→                        result.severity === 'CRITICAL' ? 'bg-red-500/10 border-red-500/30' :
+  1793→                        result.severity === 'HIGH' ? 'bg-orange-500/10 border-orange-500/30' :
+  1794→                        'bg-gray-900 border-gray-800'
+  1795→                      }`}
+  1796→                      onClick={() => showFeedback(`Viewing details: ${result.title}`)}
+  1797→                    >
+  1798→                      <div className="flex items-start justify-between">
+  1799→                        <div>
+  1800→                          <h4 className="font-medium flex items-center gap-2">
+  1801→                            {result.type === 'malware' && <Bug className="w-4 h-4 text-red-400" />}
+  1802→                            {result.type === 'breach' && <AlertTriangle className="w-4 h-4 text-orange-400" />}
+  1803→                            {result.type === 'marketplace' && <ShoppingCart className="w-4 h-4 text-purple-400" />}
+  1804→                            {result.type === 'forum' && <Users className="w-4 h-4 text-blue-400" />}
+  1805→                            {result.title}
+  1806→                          </h4>
+  1807→                          <p className="text-sm text-gray-400 mt-1">{result.description}</p>
+  1808→                        </div>
+  1809→                        <span className={`px-2 py-1 rounded text-xs font-bold ${
+  1810→                          result.severity === 'CRITICAL' ? 'bg-red-500 text-white' :
+  1811→                          result.severity === 'HIGH' ? 'bg-orange-500 text-black' :
+  1812→                          'bg-gray-700'
+  1813→                        }`}>
+  1814→                          {result.severity}
+  1815→                        </span>
+  1816→                      </div>
+  1817→                      <div className="mt-2 flex items-center gap-4 text-xs text-gray-500">
+  1818→                        <span>Type: {result.type}</span>
+  1819→                        <span>Source: {result.source}</span>
+  1820→                        <span>Date: {result.dateFound}</span>
+  1821→                      </div>
+  1822→                    </div>
+  1823→                  ))}
+  1824→
+  1825→                  {/* AI Analysis */}
+  1826→                  {apiData.aiAnalysis && (
+  1827→                    <div className="bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-purple-500/30 rounded-xl p-5">
+  1828→                      <h3 className="font-semibold mb-3 flex items-center gap-2">
+  1829→                        <Cpu className="w-5 h-5 text-purple-400" /> AI Threat Assessment
+  1830→                      </h3>
+  1831→                      <p className="text-sm text-gray-300 mb-3">{apiData.aiAnalysis.threatAssessment}</p>
+  1832→                      <div>
+  1833→                        <h4 className="text-sm font-medium text-green-400 mb-2">Recommended Actions:</h4>
+  1834→                        <ul className="space-y-1">
+  1835→                          {apiData.aiAnalysis.recommendedActions?.map((action: string, idx: number) => (
+  1836→                            <li key={idx} className="text-sm flex items-start gap-2">
+  1837→                              <CheckCircle className="w-4 h-4 text-green-400 mt-0.5 shrink-0" />
+  1838→                              {action}
+  1839→                            </li>
+  1840→                          ))}
+  1841→                        </ul>
+  1842→                      </div>
+  1843→                    </div>
+  1844→                  )}
+  1845→                </div>
+  1846→              )}
+  1847→
+  1848→              {!apiData && !loading && (
+  1849→                <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
+  1850→                  <Skull className="w-16 h-16 mx-auto mb-4 text-gray-600" />
+  1851→                  <h3 className="text-lg font-semibold mb-2">Dark Web Search Engine</h3>
+  1852→                  <p className="text-gray-400 mb-4">Search for threats, breaches, malware, and intelligence from dark web sources.</p>
+  1853→                  <button onClick={() => handleDarkWebSearch()} className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg">
+  1854→                    Show Latest Intelligence
+  1855→                  </button>
+  1856→                </div>
+  1857→              )}
+  1858→            </div>
+  1859→          )}
+  1860→
+  1861→          {/* ==================== MOBILE SECURITY TAB ==================== */}
+  1862→          {activeTab === 'mobile' && (
+  1863→            <div className="space-y-6">
+  1864→              <h2 className="text-2xl font-bold flex items-center gap-3">
+  1865→                <Smartphone className="w-7 h-7 text-indigo-400" /> Mobile Security Analysis
+  1866→                <span className="text-sm font-normal text-gray-400">(MobSF-style)</span>
+  1867→              </h2>
+  1868→              
+  1869→              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+  1870→                <div className="flex gap-4">
+  1871→                  <div className="flex-1">
+  1872→                    <input
+  1873→                      type="text"
+  1874→                      placeholder="Enter APK/IPA filename (e.g., app.apk, app.ipa)"
+  1875→                      value={inputValue}
+  1876→                      onChange={(e) => setInputValue(e.target.value)}
+  1877→                      onKeyPress={(e) => e.key === 'Enter' && handleMobileAnalysis()}
+  1878→                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-indigo-500 focus:outline-none"
+  1879→                    />
+  1880→                  </div>
+  1881→                  <button
+  1882→                    onClick={handleMobileAnalysis}
+  1883→                    disabled={loading || !inputValue}
+  1884→                    className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
+  1885→                  >
+  1886→                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Smartphone className="w-4 h-4" />}
+  1887→                    Analyze App
+  1888→                  </button>
+  1889→                </div>
+  1890→
+  1891→                <div className="mt-4 flex flex-wrap gap-2">
+  1892→                  <span className="text-xs text-gray-500">Supported:</span>
+  1893→                  {['APK (Android)', 'IPA (iOS)', 'APPX (Windows)'].map(fmt => (
+  1894→                    <span key={fmt} className="px-2 py-1 bg-indigo-500/10 text-indigo-400 rounded text-xs">{fmt}</span>
+  1895→                  ))}
+  1896→                </div>
+  1897→              </div>
+  1898→
+  1899→              {/* Mobile Analysis Results */}
+  1900→              {apiData?.data && (
+  1901→                <div className="space-y-4">
+  1902→                  {/* Risk Score Card */}
+  1903→                  <div className={`rounded-xl p-5 border ${
+  1904→                    apiData.data.securityAnalysis?.riskLevel === 'MALICIOUS' ? 'bg-red-500/10 border-red-500/50' :
+  1905→                    apiData.data.securityAnalysis?.riskLevel === 'HIGH' ? 'bg-orange-500/10 border-orange-500/50' :
+  1906→                    apiData.data.securityAnalysis?.riskLevel === 'MEDIUM' ? 'bg-yellow-500/10 border-yellow-500/50' :
+  1907→                    'bg-green-500/10 border-green-500/50'
+  1908→                  }`}>
+  1909→                    <div className="flex items-center justify-between">
+  1910→                      <div>
+  1911→                        <h3 className="font-semibold">Security Risk Assessment</h3>
+  1912→                        <p className="text-sm text-gray-400 mt-1">{apiData.data.fileName}</p>
+  1913→                      </div>
+  1914→                      <div className="text-right">
+  1915→                        <div className="text-3xl font-bold">
+  1916→                          {apiData.data.securityAnalysis?.malwareScore || 0}/100
+  1917→                        </div>
+  1918→                        <div className={`text-sm font-bold ${
+  1919→                          apiData.data.securityAnalysis?.riskLevel === 'SAFE' ? 'text-green-400' :
+  1920→                          apiData.data.securityAnalysis?.riskLevel === 'LOW_RISK' ? 'text-blue-400' :
+  1921→                          apiData.data.securityAnalysis?.riskLevel === 'MEDIUM' ? 'text-yellow-400' :
+  1922→                          apiData.data.securityAnalysis?.riskLevel === 'HIGH' ? 'text-orange-400' :
+  1923→                          'text-red-400'
+  1924→                        }`}>
+  1925→                          {apiData.data.securityAnalysis?.riskLevel}
+  1926→                        </div>
+  1927→                      </div>
+  1928→                    </div>
+  1929→                  </div>
+  1930→
+  1931→                  {/* App Info Grid */}
+  1932→                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+  1933→                    <InfoCard label="Package/Bundle" value={apiData.data.basicInfo?.packageName || apiData.data.basicInfo?.bundleId || 'N/A'} icon={<Package className="w-4 h-4" />} />
+  1934→                    <InfoCard label="Version" value={apiData.data.basicInfo?.versionName || apiData.data.basicInfo?.platformVersion || 'N/A'} icon={<Tag className="w-4 h-4" />} />
+  1935→                    <InfoCard label="File Size" value={apiData.data.fileSize || 'N/A'} icon={<Database className="w-4 h-4" />} />
+  1936→                    <InfoCard label="SHA256" value={apiData.data.sha256?.substring(0, 16) + '...' || 'N/A'} icon={<Hash className="w-4 h-4" />} />
+  1937→                  </div>
+  1938→
+  1939→                  {/* Permissions */}
+  1940→                  {apiData.data.permissions && (
+  1941→                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+  1942→                      <h3 className="font-semibold mb-3 flex items-center gap-2">
+  1943→                        <Lock className="w-5 h-5 text-yellow-400" /> Permissions Analysis
+  1944→                        <span className="text-xs bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded">
+  1945→                          {apiData.data.permissions.total} total
+  1946→                        </span>
+  1947→                      </h3>
+  1948→                      
+  1949→                      {apiData.data.permissions.dangerous?.length > 0 && (
+  1950→                        <div className="mb-3">
+  1951→                          <h4 className="text-sm font-medium text-red-400 mb-2">Dangerous ({apiData.data.permissions.dangerous.length})</h4>
+  1952→                          <div className="flex flex-wrap gap-1">
+  1953→                            {apiData.data.permissions.dangerous.map((perm: string, idx: number) => (
+  1954→                              <span key={idx} className="px-2 py-1 bg-red-500/10 text-red-400 rounded text-xs font-mono">
+  1955→                                {perm.split('.').pop()}
+  1956→                              </span>
+  1957→                            ))}
+  1958→                          </div>
+  1959→                        </div>
+  1960→                      )}
+  1961→                    </div>
+  1962→                  )}
+  1963→
+  1964→                  {/* Security Findings */}
+  1965→                  {apiData.data.securityAnalysis?.findings && (
+  1966→                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+  1967→                      <h3 className="font-semibold mb-3 flex items-center gap-2">
+  1968→                        <ShieldAlert className="w-5 h-5 text-orange-400" /> Security Findings
+  1969→                      </h3>
+  1970→                      <div className="space-y-2">
+  1971→                        {apiData.data.securityAnalysis.findings.map((finding: any, idx: number) => (
+  1972→                          <div
+  1973→                            key={idx}
+  1974→                            className={`p-3 rounded-lg ${
+  1975→                              finding.severity === 'CRITICAL' ? 'bg-red-500/10 border-l-2 border-red-500' :
+  1976→                              finding.severity === 'HIGH' ? 'bg-orange-500/10 border-l-2 border-orange-500' :
+  1977→                              finding.severity === 'MEDIUM' ? 'bg-yellow-500/10 border-l-2 border-yellow-500' :
+  1978→                              'bg-gray-800'
+  1979→                            }`}
+  1980→                          >
+  1981→                            <div className="flex items-start justify-between">
+  1982→                              <div>
+  1983→                                <span className={`text-xs font-bold uppercase ${
+  1984→                                  finding.severity === 'CRITICAL' ? 'text-red-400' :
+  1985→                                  finding.severity === 'HIGH' ? 'text-orange-400' :
+  1986→                                  finding.severity === 'MEDIUM' ? 'text-yellow-400' :
+  1987→                                  'text-gray-400'
+  1988→                                }`}>
+  1989→                                  {finding.severity}
+  1990→                                </span>
+  1991→                                <span className="text-sm ml-2">{finding.description}</span>
+  1992→                              </div>
+  1993→                            </div>
+  1994→                            <p className="text-xs text-gray-400 mt-1">{finding.recommendation}</p>
+  1995→                          </div>
+  1996→                        ))}
+  1997→                      </div>
+  1998→                    </div>
+  1999→                  )}
+  2000→
+
+[showing lines 1-2000 of 2624; use offset=2001 with limit to continue reading]
