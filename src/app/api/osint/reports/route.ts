@@ -4,18 +4,27 @@ import { getIOCs, getStoreStats, getRecentAnalyses } from '@/lib/store';
 import { loadThreatFeeds } from '@/lib/intel';
 import { aiJSON, isAIEnabled } from '@/lib/ai';
 import { kvGet, kvSet, kvPushList, kvGetList } from '@/lib/kv';
+import { buildPDF, buildDOCX, buildPPTX, ReportSpec, ReportSection } from '@/lib/reportgen';
 
 export const maxDuration = 60;
 
 interface ReportConfig {
   title: string;
   modules: string[];
-  format: 'PDF' | 'JSON' | 'CSV' | 'HTML';
+  format: 'PDF' | 'JSON' | 'CSV' | 'HTML' | 'DOCX' | 'PPTX';
   includeIOCs: boolean;
   includeThreats: boolean;
   includeTimeline: boolean;
   executiveSummary: boolean;
   recommendations: boolean;
+  templateId?: string;
+  customContent?: {
+    header?: string;
+    footer?: string;
+    sections?: { title: string; body: string }[];
+    clientName?: string;
+    engagement?: string;
+  };
 }
 
 interface ReportRecord {
@@ -158,6 +167,8 @@ export async function POST(request: NextRequest) {
       includeTimeline: body.includeTimeline ?? true,
       executiveSummary: body.executiveSummary ?? true,
       recommendations: body.recommendations ?? true,
+      templateId: body.templateId,
+      customContent: body.customContent,
     };
 
     console.log('[REPORTS] Generating:', config.title, '| modules:', config.modules.join(', '));
@@ -291,8 +302,44 @@ export async function GET(request: NextRequest) {
     const report = reports.find((r) => r.id === id);
     if (!report) return NextResponse.json({ success: false, error: 'Report not found' });
 
-    const content = buildDownloadContent(report, format);
-    return new NextResponse(content.body, {
+    const fmt = format.toLowerCase();
+    const spec = buildReportSpec(report);
+
+    if (fmt === 'pdf' || fmt === 'docx' || fmt === 'pptx') {
+      try {
+        let buffer: Buffer;
+        let type: string;
+        let ext: string;
+        if (fmt === 'pdf') {
+          buffer = await buildPDF(spec);
+          type = 'application/pdf';
+          ext = 'pdf';
+        } else if (fmt === 'docx') {
+          buffer = await buildDOCX(spec);
+          type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+          ext = 'docx';
+        } else {
+          buffer = await buildPPTX(spec);
+          type = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+          ext = 'pptx';
+        }
+        return new NextResponse(new Uint8Array(buffer), {
+          headers: {
+            'Content-Type': type,
+            'Content-Disposition': `attachment; filename="${report.id}.${ext}"`,
+          },
+        });
+      } catch (err) {
+        console.error('Binary report generation error:', err);
+        return NextResponse.json(
+          { success: false, error: err instanceof Error ? err.message : 'Binary generation failed' },
+          { status: 500 }
+        );
+      }
+    }
+
+    const content = buildDownloadContent(report, fmt);
+    return new NextResponse(content.body as any, {
       headers: {
         'Content-Type': content.type,
         'Content-Disposition': `attachment; filename="${report.id}.${content.ext}"`,
@@ -303,22 +350,32 @@ export async function GET(request: NextRequest) {
   // Info / templates
   return NextResponse.json({
     success: true,
-    source: 'Reporter Agent v10',
+    source: 'Reporter Agent v11',
     data: {
       templates: [
         { id: 'executive', name: 'Executive Summary', modules: ['dashboard', 'iocs', 'threats'] },
         { id: 'technical', name: 'Technical Analysis', modules: ['ip', 'domain', 'url', 'hash', 'cve'] },
         { id: 'threat-hunt', name: 'Threat Hunt Report', modules: ['darkweb', 'threats', 'ai'] },
         { id: 'comprehensive', name: 'Comprehensive Report', modules: ['dashboard', 'ip', 'domain', 'cve', 'darkweb', 'threats', 'iocs', 'mobile', 'ai'] },
+        { id: 'brand-protection', name: 'Brand Protection Assessment', modules: ['brand', 'phishing', 'social', 'fakeapp'] },
+        { id: 'executive-protection', name: 'Executive Digital Protection', modules: ['exec', 'dorking', 'social', 'darkweb'] },
+        { id: 'incident-response', name: 'Incident Response Report', modules: ['ip', 'domain', 'hash', 'url', 'cve', 'sandbox'] },
       ],
-      formats: ['HTML', 'JSON', 'CSV', 'PDF'],
+      formats: ['HTML', 'JSON', 'CSV', 'PDF', 'DOCX', 'PPTX'],
+      customOptions: {
+        clientName: true,
+        engagement: true,
+        header: true,
+        footer: true,
+        sections: true,
+      },
       aiEnabled: isAIEnabled(),
       storage: 'persistent',
     },
   });
 }
 
-function buildDownloadContent(report: ReportRecord, format: string): { body: string; type: string; ext: string } {
+function buildDownloadContent(report: ReportRecord, format: string): { body: string | Buffer; type: string; ext: string } {
   switch (format.toLowerCase()) {
     case 'json':
       return {
@@ -339,10 +396,100 @@ function buildDownloadContent(report: ReportRecord, format: string): { body: str
       );
       return { body: lines.join('\n'), type: 'text/csv', ext: 'csv' };
     }
+    case 'pdf':
+    case 'docx':
+    case 'pptx': {
+      const spec = buildReportSpec(report);
+      if (format.toLowerCase() === 'pdf') {
+        return { body: '', type: 'application/pdf', ext: 'pdf' };
+      }
+      if (format.toLowerCase() === 'docx') {
+        return { body: '', type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', ext: 'docx' };
+      }
+      return { body: '', type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', ext: 'pptx' };
+    }
     case 'html':
     default:
       return { body: renderHTML(report), type: 'text/html', ext: 'html' };
   }
+}
+
+function buildReportSpec(report: ReportRecord): ReportSpec {
+  const c = report.content;
+  const custom = report.config?.customContent;
+  const sections: ReportSection[] = [];
+
+  if (c.executiveSummary) {
+    sections.push({
+      title: 'Executive Summary',
+      body: c.executiveSummary.narrative || (c.executiveSummary.keyFindings || []).join(' '),
+      metadata: {
+        'Overall Risk': c.executiveSummary.overallRiskLevel || 'N/A',
+        'Total Indicators': c.statistics?.totalIOCs || 0,
+        'Threat Feeds': c.statistics?.totalThreats || 0,
+        'Modules': c.statistics?.modulesIncluded || 0,
+      },
+      bullets: c.executiveSummary.keyFindings || [],
+    });
+  }
+
+  if (c.recommendations?.length) {
+    sections.push({ title: 'Recommendations', bullets: c.recommendations });
+  }
+
+  const iocs = c.moduleData?.iocs || [];
+  if (iocs.length) {
+    sections.push({
+      title: 'Indicators of Compromise',
+      table: {
+        headers: ['Type', 'Value', 'Severity', 'Status'],
+        rows: iocs.slice(0, 40).map((i: any) => [i.type, i.value, i.severity, i.status]),
+      },
+    });
+  }
+
+  const threats = c.moduleData?.threats || [];
+  const threatRows = threats.flatMap((f: any) =>
+    (f.entries || []).slice(0, 5).map((e: any) => [f.source, e.cveID || e.sha256 || e.signature || e.vulnerabilityName || '-', e.severity || 'INFO'])
+  );
+  if (threatRows.length) {
+    sections.push({ title: 'Live Threat Feeds', table: { headers: ['Feed', 'Item', 'Severity'], rows: threatRows.slice(0, 40) } });
+  }
+
+  if (c.timeline?.length) {
+    sections.push({
+      title: 'Timeline',
+      bullets: c.timeline.slice(0, 20).map((t: any) => `${t.type.toUpperCase()} — ${t.event} (${new Date(t.date).toLocaleString()})`),
+    });
+  }
+
+  if (c.moduleData?.recentAnalyses?.length) {
+    sections.push({
+      title: 'Recent Analyses',
+      table: {
+        headers: ['Source', 'Summary', 'Verified'],
+        rows: c.moduleData.recentAnalyses.slice(0, 20).map((a: any) => [a.source || '-', (a.summary || '-').substring(0, 80), a.verified ? 'Yes' : 'No']),
+      },
+    });
+  }
+
+  // Custom sections injected by the user
+  if (custom?.sections?.length) {
+    custom.sections.forEach((s) => sections.push({ title: s.title || 'Custom Section', body: s.body || '' }));
+  }
+
+  const now = new Date().toLocaleString();
+  return {
+    title: report.title,
+    subtitle: custom?.clientName ? `Client: ${custom.clientName}` : undefined,
+    riskLevel: c.executiveSummary?.overallRiskLevel,
+    generatedAt: now,
+    preparedBy: custom?.clientName ? `Monitor-Threat · Engagement: ${custom.engagement || 'General'}` : 'Monitor-Threat',
+    classification: custom?.engagement ? `ENGAGEMENT: ${custom.engagement}` : 'CONFIDENTIAL',
+    sections,
+    customHeader: custom?.header,
+    customFooter: custom?.footer,
+  };
 }
 
 function renderHTML(report: ReportRecord): string {
@@ -386,7 +533,9 @@ code{background:#1f2937;padding:2px 6px;border-radius:4px;font-size:13px}
 </style></head>
 <body><div class="wrap">
 <h1>🛡️ ${esc(report.title)}</h1>
-<p><em>Generated ${esc(new Date(report.timestamp).toLocaleString())} · NEXUS INTEL v10 · Reporter Agent${c.statistics?.aiUsed ? ' (AI)':''}</em></p>
+<p><em>Generated ${esc(new Date(report.timestamp).toLocaleString())} · MONITOR-THREAT v11 · Reporter Agent${c.statistics?.aiUsed ? ' (AI)':''}</em></p>
+${report.config?.customContent?.clientName ? `<p><strong>Client:</strong> ${esc(report.config.customContent.clientName)}${report.config.customContent.engagement ? ` · <strong>Engagement:</strong> ${esc(report.config.customContent.engagement)}` : ''}</p>` : ''}
+${report.config?.customContent?.header ? `<p><em>${esc(report.config.customContent.header)}</em></p>` : ''}
 
 <div class="card">
 <span class="badge ${esc((c.executiveSummary?.overallRiskLevel || 'MEDIUM').toLowerCase())}">${esc(c.executiveSummary?.overallRiskLevel || 'MEDIUM')} RISK</span>
@@ -413,6 +562,9 @@ code{background:#1f2937;padding:2px 6px;border-radius:4px;font-size:13px}
 <h2>Timeline</h2>
 <ul>${timeline}</ul>
 
-<div class="footer">Generated by NEXUS INTEL — OSINT &amp; Threat Intelligence Platform</div>
+${(report.config?.customContent?.sections || []).map((s: any) => `<h2>${esc(s.title || 'Custom Section')}</h2><p>${esc(s.body || '')}</p>`).join('')}
+${report.config?.customContent?.footer ? `<p><em>${esc(report.config.customContent.footer)}</em></p>` : ''}
+
+<div class="footer">Generated by MONITOR-THREAT — OSINT &amp; Threat Intelligence Platform</div>
 </div></body></html>`;
 }

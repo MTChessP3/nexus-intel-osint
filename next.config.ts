@@ -6,6 +6,10 @@ const nextConfig: NextConfig = {
   
   /* config options here */
   reactStrictMode: false,
+
+  // Keep pdfkit unbundled so its runtime-loaded .afm font files resolve
+  // from node_modules instead of the traced /ROOT path.
+  serverExternalPackages: ['pdfkit'],
   
   // Ensure proper handling of API routes in serverless environment
   experimental: {

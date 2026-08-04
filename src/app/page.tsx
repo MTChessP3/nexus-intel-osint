@@ -10,7 +10,8 @@ import {
   BarChart3, PieChart as PieChartIcon, TrendingUp, Users, Key, Terminal,
   Save, X, Loader2, Check, Info, AlertCircle, ArrowRight, Ban, WifiOff,
   Play, Pause, Camera, FileSearch, Smartphone, Globe2, Skull, EyeOff,
-  FolderOpen, DownloadCloud, UploadCloud, FileCode, LockOpen, ShieldAlert
+  FolderOpen, DownloadCloud, UploadCloud, FileCode, LockOpen, ShieldAlert,
+  Network, MessageSquare, ShieldUser, Radio, Presentation
 } from 'lucide-react';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
@@ -19,7 +20,7 @@ import {
 } from 'recharts';
 
 // ==================== TYPES ====================
-type TabType = 'dashboard' | 'ip' | 'domain' | 'url' | 'hash' | 'cve' | 'ai' | 'darkweb' | 'threats' | 'mobile' | 'forensics' | 'iocs' | 'export' | 'reports' | 'sources';
+type TabType = 'dashboard' | 'ip' | 'domain' | 'url' | 'hash' | 'cve' | 'ai' | 'darkweb' | 'threats' | 'mobile' | 'forensics' | 'iocs' | 'export' | 'reports' | 'sources' | 'brand' | 'sandbox' | 'dnsdump' | 'social' | 'exec' | 'fakeapp';
 type Severity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
 type IOCStatus = 'UNKNOWN' | 'BENIGN' | 'SUSPICIOUS' | 'MALICIOUS';
 
@@ -447,6 +448,65 @@ export default function OSINTPlatform() {
     }
   };
 
+  // ==================== BRAND PROTECTION ====================
+  const handleBrandScan = async () => {
+    if (!inputValue) { showFeedback('Enter a suspicious URL/domain to check', 'error'); return; }
+    const brand = prompt('Enter the brand to protect (e.g., PayPal, BancoX):') || 'Acme';
+    showFeedback(`Scanning "${inputValue}" against brand ${brand}...`, 'info');
+    await callAPI('/api/osint/brand', { method: 'POST', body: JSON.stringify({ brand, candidate: inputValue, mode: 'scan' }) });
+  };
+
+  const handleBrandWatchlist = async () => {
+    const brand = prompt('Brand to add to watchlist:') || 'Acme';
+    showFeedback(`Adding brand "${brand}" to protection watchlist...`, 'info');
+    const result = await callAPI('/api/osint/brand', { method: 'POST', body: JSON.stringify({ brand, mode: 'watchlist', domains: [], keywords: [] }) });
+    if (result?.success) showFeedback(`Brand "${brand}" watched`, 'success');
+  };
+
+  // ==================== URL SANDBOX ====================
+  const handleSandbox = async () => {
+    if (!inputValue) { showFeedback('Enter a URL to detonate', 'error'); return; }
+    showFeedback(`Detonating ${inputValue} in sandbox...`, 'info');
+    await callAPI('/api/osint/sandbox', { method: 'POST', body: JSON.stringify({ url: inputValue }) });
+  };
+
+  // ==================== DNS DUMP ====================
+  const handleDnsDump = async () => {
+    if (!inputValue) { showFeedback('Enter a domain to enumerate', 'error'); return; }
+    showFeedback(`Enumerating DNS for ${inputValue}...`, 'info');
+    await callAPI(`/api/osint/dnsdump?domain=${encodeURIComponent(inputValue)}`);
+  };
+
+  // ==================== SOCIAL MONITOR ====================
+  const handleSocialLoad = async (q?: string) => {
+    showFeedback('Loading Telegram/Discord intelligence...', 'info');
+    const params = new URLSearchParams();
+    if (q) params.set('q', q);
+    await callAPI(`/api/osint/social?${params}`);
+  };
+
+  const handleSocialKeywords = async () => {
+    const raw = prompt('Keywords (comma separated):') || 'phishing,malware,breach';
+    const keywords = raw.split(',').map((k) => k.trim()).filter(Boolean);
+    showFeedback(`Setting ${keywords.length} monitoring keywords...`, 'info');
+    await callAPI('/api/osint/social', { method: 'POST', body: JSON.stringify({ action: 'set-keywords', keywords }) });
+  };
+
+  // ==================== EXECUTIVE OSINT ====================
+  const handleExecScan = async () => {
+    if (!inputValue) { showFeedback('Enter the executive name to scan', 'error'); return; }
+    showFeedback(`Running exposure scan for "${inputValue}"...`, 'info');
+    await callAPI(`/api/osint/exec?name=${encodeURIComponent(inputValue)}`);
+  };
+
+  // ==================== FAKE APP ====================
+  const handleFakeApp = async () => {
+    if (!inputValue) { showFeedback('Enter an APK/IPA filename to analyze', 'error'); return; }
+    const fileType = inputValue.endsWith('.ipa') ? 'IPA' : inputValue.endsWith('.appx') ? 'APPX' : 'APK';
+    showFeedback(`Analyzing ${inputValue} for fake-app indicators...`, 'info');
+    await callAPI('/api/osint/fakeapp', { method: 'POST', body: JSON.stringify({ fileName: inputValue, fileType }) });
+  };
+
   // IOC CRUD Handlers
   const handleAddIOC = async () => {
     if (!formData.value) {
@@ -717,9 +777,9 @@ export default function OSINTPlatform() {
               <Radar className="w-8 h-8 text-red-500 animate-pulse" />
               <div>
                 <h1 className="text-xl font-bold bg-gradient-to-r from-red-500 via-orange-500 to-yellow-500 bg-clip-text text-transparent">
-                  MONITOR-THREAT v9.0
+                  MONITOR-THREAT
                 </h1>
-                <p className="text-xs text-gray-400">Real-time Cyber Threat Intelligence • All Modules Active</p>
+                <p className="text-xs text-gray-400">Brand Protection • URL Sandbox • Social Monitoring • Executive OSINT</p>
               </div>
             </div>
             
@@ -775,6 +835,12 @@ export default function OSINTPlatform() {
               { id: 'export', icon: Download, label: 'Export Data', color: 'text-teal-400' },
               { id: 'sources', icon: Wifi, label: 'Intelligence Sources', color: 'text-sky-400' },
               { id: 'reports', icon: FileText, label: 'Reports', color: 'text-violet-400' },
+              { id: 'brand', icon: Shield, label: 'Brand Protection', color: 'text-rose-400', badge: 'NEW' },
+              { id: 'sandbox', icon: Zap, label: 'URL Sandbox', color: 'text-lime-400', badge: 'NEW' },
+              { id: 'dnsdump', icon: Network, label: 'DNS Dump', color: 'text-teal-400', badge: 'NEW' },
+              { id: 'social', icon: MessageSquare, label: 'TG/Discord Monitor', color: 'text-blue-400', badge: 'NEW' },
+               { id: 'exec', icon: ShieldUser, label: 'Executive OSINT', color: 'text-amber-400', badge: 'NEW' },
+              { id: 'fakeapp', icon: Smartphone, label: 'Fake App Scanner', color: 'text-fuchsia-400', badge: 'NEW' },
             ].map(({ id, icon: Icon, label, color, badge }) => (
               <button
                 key={id}
@@ -2762,6 +2828,15 @@ export default function OSINTPlatform() {
                           </div>
                         </div>
                         <div className="flex gap-1">
+                          <a href={`/api/osint/reports?action=download&id=${report.id}&format=pdf`} target="_blank" rel="noreferrer" className="p-2 hover:bg-gray-700 rounded-lg" title="Download PDF">
+                            <FileText className="w-4 h-4 text-red-400" />
+                          </a>
+                          <a href={`/api/osint/reports?action=download&id=${report.id}&format=docx`} target="_blank" rel="noreferrer" className="p-2 hover:bg-gray-700 rounded-lg" title="Download DOCX">
+                            <FileText className="w-4 h-4 text-blue-400" />
+                          </a>
+                          <a href={`/api/osint/reports?action=download&id=${report.id}&format=pptx`} target="_blank" rel="noreferrer" className="p-2 hover:bg-gray-700 rounded-lg" title="Download PPTX">
+                            <Presentation className="w-4 h-4 text-orange-400" />
+                          </a>
                           <a href={`/api/osint/reports?action=download&id=${report.id}&format=json`} target="_blank" rel="noreferrer" className="p-2 hover:bg-gray-700 rounded-lg" title="Download JSON">
                             <DownloadCloud className="w-4 h-4" />
                           </a>
@@ -2777,6 +2852,520 @@ export default function OSINTPlatform() {
                   </div>
                 )}
               </div>
+            </div>
+          )}
+
+          {/* ==================== BRAND PROTECTION TAB ==================== */}
+          {activeTab === 'brand' && (
+            <div className="space-y-6">
+              <h2 className="text-2xl font-bold flex items-center gap-3">
+                <Shield className="w-7 h-7 text-rose-400" /> Brand Protection
+                <span className="text-sm font-normal text-gray-400">(Phishing & impersonation monitoring)</span>
+              </h2>
+              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                <div className="flex gap-4">
+                  <div className="flex-1">
+                    <input type="text" placeholder="Suspicious URL or domain (e.g., paypal-secure-login.top)"
+                      value={inputValue} onChange={(e) => setInputValue(e.target.value)}
+                      onKeyPress={(e) => e.key === 'Enter' && handleBrandScan()}
+                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-rose-500 focus:outline-none" />
+                  </div>
+                  <button onClick={handleBrandScan} disabled={loading} className="px-6 py-3 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2">
+                    <Search className="w-4 h-4" /> Scan Candidate
+                  </button>
+                  <button onClick={handleBrandWatchlist} disabled={loading} className="px-4 py-3 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm flex items-center gap-2">
+                    <Plus className="w-4 h-4" /> Add Brand
+                  </button>
+                </div>
+              </div>
+
+              {apiData?.data?.phishing && (
+                <div className="space-y-4">
+                  <div className={`rounded-xl p-5 border ${
+                    apiData.data.phishing.verdict === 'HIGH' ? 'bg-red-500/10 border-red-500/50' :
+                    apiData.data.phishing.verdict === 'MEDIUM' ? 'bg-yellow-500/10 border-yellow-500/50' : 'bg-green-500/10 border-green-500/50'
+                  }`}>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="font-semibold">Phishing Risk Assessment</h3>
+                        <p className="text-sm text-gray-400 mt-1">{apiData.data.candidate} vs brand "{apiData.data.brand}"</p>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-3xl font-bold">{apiData.data.phishing.score}/15</div>
+                        <div className="text-sm font-bold">{apiData.data.phishing.verdict}</div>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {apiData.data.phishing.reasons.map((r: string, i: number) => (
+                        <span key={i} className="px-2 py-1 bg-gray-800 rounded text-xs">{r}</span>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                    <h3 className="font-semibold mb-3 flex items-center gap-2"><AlertTriangle className="w-5 h-5 text-red-400" /> Lookalike Domains</h3>
+                    <div className="flex flex-wrap gap-2">
+                      {(apiData.lookalikes || []).map((d: string, i: number) => (
+                        <button key={i} onClick={() => setInputValue(d)} className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 rounded text-xs font-mono">{d}</button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                    <h3 className="font-semibold mb-3 flex items-center gap-2"><Skull className="w-5 h-5 text-red-500" /> Suspected Phishing Kits</h3>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead><tr className="border-b border-gray-800 text-left text-gray-400">
+                          <th className="py-2 px-2">Name</th><th className="py-2 px-2">Platform</th><th className="py-2 px-2">IOC</th>
+                        </tr></thead>
+                        <tbody>
+                          {(apiData.kits || []).map((k: any, i: number) => (
+                            <tr key={i} className="border-b border-gray-800">
+                              <td className="py-2 px-2 font-medium">{k.name}</td>
+                              <td className="py-2 px-2 text-xs">{k.platform}</td>
+                              <td className="py-2 px-2 font-mono text-xs text-red-400">{k.ioc}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {!apiData && !loading && (
+                <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
+                  <Shield className="w-16 h-16 mx-auto mb-4 text-gray-600" />
+                  <h3 className="text-lg font-semibold mb-2">Brand Protection Ready</h3>
+                  <p className="text-gray-400">Scan suspected phishing URLs and domains, discover lookalikes and phishing kits targeting your brand.</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ==================== URL SANDBOX TAB ==================== */}
+          {activeTab === 'sandbox' && (
+            <div className="space-y-6">
+              <h2 className="text-2xl font-bold flex items-center gap-3">
+                <Zap className="w-7 h-7 text-lime-400" /> URL Sandbox
+                <span className="text-sm font-normal text-gray-400">(tria.ge / Hybrid-Analysis style)</span>
+              </h2>
+              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                <div className="flex gap-4">
+                  <div className="flex-1">
+                    <input type="text" placeholder="URL to detonate (e.g., http://evil-site.top/verify.php)"
+                      value={inputValue} onChange={(e) => setInputValue(e.target.value)}
+                      onKeyPress={(e) => e.key === 'Enter' && handleSandbox()}
+                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-lime-500 focus:outline-none" />
+                  </div>
+                  <button onClick={handleSandbox} disabled={loading} className="px-6 py-3 bg-lime-600 hover:bg-lime-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2">
+                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />} Detonate
+                  </button>
+                </div>
+              </div>
+
+              {apiData?.data?.verdict && (
+                <div className="space-y-4">
+                  <div className={`rounded-xl p-5 border ${
+                    apiData.data.verdict === 'MALICIOUS' ? 'bg-red-500/10 border-red-500/50' :
+                    apiData.data.verdict === 'SUSPICIOUS' ? 'bg-yellow-500/10 border-yellow-500/50' : 'bg-green-500/10 border-green-500/50'
+                  }`}>
+                    <div className="flex items-center justify-between">
+                      <div><h3 className="font-semibold">Sandbox Verdict</h3><p className="text-sm text-gray-400 mt-1 font-mono">{apiData.data.url}</p></div>
+                      <div className="text-right"><div className="text-3xl font-bold">{apiData.data.score}/100</div><div className="text-sm font-bold">{apiData.data.verdict}</div></div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {(apiData.data.staticAnalysis?.flags || []).map((f: any, i: number) => (
+                        <span key={i} className="px-2 py-1 bg-gray-800 rounded text-xs">{f.label}</span>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                      <h3 className="font-semibold mb-3 flex items-center gap-2"><Terminal className="w-5 h-5 text-lime-400" /> Behavioral Detonation</h3>
+                      <div className="space-y-2">
+                        {(apiData.data.behavioral?.processes || []).map((p: any, i: number) => (
+                          <div key={i} className="flex items-center gap-3 p-2 bg-gray-800/60 rounded-lg text-xs font-mono">
+                            <span className={p.severity === 'HIGH' ? 'text-red-400' : 'text-gray-400'}>{p.name}</span>
+                            <span className="text-gray-500">{p.action}</span>
+                            <span className="ml-auto truncate text-gray-400">{p.target}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                      <h3 className="font-semibold mb-3 flex items-center gap-2"><Bug className="w-5 h-5 text-red-400" /> AV Signatures</h3>
+                      <div className="space-y-2">
+                        {(apiData.data.behavioral?.signatures || []).map((s: any, i: number) => (
+                          <div key={i} className={`p-2 rounded-lg text-xs ${s.severity === 'HIGH' ? 'bg-red-500/10 text-red-300' : s.severity === 'MEDIUM' ? 'bg-yellow-500/10 text-yellow-300' : 'bg-gray-800 text-gray-400'}`}>
+                            <strong>{s.name}</strong> <span className="text-gray-500">— {s.category}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {apiData.data.behavioral?.network && (
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                      <h3 className="font-semibold mb-3 flex items-center gap-2"><Network className="w-5 h-5 text-cyan-400" /> Network Connections</h3>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead><tr className="border-b border-gray-800 text-left text-gray-400"><th className="py-2 px-2">Target</th><th className="py-2 px-2">Port</th><th className="py-2 px-2">Proto</th><th className="py-2 px-2">State</th></tr></thead>
+                          <tbody>
+                            {(apiData.data.behavioral.network.connections || []).map((c: any, i: number) => (
+                              <tr key={i} className="border-b border-gray-800">
+                                <td className="py-2 px-2 font-mono text-xs">{c.target}</td><td className="py-2 px-2">{c.port}</td><td className="py-2 px-2">{c.protocol}</td><td className="py-2 px-2">{c.state}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              {!apiData && !loading && (
+                <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
+                  <Zap className="w-16 h-16 mx-auto mb-4 text-gray-600" />
+                  <h3 className="text-lg font-semibold mb-2">URL Sandbox Ready</h3>
+                  <p className="text-gray-400">Detonate suspicious URLs to reveal phishing kits, payload delivery and malicious indicators.</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ==================== DNS DUMP TAB ==================== */}
+          {activeTab === 'dnsdump' && (
+            <div className="space-y-6">
+              <h2 className="text-2xl font-bold flex items-center gap-3">
+                <Network className="w-7 h-7 text-teal-400" /> DNS Dump
+                <span className="text-sm font-normal text-gray-400">(dnsdumpster.com style enumeration)</span>
+              </h2>
+              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                <div className="flex gap-4">
+                  <div className="flex-1">
+                    <input type="text" placeholder="Domain to enumerate (e.g., example.com)"
+                      value={inputValue} onChange={(e) => setInputValue(e.target.value)}
+                      onKeyPress={(e) => e.key === 'Enter' && handleDnsDump()}
+                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-teal-500 focus:outline-none" />
+                  </div>
+                  <button onClick={handleDnsDump} disabled={loading} className="px-6 py-3 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2">
+                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />} Enumerate
+                  </button>
+                </div>
+              </div>
+
+              {apiData?.data?.records && (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                    {Object.entries(apiData.data.records).map(([type, recs]: [string, any]) => (
+                      <div key={type} className="p-3 bg-gray-900 border border-gray-800 rounded-xl">
+                        <div className="text-sm font-bold text-teal-400">{type}</div>
+                        <div className="text-2xl font-bold">{recs?.length || 0}</div>
+                        <div className="text-xs text-gray-500">records</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                    <h3 className="font-semibold mb-3 flex items-center gap-2"><Server className="w-5 h-5 text-purple-400" /> Subdomains Found ({apiData.data.subdomains?.length || 0})</h3>
+                    <div className="flex flex-wrap gap-2">
+                      {(apiData.data.subdomains || []).map((s: string, i: number) => (
+                        <span key={i} className="px-2 py-1 bg-gray-800 rounded text-xs font-mono">{s}</span>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                    <h3 className="font-semibold mb-3 flex items-center gap-2"><ExternalLink className="w-5 h-5 text-cyan-400" /> Related Hosts</h3>
+                    <div className="flex flex-wrap gap-2">
+                      {(apiData.data.relatedHosts || []).slice(0, 20).map((h: string, i: number) => (
+                        <span key={i} className="px-2 py-1 bg-gray-800 rounded text-xs font-mono text-cyan-300">{h}</span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {(apiData.data.security?.findings?.length > 0) && (
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                      <h3 className="font-semibold mb-3 flex items-center gap-2"><ShieldAlert className="w-5 h-5 text-orange-400" /> Security Findings</h3>
+                      <ul className="space-y-1">
+                        {apiData.data.security.findings.map((f: string, i: number) => (
+                          <li key={i} className="text-sm text-gray-300 flex items-start gap-2"><CheckCircle className="w-4 h-4 text-orange-400 mt-0.5" /> {f}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+              {!apiData && !loading && (
+                <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
+                  <Network className="w-16 h-16 mx-auto mb-4 text-gray-600" />
+                  <h3 className="text-lg font-semibold mb-2">DNS Dump Ready</h3>
+                  <p className="text-gray-400">Enumerate A, AAAA, MX, NS, TXT, CNAME, SOA records, subdomains and related hosts.</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ==================== SOCIAL MONITOR TAB ==================== */}
+          {activeTab === 'social' && (
+            <div className="space-y-6">
+              <h2 className="text-2xl font-bold flex items-center gap-3">
+                <MessageSquare className="w-7 h-7 text-blue-400" /> Telegram & Discord Monitor
+                <span className="text-sm font-normal text-gray-400">(keyword intelligence across channels)</span>
+              </h2>
+              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                <div className="flex flex-wrap gap-3">
+                  <input type="text" placeholder="Search captured messages..." value={inputValue}
+                    onChange={(e) => setInputValue(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && handleSocialLoad(inputValue)}
+                    className="flex-1 min-w-[200px] px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm focus:border-blue-500 focus:outline-none" />
+                  <button onClick={() => handleSocialLoad(inputValue)} disabled={loading} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm flex items-center gap-2">
+                    <Search className="w-4 h-4" /> Search
+                  </button>
+                  <button onClick={() => handleSocialLoad()} disabled={loading} className="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm">All</button>
+                  <button onClick={handleSocialKeywords} disabled={loading} className="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg text-sm flex items-center gap-2">
+                    <Key className="w-4 h-4" /> Keywords
+                  </button>
+                </div>
+                {apiData?.configured === false && (
+                  <div className="mt-3 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg text-xs text-yellow-300">
+                    Demo mode — set TELEGRAM_BOT_TOKEN and DISCORD_BOT_TOKEN (Settings → Environment Variables) for live capture.
+                  </div>
+                )}
+              </div>
+
+              {apiData?.stats && (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="p-4 bg-gray-900 border border-gray-800 rounded-xl"><div className="text-2xl font-bold text-blue-400">{apiData.stats.total}</div><div className="text-xs text-gray-500">Total Captured</div></div>
+                  <div className="p-4 bg-gray-900 border border-gray-800 rounded-xl"><div className="text-2xl font-bold text-red-400">{apiData.stats.critical}</div><div className="text-xs text-gray-500">Critical</div></div>
+                  <div className="p-4 bg-gray-900 border border-gray-800 rounded-xl"><div className="text-2xl font-bold text-orange-400">{apiData.stats.high}</div><div className="text-xs text-gray-500">High</div></div>
+                  <div className="p-4 bg-gray-900 border border-gray-800 rounded-xl"><div className="text-2xl font-bold text-green-400">{apiData.stats.activeChannels}</div><div className="text-xs text-gray-500">Active Channels</div></div>
+                </div>
+              )}
+
+              {apiData?.stats?.topKeywords?.length > 0 && (
+                <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                  <h3 className="font-semibold mb-3 flex items-center gap-2"><Key className="w-5 h-5 text-purple-400" /> Top Keywords</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {apiData?.stats?.topKeywords?.map((k: any, i: number) => (
+                      <span key={i} className="px-2 py-1 bg-gray-800 rounded text-xs">{k.keyword} <strong className="text-purple-400">{k.count}</strong></span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {apiData?.data?.length > 0 && (
+                <div className="space-y-2">
+                  {(apiData?.data as any[] | undefined)?.slice(0, 50).map((m: any, i: number) => (
+                    <div key={i} className={`p-4 rounded-lg border ${m.severity === 'CRITICAL' ? 'bg-red-500/10 border-red-500/30' : m.severity === 'HIGH' ? 'bg-orange-500/10 border-orange-500/30' : 'bg-gray-900 border-gray-800'}`}>
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-2">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${m.platform === 'telegram' ? 'bg-blue-500/20 text-blue-400' : 'bg-indigo-500/20 text-indigo-400'}`}>{m.platform}</span>
+                          <span className="text-sm font-semibold">{m.channel}</span>
+                          <span className="text-xs text-gray-500">@{m.author}</span>
+                        </div>
+                        <span className={`text-xs font-bold ${m.severity === 'CRITICAL' ? 'text-red-400' : m.severity === 'HIGH' ? 'text-orange-400' : 'text-gray-400'}`}>{m.severity}</span>
+                      </div>
+                      <p className="text-sm text-gray-300">{m.text}</p>
+                      <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                        {(m.keywords || []).map((k: string, j: number) => <span key={j} className="px-1.5 py-0.5 bg-purple-500/10 text-purple-300 rounded">#{k}</span>)}
+                        {(m.links || []).slice(0, 3).map((l: string, j: number) => <span key={j} className="px-1.5 py-0.5 bg-gray-800 text-cyan-300 rounded font-mono">{l}</span>)}
+                      </div>
+                      <div className="mt-1 text-[10px] text-gray-600">{new Date(m.ts).toLocaleString()}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {!apiData && !loading && (
+                <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
+                  <MessageSquare className="w-16 h-16 mx-auto mb-4 text-gray-600" />
+                  <h3 className="text-lg font-semibold mb-2">Channel Monitor Ready</h3>
+                  <p className="text-gray-400">Search keywords across Telegram and Discord channels. Connect bots for live capture.</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ==================== EXECUTIVE OSINT TAB ==================== */}
+          {activeTab === 'exec' && (
+            <div className="space-y-6">
+              <h2 className="text-2xl font-bold flex items-center gap-3">
+                <ShieldUser className="w-7 h-7 text-amber-400" /> Executive Digital Protection
+                <span className="text-sm font-normal text-gray-400">(personal OSINT & exposure monitoring)</span>
+              </h2>
+              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                <div className="flex gap-4">
+                  <div className="flex-1">
+                    <input type="text" placeholder="Executive name (e.g., John Smith)"
+                      value={inputValue} onChange={(e) => setInputValue(e.target.value)}
+                      onKeyPress={(e) => e.key === 'Enter' && handleExecScan()}
+                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-amber-500 focus:outline-none" />
+                  </div>
+                  <button onClick={handleExecScan} disabled={loading} className="px-6 py-3 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2">
+                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldUser className="w-4 h-4" />} Scan Exposure
+                  </button>
+                </div>
+              </div>
+
+              {apiData?.data?.subject && (
+                <div className="space-y-4">
+                  <div className="rounded-xl p-5 border bg-amber-500/10 border-amber-500/40">
+                    <div className="flex items-center justify-between">
+                      <div><h3 className="font-semibold">Exposure Score</h3><p className="text-sm text-gray-400 mt-1">{apiData.data.subject.name}</p></div>
+                      <div className="text-right"><div className="text-3xl font-bold">{apiData.data.exposureScore}/100</div><div className="text-sm font-bold">{apiData.data.riskLevel}</div></div>
+                    </div>
+                  </div>
+
+                  <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                    <h3 className="font-semibold mb-3 flex items-center gap-2"><Bug className="w-5 h-5 text-red-400" /> Exposed Indicators ({apiData.data.findings?.length})</h3>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead><tr className="border-b border-gray-800 text-left text-gray-400">
+                          <th className="py-2 px-2">Type</th><th className="py-2 px-2">Value</th><th className="py-2 px-2">Source</th><th className="py-2 px-2">Severity</th>
+                        </tr></thead>
+                        <tbody>
+                          {(apiData.data.findings || []).map((f: any, i: number) => (
+                            <tr key={i} className="border-b border-gray-800">
+                              <td className="py-2 px-2 text-xs font-bold">{f.type}</td>
+                              <td className="py-2 px-2 font-mono text-xs">{f.value}</td>
+                              <td className="py-2 px-2 text-xs text-gray-400">{f.detail}</td>
+                              <td className="py-2 px-2"><span className={`px-2 py-0.5 rounded text-xs font-bold ${f.severity === 'HIGH' ? 'bg-red-500 text-white' : f.severity === 'MEDIUM' ? 'bg-yellow-500 text-black' : 'bg-gray-700'}`}>{f.severity}</span></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                    <h3 className="font-semibold mb-3 flex items-center gap-2"><Users className="w-5 h-5 text-blue-400" /> Social Media Footprint</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {(apiData.data.socialMatrix || []).map((s: any, i: number) => (
+                        <div key={i} className="p-3 bg-gray-800/60 rounded-lg flex items-center justify-between">
+                          <div><div className="text-sm font-medium">{s.platform}</div><div className="text-xs font-mono text-gray-500 truncate">{s.handle}</div></div>
+                          <span className={`px-2 py-0.5 rounded text-xs font-bold ${s.risk === 'MEDIUM' ? 'bg-yellow-500/20 text-yellow-400' : s.risk === 'HIGH' ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'}`}>{s.risk}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {apiData.data.dorkQueries?.length > 0 && (
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                      <h3 className="font-semibold mb-3 flex items-center gap-2"><Search className="w-5 h-5 text-purple-400" /> Google Dorking Queries</h3>
+                      {(apiData.data.dorkQueries as any[]).map((d: any, i: number) => (
+                        <div key={i} className="mb-2 p-2 bg-gray-800/60 rounded-lg">
+                          <div className="text-xs font-mono text-purple-300">{d.query}</div>
+                          <div className="text-xs text-gray-500">{d.total} result(s)</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              {!apiData && !loading && (
+                <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
+                  <ShieldUser className="w-16 h-16 mx-auto mb-4 text-gray-600" />
+                  <h3 className="text-lg font-semibold mb-2">Executive Protection Ready</h3>
+                  <p className="text-gray-400">Monitor exposed emails, phones, documents, social media and dark web references for executives.</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ==================== FAKE APP SCANNER TAB ==================== */}
+          {activeTab === 'fakeapp' && (
+            <div className="space-y-6">
+              <h2 className="text-2xl font-bold flex items-center gap-3">
+                <Smartphone className="w-7 h-7 text-fuchsia-400" /> Fake App Scanner
+                <span className="text-sm font-normal text-gray-400">(MOBSF-style + CVE matching)</span>
+              </h2>
+              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                <div className="flex gap-4">
+                  <div className="flex-1">
+                    <input type="text" placeholder="APK/IPA filename (e.g., bankapp.apk)"
+                      value={inputValue} onChange={(e) => setInputValue(e.target.value)}
+                      onKeyPress={(e) => e.key === 'Enter' && handleFakeApp()}
+                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-fuchsia-500 focus:outline-none" />
+                  </div>
+                  <button onClick={handleFakeApp} disabled={loading} className="px-6 py-3 bg-fuchsia-600 hover:bg-fuchsia-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2">
+                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Smartphone className="w-4 h-4" />} Analyze
+                  </button>
+                </div>
+              </div>
+
+              {apiData?.data?.verdict && (
+                <div className="space-y-4">
+                  <div className="rounded-xl p-5 border bg-red-500/10 border-red-500/50">
+                    <div className="flex items-center justify-between">
+                      <div><h3 className="font-semibold">Verdict: {apiData.data.verdict}</h3><p className="text-sm text-gray-400 mt-1 font-mono">{apiData.data.fileName} · {apiData.data.sha256?.substring(0, 20)}...</p></div>
+                      <div className="text-right"><div className="text-2xl font-bold">{apiData.data.confidence}%</div><div className="text-sm font-bold text-red-400">confidence</div></div>
+                    </div>
+                  </div>
+
+                  <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                    <h3 className="font-semibold mb-3 flex items-center gap-2"><AlertTriangle className="w-5 h-5 text-red-400" /> Risk Objects</h3>
+                    <div className="space-y-2">
+                      {(apiData.data.riskObjects || []).map((r: any, i: number) => (
+                        <div key={i} className={`p-3 rounded-lg ${r.severity === 'CRITICAL' ? 'bg-red-500/10 border-l-2 border-red-500' : r.severity === 'HIGH' ? 'bg-orange-500/10 border-l-2 border-orange-500' : 'bg-yellow-500/10 border-l-2 border-yellow-500'}`}>
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-bold">{r.id} · {r.type}</span>
+                            <span className="text-xs font-bold text-red-400">{r.severity}</span>
+                          </div>
+                          <p className="text-xs text-gray-400 mt-1">{r.description}</p>
+                          <p className="text-xs text-gray-500 mt-1">→ {r.recommendation}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {apiData.data.cvEs?.length > 0 && (
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                      <h3 className="font-semibold mb-3 flex items-center gap-2"><Shield className="w-5 h-5 text-orange-400" /> CVE Impact Matches</h3>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead><tr className="border-b border-gray-800 text-left text-gray-400">
+                            <th className="py-2 px-2">CVE</th><th className="py-2 px-2">CVSS</th><th className="py-2 px-2">Relevance</th>
+                          </tr></thead>
+                          <tbody>
+                            {(apiData.data.cvEs as any[]).map((c: any, i: number) => (
+                              <tr key={i} className="border-b border-gray-800">
+                                <td className="py-2 px-2 font-mono text-xs">{c.cveId}</td>
+                                <td className="py-2 px-2"><span className={`px-2 py-0.5 rounded text-xs font-bold ${(c.cvssScore || 0) >= 9 ? 'bg-red-500 text-white' : (c.cvssScore || 0) >= 7 ? 'bg-orange-500 text-black' : 'bg-gray-700'}`}>{c.cvssScore}</span></td>
+                                <td className="py-2 px-2 text-xs text-gray-400">{c.relevance}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {apiData.data.actors?.length > 0 && (
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                      <h3 className="font-semibold mb-3 flex items-center gap-2"><Users className="w-5 h-5 text-purple-400" /> Suspected Actors</h3>
+                      <div className="space-y-2">
+                        {(apiData.data.actors as any[]).map((a: any, i: number) => (
+                          <div key={i} className="p-3 bg-gray-800/60 rounded-lg flex flex-wrap gap-3 text-xs">
+                            <span className="font-bold text-purple-300">{a.handle}</span>
+                            <span className="text-gray-400">{a.role}</span>
+                            <span className="font-mono text-gray-500">{a.ip}</span>
+                            <span className="font-mono text-red-400">{a.domains?.join(', ')}</span>
+                            <span className={`px-2 py-0.5 rounded font-bold ${a.confidence === 'HIGH' ? 'bg-red-500/20 text-red-400' : 'bg-gray-700'}`}>{a.confidence}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              {!apiData && !loading && (
+                <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
+                  <Smartphone className="w-16 h-16 mx-auto mb-4 text-gray-600" />
+                  <h3 className="text-lg font-semibold mb-2">Fake App Scanner Ready</h3>
+                  <p className="text-gray-400">Analyze suspicious APK/IPA files for risk objects, CVE impact and fraud actors.</p>
+                </div>
+              )}
             </div>
           )}
         </main>
