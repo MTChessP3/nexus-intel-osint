@@ -83,24 +83,66 @@ export async function GET(request: NextRequest) {
   });
 }
 
-// POST: save a custom dark web watch
+// POST: search the dark web watch (same as GET) and optionally add to watchlist
 export async function POST(request: NextRequest) {
   const body = await request.json();
   const { query } = body;
   if (!query) {
-    return NextResponse.json({ success: false, error: 'query is required' }, { status: 400 });
+    return NextResponse.json({ success: false, error: 'Search term is required' }, { status: 400 });
   }
-  const ioc = await upsertIOC({
-    type: 'DOMAIN',
-    value: query,
-    description: `Dark web watchlist entry: ${query}`,
-    severity: 'LOW',
-    confidence: 30,
-    status: 'UNKNOWN',
-    source: 'DarkWeb-Watch',
-    tags: ['dark-web', 'watchlist'],
+
+  const aiEnabled = isAIEnabled();
+  let matches = getReferenceMatches(query);
+
+  let aiInsight: any = null;
+  if (aiEnabled) {
+    try {
+      const prompt = `Given the search term "${query}", generate a JSON object with:
+      {"riskLevel":"LOW|MEDIUM|HIGH","exposureSummary":"...", "categories":["..."],"recommendations":["..."]}
+      Only output valid JSON.`;
+      const raw = await aiComplete([{ role: 'user', content: prompt }], { temperature: 0.3 });
+      aiInsight = extractJSON(raw.content || '');
+    } catch (aiError) {
+      console.error('Dark web AI error (non-critical):', aiError);
+    }
+  }
+
+  const riskLevel = aiInsight?.riskLevel || (matches.length > 0 ? 'MEDIUM' : 'LOW');
+
+  try {
+    await upsertIOC({
+      type: 'DOMAIN',
+      value: query,
+      description: `Dark Web match for "${query}" — ${matches.length} reference(s)`,
+      severity: 'MEDIUM',
+      confidence: 40,
+      status: 'SUSPICIOUS',
+      source: 'DarkWeb-Watch',
+      rawResponse: JSON.stringify(matches).substring(0, 2000),
+      tags: ['dark-web', 'watch'],
+    });
+  } catch (storeError) {
+    console.error('Store error (non-critical):', storeError);
+  }
+
+  return NextResponse.json({
+    success: true,
+    query,
+    timestamp: new Date().toISOString(),
+    source: aiEnabled ? 'DarkWeb-Osint+AI' : 'DarkWeb-Osint',
+    aiEnabled,
+    riskLevel,
+    matches,
+    aiInsight,
+    disclaimer:
+      'This module indexes publicly indexed/OSINT dark web references and leaks. It does not access the dark web directly.',
+    recommendations:
+      riskLevel === 'HIGH'
+        ? ['Immediately rotate credentials', 'Enable MFA on all accounts', 'Monitor account activity closely']
+        : riskLevel === 'MEDIUM'
+          ? ['Investigate references found', 'Consider rotating exposed credentials', 'Strengthen monitoring']
+          : ['No significant exposure found', 'Continue routine monitoring'],
   });
-  return NextResponse.json({ success: true, ioc, message: `Watching "${query}"` });
 }
 
 function getReferenceMatches(query: string): any[] {

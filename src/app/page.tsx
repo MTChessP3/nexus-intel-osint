@@ -1115,9 +1115,9 @@ export default function OSINTPlatform() {
                     </h3>
                     
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {apiData.data.ip && (
+                      {(apiData.data.query || apiData.data.ip) && (
                         <>
-                          <InfoCard label="IP Address" value={apiData.data.ip} icon={<Globe className="w-4 h-4" />} />
+                          <InfoCard label="IP Address" value={apiData.data.query || apiData.data.ip} icon={<Globe className="w-4 h-4" />} />
                           <InfoCard label="Country" value={`${apiData.data.country || 'N/A'} (${apiData.data.countryCode || ''})`} icon={<MapPin className="w-4 h-4" />} />
                           <InfoCard label="Region" value={apiData.data.regionName || 'N/A'} icon={<MapPin className="w-4 h-4" />} />
                           <InfoCard label="City" value={apiData.data.city || 'N/A'} icon={<Server className="w-4 h-4" />} />
@@ -1139,7 +1139,7 @@ export default function OSINTPlatform() {
 
                     {/* Action Buttons on Result */}
                     <div className="mt-4 flex flex-wrap gap-2">
-                      <button onClick={() => copyToClipboard(apiData.data.ip)} className="px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm flex items-center gap-2">
+                      <button onClick={() => copyToClipboard(apiData.data.query || apiData.data.ip)} className="px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm flex items-center gap-2">
                         <Copy className="w-4 h-4" /> Copy IP
                       </button>
                       <button onClick={() => handleAddIOCFromResult()} className="px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm flex items-center gap-2">
@@ -1662,22 +1662,35 @@ export default function OSINTPlatform() {
                 </div>
               </div>
 
-              {apiData?.data && (
+              {apiData?.success && (
                 <div className="bg-gradient-to-r from-cyan-500/10 to-blue-500/10 border border-cyan-500/30 rounded-xl p-5">
-                  <h3 className="font-semibold mb-3">Hash Analysis Results</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    <InfoCard label="Hash Type" value={apiData.data.hashType || 'Detected'} icon={<Hash className="w-4 h-4" />} />
-                    <InfoCard label="First Seen" value={apiData.data.firstSeen || 'Unknown'} icon={<Clock className="w-4 h-4" />} />
-                    <InfoCard label="Last Seen" value={apiData.data.lastSeen || 'Unknown'} icon={<Clock className="w-4 h-4" />} />
-                    <InfoCard label="File Type" value={apiData.data.fileType || 'Unknown'} icon={<FileText className="w-4 h-4" />} />
-                    <InfoCard label="Signature" value={apiData.data.signature || 'Not found'} icon={<Bug className="w-4 h-4" />} alert={apiData.data.signature !== 'Not found'} />
-                    <InfoCard label="Detection Ratio" value={apiData.data.detectionRatio || '0/0'} icon={<Shield className="w-4 h-4" />} />
-                  </div>
-                  
-                  {apiData.data.tags && (
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      {apiData.data.tags.map((tag: string, idx: number) => (
-                        <span key={idx} className="px-2 py-1 bg-gray-800 rounded text-xs">{tag}</span>
+                  <h3 className="font-semibold mb-3 flex items-center gap-2">
+                    <CheckCircle className="w-5 h-5 text-cyan-400" /> Hash Analysis Results
+                  </h3>
+                  {apiData.data ? (
+                    <>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <InfoCard label="Hash Type" value={apiData.hashType || apiData.data.hashType || 'Detected'} icon={<Hash className="w-4 h-4" />} />
+                        <InfoCard label="First Seen" value={apiData.data.firstSeen || 'Unknown'} icon={<Clock className="w-4 h-4" />} />
+                        <InfoCard label="Last Seen" value={apiData.data.lastSeen || 'Unknown'} icon={<Clock className="w-4 h-4" />} />
+                        <InfoCard label="File Type" value={apiData.data.fileType || 'Unknown'} icon={<FileText className="w-4 h-4" />} />
+                        <InfoCard label="Signature" value={apiData.data.signature || 'Not found'} icon={<Bug className="w-4 h-4" />} alert={apiData.data.signature !== 'Not found'} />
+                        <InfoCard label="Detection Ratio" value={apiData.data.detectionRatio || `${apiData.data.signature ? 1 : 0}/1`} icon={<Shield className="w-4 h-4" />} />
+                      </div>
+                      
+                      {apiData.data.tags && (
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          {apiData.data.tags.map((tag: string, idx: number) => (
+                            <span key={idx} className="px-2 py-1 bg-gray-800 rounded text-xs">{tag}</span>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="space-y-2">
+                      <p className="text-sm text-gray-300">{apiData.message || 'Hash not found in malware databases. This could indicate a clean file or an unknown sample.'}</p>
+                      {apiData.suggestions?.map((s: string, idx: number) => (
+                        <p key={idx} className="text-xs text-gray-500">- {s}</p>
                       ))}
                     </div>
                   )}
@@ -1756,9 +1769,9 @@ export default function OSINTPlatform() {
                           CVSS: {vuln.cvssScore || vuln.metrics?.cvssMetricV2?.[0]?.cvssData?.baseScore || 'N/A'}
                         </span>
                       </div>
-                      <p className="text-sm text-gray-300 mb-2">{vuln.descriptions?.[0]?.value || vuln.shortDescription}</p>
+                      <p className="text-sm text-gray-300 mb-2">{vuln.description || vuln.descriptions?.[0]?.value || vuln.shortDescription}</p>
                       <div className="flex flex-wrap gap-2 text-xs">
-                        {vuln.cwes?.map((cwe: any, i: number) => (
+                        {(vuln.weaknesses || vuln.cwes || []).map((cwe: any, i: number) => (
                           <span key={i} className="px-2 py-1 bg-gray-700 rounded">{cwe}</span>
                         ))}
                       </div>
@@ -1913,73 +1926,65 @@ export default function OSINTPlatform() {
               </div>
 
               {/* Search Results */}
-              {apiData?.results && (
+              {apiData?.matches && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
-                    <h3 className="font-semibold">Search Results ({apiData.results.length})</h3>
-                    {apiData.summary && (
+                    <h3 className="font-semibold">Search Results ({apiData.matches.length})</h3>
+                    {apiData.riskLevel && (
                       <div className="flex gap-2 text-xs">
-                        <span className="px-2 py-1 bg-red-500/20 text-red-400 rounded">{apiData.summary.criticalCount} Critical</span>
-                        <span className="px-2 py-1 bg-orange-500/20 text-orange-400 rounded">{apiData.summary.highCount} High</span>
+                        <span className={`px-2 py-1 rounded ${
+                          apiData.riskLevel === 'HIGH' ? 'bg-red-500/20 text-red-400' :
+                          apiData.riskLevel === 'MEDIUM' ? 'bg-orange-500/20 text-orange-400' :
+                          'bg-green-500/20 text-green-400'
+                        }`}>
+                          Risk: {apiData.riskLevel}
+                        </span>
                       </div>
                     )}
                   </div>
                   
-                  {apiData.results.map((result: any, idx: number) => (
+                  {apiData.matches.map((result: any, idx: number) => (
                     <div
                       key={idx}
-                      className={`p-4 rounded-lg border cursor-pointer hover:bg-gray-800 transition-colors ${
-                        result.severity === 'CRITICAL' ? 'bg-red-500/10 border-red-500/30' :
-                        result.severity === 'HIGH' ? 'bg-orange-500/10 border-orange-500/30' :
-                        'bg-gray-900 border-gray-800'
-                      }`}
-                      onClick={() => showFeedback(`Viewing details: ${result.title}`)}
+                      className="p-4 rounded-lg border bg-gray-900 border-gray-800"
                     >
                       <div className="flex items-start justify-between">
                         <div>
                           <h4 className="font-medium flex items-center gap-2">
-                            {result.type === 'malware' && <Bug className="w-4 h-4 text-red-400" />}
-                            {result.type === 'breach' && <AlertTriangle className="w-4 h-4 text-orange-400" />}
-                            {result.type === 'marketplace' && <ShoppingCart className="w-4 h-4 text-purple-400" />}
-                            {result.type === 'forum' && <Users className="w-4 h-4 text-blue-400" />}
-                            {result.title}
+                            <AlertTriangle className="w-4 h-4 text-red-400" />
+                            {result.source}
                           </h4>
-                          <p className="text-sm text-gray-400 mt-1">{result.description}</p>
+                          <p className="text-sm text-gray-400 mt-1">{result.found}</p>
                         </div>
                         <span className={`px-2 py-1 rounded text-xs font-bold ${
-                          result.severity === 'CRITICAL' ? 'bg-red-500 text-white' :
-                          result.severity === 'HIGH' ? 'bg-orange-500 text-black' :
+                          result.relevance === 'HIGH' ? 'bg-red-500 text-white' :
+                          result.relevance === 'MEDIUM' ? 'bg-orange-500 text-black' :
                           'bg-gray-700'
                         }`}>
-                          {result.severity}
+                          {result.relevance}
                         </span>
                       </div>
                       <div className="mt-2 flex items-center gap-4 text-xs text-gray-500">
-                        <span>Type: {result.type}</span>
                         <span>Source: {result.source}</span>
-                        <span>Date: {result.dateFound}</span>
+                        <span>Date: {result.date}</span>
                       </div>
                     </div>
                   ))}
 
-                  {/* AI Analysis */}
-                  {apiData.aiAnalysis && (
+                  {/* Recommendations */}
+                  {apiData.recommendations && (
                     <div className="bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-purple-500/30 rounded-xl p-5">
                       <h3 className="font-semibold mb-3 flex items-center gap-2">
-                        <Cpu className="w-5 h-5 text-purple-400" /> AI Threat Assessment
+                        <Shield className="w-5 h-5 text-purple-400" /> Recommended Actions
                       </h3>
-                      <p className="text-sm text-gray-300 mb-3">{apiData.aiAnalysis.threatAssessment}</p>
-                      <div>
-                        <h4 className="text-sm font-medium text-green-400 mb-2">Recommended Actions:</h4>
-                        <ul className="space-y-1">
-                          {apiData.aiAnalysis.recommendedActions?.map((action: string, idx: number) => (
-                            <li key={idx} className="text-sm flex items-start gap-2">
-                              <CheckCircle className="w-4 h-4 text-green-400 mt-0.5 shrink-0" />
-                              {action}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
+                      <ul className="space-y-1">
+                        {apiData.recommendations.map((action: string, idx: number) => (
+                          <li key={idx} className="text-sm flex items-start gap-2">
+                            <CheckCircle className="w-4 h-4 text-green-400 mt-0.5 shrink-0" />
+                            {action}
+                          </li>
+                        ))}
+                      </ul>
                     </div>
                   )}
                 </div>
