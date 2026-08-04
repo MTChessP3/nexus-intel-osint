@@ -1,5 +1,18 @@
-// In-memory data store for Vercel serverless compatibility
-// This replaces Prisma/SQLite which doesn't work on Vercel
+// Data store backed by Vercel KV (Upstash Redis) with in-memory fallback.
+// Persists IOCs, analyses and alerts across serverless invocations.
+
+import {
+  kvGet,
+  kvSet,
+  kvPushList,
+  kvGetList,
+  kvRemoveFromList,
+  kvListKeys,
+  kvHealth,
+  getStorageBackend,
+} from '@/lib/kv';
+
+export { kvGet, kvSet, kvDel, kvListKeys, kvHealth, isKVConfigured, getStorageBackend } from '@/lib/kv';
 
 export interface IOC {
   id: string;
@@ -39,13 +52,15 @@ export interface Alert {
   createdAt: string;
 }
 
-// In-memory storage
-let iocs: IOC[] = [];
-let analyses: Analysis[] = [];
-let alerts: Alert[] = [];
+const IOCS_KEY = 'nexus:iocs';
+const ANALYSES_KEY = 'nexus:analyses';
+const ALERTS_KEY = 'nexus:alerts';
+const MAX_IOCS = 500;
+const MAX_ANALYSES = 2000;
+const MAX_ALERTS = 500;
 
-// Initialize with sample IOCs for demo
-const sampleIOCs: IOC[] = [
+// Seed sample IOCs so the dashboard always has meaningful data
+const SAMPLE_IOCS: IOC[] = [
   {
     id: 'ioc-001',
     type: 'IP',
@@ -57,7 +72,7 @@ const sampleIOCs: IOC[] = [
     source: 'ip-api.com',
     tags: ['tor', 'exit-node', 'proxy'],
     firstSeen: new Date().toISOString(),
-    lastUpdated: new Date().toISOString()
+    lastUpdated: new Date().toISOString(),
   },
   {
     id: 'ioc-002',
@@ -70,7 +85,7 @@ const sampleIOCs: IOC[] = [
     source: 'ThreatIntel',
     tags: ['phishing', 'malware', 'c2'],
     firstSeen: new Date().toISOString(),
-    lastUpdated: new Date().toISOString()
+    lastUpdated: new Date().toISOString(),
   },
   {
     id: 'ioc-003',
@@ -83,7 +98,7 @@ const sampleIOCs: IOC[] = [
     source: 'VirusTotal',
     tags: ['test', 'eicar'],
     firstSeen: new Date().toISOString(),
-    lastUpdated: new Date().toISOString()
+    lastUpdated: new Date().toISOString(),
   },
   {
     id: 'ioc-004',
@@ -96,7 +111,7 @@ const sampleIOCs: IOC[] = [
     source: 'NIST-NVD',
     tags: ['rce', 'palo-alto', 'vpn', 'critical'],
     firstSeen: new Date().toISOString(),
-    lastUpdated: new Date().toISOString()
+    lastUpdated: new Date().toISOString(),
   },
   {
     id: 'ioc-005',
@@ -109,51 +124,37 @@ const sampleIOCs: IOC[] = [
     source: 'PhishTank',
     tags: ['phishing', 'banking', 'credential-theft'],
     firstSeen: new Date().toISOString(),
-    lastUpdated: new Date().toISOString()
-  }
+    lastUpdated: new Date().toISOString(),
+  },
 ];
 
-// Initialize store
-if (iocs.length === 0) {
-  iocs = [...sampleIOCs];
-  
-  // Add some sample alerts
-  alerts = [
-    {
-      id: 'alert-001',
-      iocId: 'ioc-004',
-      title: 'Critical CVE Detected: CVE-2024-3400',
-      description: 'PAN-OS Command Injection vulnerability being actively exploited',
-      severity: 'CRITICAL',
-      type: 'VULNERABILITY_FOUND',
-      status: 'ACTIVE',
-      createdAt: new Date(Date.now() - 3600000).toISOString()
-    },
-    {
-      id: 'alert-002',
-      iocId: 'ioc-005',
-      title: 'Active Phishing Campaign',
-      description: 'New phishing site detected targeting financial sector',
-      severity: 'CRITICAL',
-      type: 'IOC_DETECTED',
-      status: 'ACTIVE',
-      createdAt: new Date(Date.now() - 7200000).toISOString()
-    },
-    {
-      id: 'alert-003',
-      title: 'Threat Intelligence Update',
-      description: 'New IOCs added from threat feed analysis',
-      severity: 'HIGH',
-      type: 'THREAT_FEED_MATCH',
-      status: 'ACTIVE',
-      createdAt: new Date(Date.now() - 10800000).toISOString()
+let seeded = false;
+
+async function ensureSeeded(): Promise<void> {
+  if (seeded) return;
+  seeded = true;
+  try {
+    const existing = await kvGetList<IOC>(IOCS_KEY);
+    if (existing.length === 0) {
+      await kvSet(IOCS_KEY, SAMPLE_IOCS);
     }
-  ];
+  } catch (error) {
+    console.error('Seed error:', error);
+  }
 }
 
 // Generate unique ID
 export function generateId(prefix: string = 'id'): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+}
+
+export function getStorageBackendName(): string {
+  return getStorageBackend();
+}
+
+async function loadIOCs(): Promise<IOC[]> {
+  await ensureSeeded();
+  return kvGetList<IOC>(IOCS_KEY);
 }
 
 // IOC Operations
@@ -165,47 +166,44 @@ export async function getIOCs(filters?: {
   page?: number;
   limit?: number;
 }): Promise<{ data: IOC[]; total: number; page: number; limit: number; totalPages: number }> {
-  let filtered = [...iocs];
-  
-  if (filters?.type) {
-    filtered = filtered.filter(i => i.type === filters.type.toUpperCase());
-  }
-  if (filters?.status) {
-    filtered = filtered.filter(i => i.status === filters.status.toUpperCase());
-  }
-  if (filters?.severity) {
-    filtered = filtered.filter(i => i.severity === filters.severity.toUpperCase());
-  }
+  let filtered = await loadIOCs();
+
+  if (filters?.type) filtered = filtered.filter((i) => i.type === filters.type!.toUpperCase());
+  if (filters?.status) filtered = filtered.filter((i) => i.status === filters.status!.toUpperCase());
+  if (filters?.severity) filtered = filtered.filter((i) => i.severity === filters.severity!.toUpperCase());
   if (filters?.search) {
     const searchLower = filters.search.toLowerCase();
-    filtered = filtered.filter(i => 
-      i.value.toLowerCase().includes(searchLower) ||
-      (i.description && i.description.toLowerCase().includes(searchLower)) ||
-      (i.source && i.source.toLowerCase().includes(searchLower))
+    filtered = filtered.filter(
+      (i) =>
+        i.value.toLowerCase().includes(searchLower) ||
+        (i.description && i.description.toLowerCase().includes(searchLower)) ||
+        (i.source && i.source.toLowerCase().includes(searchLower))
     );
   }
-  
+
   const page = filters?.page || 1;
   const limit = filters?.limit || 50;
   const total = filtered.length;
-  const totalPages = Math.ceil(total / limit);
+  const totalPages = Math.max(1, Math.ceil(total / limit));
   const start = (page - 1) * limit;
-  
+
   return {
     data: filtered.slice(start, start + limit),
     total,
     page,
     limit,
-    totalPages
+    totalPages,
   };
 }
 
 export async function getIOCById(id: string): Promise<IOC | null> {
-  return iocs.find(i => i.id === id) || null;
+  const all = await loadIOCs();
+  return all.find((i) => i.id === id) || null;
 }
 
 export async function getIOCByValue(value: string): Promise<IOC | null> {
-  return iocs.find(i => i.value === value) || null;
+  const all = await loadIOCs();
+  return all.find((i) => i.value.toLowerCase() === value.toLowerCase()) || null;
 }
 
 export async function createIOC(data: {
@@ -214,15 +212,18 @@ export async function createIOC(data: {
   description?: string;
   severity?: string;
   confidence?: number;
+  status?: string;
   source?: string;
   tags?: string[];
 }): Promise<IOC> {
-  // Check if exists
-  const existing = iocs.find(i => i.value === data.value);
+  const all = await loadIOCs();
+  const existing = all.find(
+    (i) => i.value.toLowerCase() === data.value.toLowerCase() && i.type === data.type.toUpperCase()
+  );
   if (existing) {
     throw new Error('IOC already exists');
   }
-  
+
   const newIOC: IOC = {
     id: generateId('ioc'),
     type: data.type.toUpperCase(),
@@ -230,55 +231,64 @@ export async function createIOC(data: {
     description: data.description || `${data.type}: ${data.value}`,
     severity: (data.severity || 'MEDIUM').toUpperCase(),
     confidence: data.confidence || 50,
-    status: 'UNKNOWN',
+    status: (data.status || 'UNKNOWN').toUpperCase(),
     source: data.source || 'manual',
     tags: data.tags || [],
     firstSeen: new Date().toISOString(),
-    lastUpdated: new Date().toISOString()
+    lastUpdated: new Date().toISOString(),
   };
-  
-  iocs.unshift(newIOC);
-  
-  // Create alert for new IOC
-  await createAlert({
-    iocId: newIOC.id,
-    title: `New ${data.type} Added: ${data.value}`,
-    description: data.description || `Manually added indicator of compromise`,
-    severity: (data.severity || 'MEDIUM').toUpperCase(),
-    type: 'IOC_DETECTED'
-  });
-  
+
+  await kvSet(IOCS_KEY, [newIOC, ...all].slice(0, MAX_IOCS));
+
+  try {
+    await createAlert({
+      iocId: newIOC.id,
+      title: `New ${data.type} Added: ${data.value}`,
+      description: data.description || 'Manually added indicator of compromise',
+      severity: newIOC.severity,
+      type: 'IOC_DETECTED',
+    });
+  } catch (e) {
+    /* non-critical */
+  }
+
   return newIOC;
 }
 
-export async function updateIOC(id: string, data: {
-  description?: string;
-  severity?: string;
-  status?: string;
-  confidence?: number;
-  tags?: string[];
-}): Promise<IOC | null> {
-  const index = iocs.findIndex(i => i.id === id);
+export async function updateIOC(
+  id: string,
+  data: {
+    description?: string;
+    severity?: string;
+    status?: string;
+    confidence?: number;
+    tags?: string[];
+  }
+): Promise<IOC | null> {
+  const all = await loadIOCs();
+  const index = all.findIndex((i) => i.id === id);
   if (index === -1) return null;
-  
-  iocs[index] = {
-    ...iocs[index],
-    ...data,
-    lastUpdated: new Date().toISOString()
-  };
-  
-  return iocs[index];
+
+  all[index] = { ...all[index], ...data, lastUpdated: new Date().toISOString() };
+  await kvSet(IOCS_KEY, all);
+  return all[index];
 }
 
 export async function deleteIOC(id: string): Promise<boolean> {
-  const index = iocs.findIndex(i => i.id === id);
+  const all = await loadIOCs();
+  const index = all.findIndex((i) => i.id === id);
   if (index === -1) return false;
-  
-  iocs.splice(index, 1);
-  // Also clean up related records
-  analyses = analyses.filter(a => a.iocId !== id);
-  alerts = alerts.filter(a => a.iocId !== id);
-  
+
+  all.splice(index, 1);
+  await kvSet(IOCS_KEY, all);
+
+  // Clean up related records
+  const analyses = await kvGetList<Analysis>(ANALYSES_KEY);
+  await kvSet(ANALYSES_KEY, analyses.filter((a) => a.iocId !== id));
+
+  const alerts = await kvGetList<Alert>(ALERTS_KEY);
+  await kvSet(ALERTS_KEY, alerts.filter((a) => a.iocId !== id));
+
   return true;
 }
 
@@ -293,25 +303,28 @@ export async function upsertIOC(data: {
   rawResponse?: string;
   tags?: string[];
 }): Promise<IOC> {
-  const existing = iocs.find(i => i.value === data.value);
-  
-  if (existing) {
-    const index = iocs.indexOf(existing);
-    iocs[index] = {
-      ...existing,
+  const all = await loadIOCs();
+  const index = all.findIndex(
+    (i) => i.value.toLowerCase() === data.value.toLowerCase() && i.type === data.type.toUpperCase()
+  );
+
+  if (index !== -1) {
+    all[index] = {
+      ...all[index],
       ...(data.description && { description: data.description }),
-      ...(data.severity && { severity: data.severity }),
+      ...(data.severity && { severity: data.severity.toUpperCase() }),
       ...(data.confidence && { confidence: data.confidence }),
-      ...(data.status && { status: data.status }),
+      ...(data.status && { status: data.status.toUpperCase() }),
       ...(data.source && { source: data.source }),
       ...(data.rawResponse && { rawResponse: data.rawResponse }),
       ...(data.tags && { tags: data.tags }),
-      lastUpdated: new Date().toISOString()
+      lastUpdated: new Date().toISOString(),
     };
-    return iocs[index];
-  } else {
-    return createIOC(data);
+    await kvSet(IOCS_KEY, all);
+    return all[index];
   }
+
+  return createIOC(data);
 }
 
 // Analysis Operations
@@ -329,15 +342,21 @@ export async function createAnalysis(data: {
     ...data,
     findings: data.findings || [],
     verified: data.verified || false,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   };
-  
-  analyses.unshift(newAnalysis);
+
+  await kvPushList(ANALYSES_KEY, newAnalysis, MAX_ANALYSES);
   return newAnalysis;
 }
 
 export async function getAnalysesByIOC(iocId: string): Promise<Analysis[]> {
-  return analyses.filter(a => a.iocId === iocId).slice(0, 3);
+  const all = await kvGetList<Analysis>(ANALYSES_KEY);
+  return all.filter((a) => a.iocId === iocId).slice(0, 3);
+}
+
+export async function getRecentAnalyses(limit = 20): Promise<Analysis[]> {
+  const all = await kvGetList<Analysis>(ANALYSES_KEY);
+  return all.slice(0, limit);
 }
 
 // Alert Operations
@@ -352,46 +371,61 @@ export async function createAlert(data: {
     id: generateId('alert'),
     ...data,
     status: 'ACTIVE',
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
   };
-  
-  alerts.unshift(newAlert);
+
+  await kvPushList(ALERTS_KEY, newAlert, MAX_ALERTS);
   return newAlert;
 }
 
 export async function getAlerts(options?: { iocId?: string; status?: string }): Promise<Alert[]> {
-  let filtered = [...alerts];
-  
-  if (options?.iocId) {
-    filtered = filtered.filter(a => a.iocId === options.iocId);
-  }
-  if (options?.status) {
-    filtered = filtered.filter(a => a.status === options.status);
-  }
-  
-  return filtered.slice(0, 5);
+  let filtered = await kvGetList<Alert>(ALERTS_KEY);
+
+  if (options?.iocId) filtered = filtered.filter((a) => a.iocId === options.iocId);
+  if (options?.status) filtered = filtered.filter((a) => a.status === options.status);
+
+  return filtered.slice(0, 20);
+}
+
+export async function updateAlertStatus(id: string, status: string): Promise<Alert | null> {
+  const all = await kvGetList<Alert>(ALERTS_KEY);
+  const index = all.findIndex((a) => a.id === id);
+  if (index === -1) return null;
+  all[index] = { ...all[index], status };
+  await kvSet(ALERTS_KEY, all);
+  return all[index];
+}
+
+export async function removeAlert(id: string): Promise<boolean> {
+  let removed = false;
+  await kvRemoveFromList<Alert>(ALERTS_KEY, (a) => {
+    if (a.id === id) removed = true;
+    return a.id === id;
+  });
+  return removed;
 }
 
 // Stats
-export function getStoreStats() {
+export async function getStoreStats() {
+  const iocs = await loadIOCs();
+  const alerts = await kvGetList<Alert>(ALERTS_KEY);
   return {
     totalIOCs: iocs.length,
-    totalAnalyses: analyses.length,
-    totalAlerts: alerts.filter(a => a.status === 'ACTIVE').length,
+    totalAlerts: alerts.filter((a) => a.status === 'ACTIVE').length,
     severityBreakdown: {
-      CRITICAL: iocs.filter(i => i.severity === 'CRITICAL').length,
-      HIGH: iocs.filter(i => i.severity === 'HIGH').length,
-      MEDIUM: iocs.filter(i => i.severity === 'MEDIUM').length,
-      LOW: iocs.filter(i => i.severity === 'LOW').length,
-      INFO: iocs.filter(i => i.severity === 'INFO').length
+      CRITICAL: iocs.filter((i) => i.severity === 'CRITICAL').length,
+      HIGH: iocs.filter((i) => i.severity === 'HIGH').length,
+      MEDIUM: iocs.filter((i) => i.severity === 'MEDIUM').length,
+      LOW: iocs.filter((i) => i.severity === 'LOW').length,
+      INFO: iocs.filter((i) => i.severity === 'INFO').length,
     },
     typeBreakdown: {
-      IP: iocs.filter(i => i.type === 'IP').length,
-      DOMAIN: iocs.filter(i => i.type === 'DOMAIN').length,
-      URL: iocs.filter(i => i.type === 'URL').length,
-      HASH: iocs.filter(i => i.type === 'HASH').length,
-      CVE: iocs.filter(i => i.type === 'CVE').length,
-      EMAIL: iocs.filter(i => i.type === 'EMAIL').length
-    }
+      IP: iocs.filter((i) => i.type === 'IP').length,
+      DOMAIN: iocs.filter((i) => i.type === 'DOMAIN').length,
+      URL: iocs.filter((i) => i.type === 'URL').length,
+      HASH: iocs.filter((i) => i.type === 'HASH').length,
+      CVE: iocs.filter((i) => i.type === 'CVE').length,
+      EMAIL: iocs.filter((i) => i.type === 'EMAIL').length,
+    },
   };
 }

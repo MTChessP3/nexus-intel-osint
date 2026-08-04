@@ -70,23 +70,17 @@ npx vercel --prod
 
 ### Opción 2: GitHub + Vercel Automático
 
-1. **Fork** este repositorio
+1. **Push** este repositorio a GitHub
 2. Ve a [vercel.com/new](https://vercel.com/new)
-3. Importa tu fork
-4. ¡Listo! Vercel despliegue automáticamente
+3. Importa el repositorio
+4. Añade las variables de entorno (ver sección Configuración)
+5. ¡Listo! Vercel despliega automáticamente en cada push
 
-### Opción 3: Docker
-
-```bash
-docker build -t nexus-intel .
-docker run -p 3000:3000 nexus-intel
-```
-
-### Opción 4: Local
+### Opción 3: Local
 
 ```bash
 # Instalar
-npm install
+bun install        # o: npm install
 
 # Desarrollo
 npm run dev
@@ -105,20 +99,30 @@ Abre [http://localhost:3000](http://localhost:3000)
 src/
 ├── app/
 │   ├── api/osint/        # APIs RESTful
-│   │   ├── ip/route.ts   # IP Intelligence API
-│   │   ├── domain/route.ts # Domain Analysis API
-│   │   ├── cve/route.ts  # CVE/NVD Search API
-│   │   ├── url/route.ts  # URL Security API
-│   │   ├── hash/route.ts # Malware Hash API
-│   │   ├── threats/route.ts # Threat Intel API
-│   │   └── reports/route.ts # Report Generator API
+│   │   ├── ip/           # IP Intelligence (ip-api.com)
+│   │   ├── domain/       # Domain/DNS (Google DoH + RDAP)
+│   │   ├── url/          # URL Scanner
+│   │   ├── hash/         # Malware Hash (MalwareBazaar/VT)
+│   │   ├── cve/          # CVE/NVD Search
+│   │   ├── threats/      # Threat Feeds (CISA, Abuse.ch)
+│   │   ├── darkweb/      # Dark Web Intel
+│   │   ├── mobile/       # Mobile Security
+│   │   ├── forensics/    # Domain Forensics
+│   │   ├── ai/           # AI Analyst (Groq)
+│   │   ├── iocs/         # IOC Manager (persistente)
+│   │   ├── sources/      # Intelligence Sources CRUD
+│   │   ├── export/       # Export JSON/CSV/STIX 2.1
+│   │   └── reports/      # Report Generator
 │   ├── page.tsx          # Dashboard Principal
 │   ├── layout.tsx        # Layout raíz
 │   └── globals.css       # Estilos globales
-├── components/
-│   └── ui/               # Componentes shadcn/ui
-├── hooks/                # Custom React hooks
-└── lib/                  # Utilidades
+└── lib/
+    ├── kv.ts             # Persistencia Vercel KV (+ fallback memoria)
+    ├── store.ts          # Store de IOCs/análisis/alertas
+    ├── sources.ts        # Registro de fuentes de inteligencia
+    ├── intel/            # Motor de enriquecimiento compartido
+    ├── agents/           # Agentes (enrichment/analysis/reporter)
+    └── ai.ts             # Cliente IA OpenAI-compatible (Groq)
 ```
 
 ---
@@ -152,21 +156,67 @@ src/
 
 ## 🔧 Configuración
 
-### Variables de Entorno (Opcionales)
+### Variables de Entorno
+
+Copia `.env.example` a `.env` y completa los valores. **La plataforma funciona sin ninguna
+clave** — IA y persistencia usan modos de respaldo claramente etiquetados — pero para
+funcionalidad completa configura:
 
 ```env
-# Para producción, crear .env.local
-NEXT_PUBLIC_API_KEY=tu-api-key  # Opcional, para APIs premium
-NEXT_PUBLIC_ANALYTICS_ID=id     # Opcional, para analytics
+# ===== IA (OpenAI-compatible, por defecto Groq) =====
+# Clave gratuita: https://console.groq.com/keys
+GROQ_API_KEY=            # O AI_API_KEY
+AI_BASE_URL=https://api.groq.com/openai/v1
+AI_MODEL=llama-3.3-70b-versatile
+AI_TEMPERATURE=0.3
+AI_MAX_TOKENS=2000
+
+# ===== Persistencia (Vercel KV / Upstash Redis) =====
+# Crea un store KV en el dashboard de Vercel (se inyecta automáticamente) o Upstash.
+KV_REST_API_URL=
+KV_REST_API_TOKEN=
+
+# ===== Fuentes opcionales =====
+NVD_API_KEY=             # https://nvd.nist.gov/developers/request-an-api-key
+VIRUSTOTAL_API_KEY=      # https://www.virustotal.com/gui/my-apikey
 ```
+
+> **En Vercel**: añade `GROQ_API_KEY`, `KV_REST_API_URL`, `KV_REST_API_TOKEN`
+> (y opcionalmente `NVD_API_KEY`, `VIRUSTOTAL_API_KEY`) en **Settings → Environment Variables**.
 
 ### APIs Externas Utilizadas
 
 | Servicio | Uso | Costo |
 |----------|-----|-------|
 | ip-api.com | Geolocalización IP | Gratis (45 req/min) |
-| NIST NVD | Base CVEs | Gratis (sin límite) |
-| Page Reader | Contenido web | Incluido SDK |
+| Google DoH + RDAP | DNS records + WHOIS | Gratis |
+| NIST NVD | Base CVEs | Gratis (mejor con key) |
+| MalwareBazaar (Abuse.ch) | Hashes de malware | Gratis |
+| CISA KEV / Abuse.ch SSLBL | Feeds de amenazas | Gratis |
+| Groq (Llama 3.3) | Análisis IA, resúmenes, agentes | Gratis con key |
+| VirusTotal | Reputación de hashes | Opcional con key |
+
+### Registro de fuentes
+
+La pestaña **Intelligence Sources** permite listar, probar (connectivity check),
+activar/desactivar y **añadir fuentes personalizadas** (GET/POST con API key opcional).
+Las fuentes built-in se siembran automáticamente y no pueden borrarse.
+
+---
+
+## 🧪 Pruebas
+
+```bash
+# 1. Levanta el servidor de desarrollo
+bun run dev        # o: npm run dev
+
+# 2. En otra terminal, ejecuta la suite de tests de API
+node tests/api-tests.mjs
+```
+
+Los 29 tests cubren todos los módulos (IP, Domain, URL, Hash, CVE, Threat Feeds,
+Dark Web, AI, IOC CRUD, Export JSON/CSV/STIX, Reports, Sources, Forensics, Mobile).
+Ver `TESTING.md` para el checklist manual y los comandos CI (`tsc`, `lint`, `build`).
 
 ---
 
@@ -182,10 +232,13 @@ NEXT_PUBLIC_ANALYTICS_ID=id     # Opcional, para analytics
 
 ## 📈 Roadmap
 
-- [ ] Integración VirusTotal API real
+- [x] Persistencia de IOCs, análisis y reportes (Vercel KV)
+- [x] Agentes de IA (enrichment, analysis, reporter) con Groq
+- [x] Registro de fuentes de inteligencia personalizadas
+- [x] Exportación STIX 2.1 de IOCs
+- [x] Historial de reportes generados
 - [ ] Alertas por email/SMS/Webhook
-- [ ] Historial de análisis guardado
-- [ ] Exportación STIX/TAXII de IOCs
+- [ ] Safe Browsing API para verificación de URLs
 - [ ] YARA rules generator
 - [ ] MISP integration
 - [ ] Multi-tenant support

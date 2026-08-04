@@ -5,9 +5,6 @@ const nextConfig: NextConfig = {
   // Vercel uses its own build system and doesn't support standalone mode
   
   /* config options here */
-  typescript: {
-    ignoreBuildErrors: true,
-  },
   reactStrictMode: false,
   
   // Ensure proper handling of API routes in serverless environment

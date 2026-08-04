@@ -19,7 +19,7 @@ import {
 } from 'recharts';
 
 // ==================== TYPES ====================
-type TabType = 'dashboard' | 'ip' | 'domain' | 'url' | 'hash' | 'cve' | 'ai' | 'darkweb' | 'threats' | 'mobile' | 'forensics' | 'iocs' | 'export' | 'reports';
+type TabType = 'dashboard' | 'ip' | 'domain' | 'url' | 'hash' | 'cve' | 'ai' | 'darkweb' | 'threats' | 'mobile' | 'forensics' | 'iocs' | 'export' | 'reports' | 'sources';
 type Severity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
 type IOCStatus = 'UNKNOWN' | 'BENIGN' | 'SUSPICIOUS' | 'MALICIOUS';
 
@@ -127,6 +127,7 @@ export default function OSINTPlatform() {
     value: '',
     description: '',
     severity: 'MEDIUM',
+    status: 'UNKNOWN',
     tags: [] as string[]
   });
   
@@ -146,10 +147,27 @@ export default function OSINTPlatform() {
     executiveSummary: true,
     recommendations: true
   });
+
+  // New source form state
+  const [newSource, setNewSource] = useState({
+    name: '',
+    type: 'CUSTOM',
+    method: 'GET',
+    endpoint: '',
+    apiKeyEnv: '',
+    description: ''
+  });
   
   // Forensics Results
   const [forensicsHistory, setForensicsHistory] = useState<any[]>([]);
   const [selectedForensics, setSelectedForensics] = useState<any>(null);
+
+  // Generated Reports History
+  const [reports, setReports] = useState<any[]>([]);
+
+  // Intelligence Sources
+  const [sources, setSources] = useState<any[]>([]);
+  const [sourceHealth, setSourceHealth] = useState<any[]>([]);
 
   // Initialize and load data
   useEffect(() => {
@@ -200,6 +218,8 @@ export default function OSINTPlatform() {
     if (['iocs', 'dashboard', 'export', 'reports'].includes(activeTab)) {
       loadIOCs();
     }
+    if (activeTab === 'reports') loadReports();
+    if (activeTab === 'sources') loadSources();
   }, [activeTab]);
 
   // ==================== API FUNCTIONS ====================
@@ -408,6 +428,7 @@ export default function OSINTPlatform() {
     // Show sample data if APIs are restricted
     if (result.success && !result.feeds?.length && !result.error) {
       const sampleData = {
+        success: true,
         feeds: [
           { source: 'CISA KEV Catalog', type: 'Known Exploited Vulnerabilities', count: 3, status: 'active', entries: [
             { cveID: 'CVE-2024-3400', product: 'PAN-OS', vulnerabilityName: 'Command Injection', dateAdded: '2024-04-12' },
@@ -438,7 +459,38 @@ export default function OSINTPlatform() {
       body: JSON.stringify(formData)
     });
     setShowModal(false);
-    setFormData({ type: 'IP', value: '', description: '', severity: 'MEDIUM', tags: [] });
+    setFormData({ type: 'IP', value: '', description: '', severity: 'MEDIUM', status: 'UNKNOWN', tags: [] });
+  };
+
+  // Add the current analysis result (ip/domain/hash/url) to the IOC store
+  const handleAddIOCFromResult = async () => {
+    const target = apiData?.data?.ip || apiData?.data?.ipAddress || apiData?.data?.domain || apiData?.data?.hostname || inputValue;
+    const detected = detectInputType(target);
+    const iocType = detected === 'md5' || detected === 'sha1' || detected === 'sha256' ? 'HASH'
+      : detected === 'cve' ? 'CVE'
+      : detected === 'url' ? 'URL'
+      : detected === 'ip' ? 'IP'
+      : 'DOMAIN';
+    if (!target) {
+      showFeedback('No result to add — run an analysis first', 'error');
+      return;
+    }
+    showFeedback(`Adding ${iocType}: ${target} to IOCs...`, 'info');
+    const result = await callAPI('/api/osint/iocs', {
+      method: 'POST',
+      body: JSON.stringify({
+        type: iocType,
+        value: target,
+        description: `Added from ${activeTab} analysis`,
+        severity: 'MEDIUM',
+        status: 'UNKNOWN',
+        tags: [activeTab, 'from-result']
+      })
+    });
+    if (result?.success) {
+      showFeedback(`Added ${target} to IOCs`, 'success');
+      loadIOCs();
+    }
   };
 
   const handleUpdateIOC = async () => {
@@ -487,6 +539,92 @@ export default function OSINTPlatform() {
       method: 'POST',
       body: JSON.stringify(reportConfig)
     });
+    loadReports();
+  };
+
+  // Load generated reports history
+  const loadReports = async () => {
+    try {
+      const res = await fetch('/api/osint/reports?action=list');
+      const data = await res.json();
+      if (data.success) setReports(data.data || []);
+    } catch (e) {
+      console.error('Failed to load reports:', e);
+    }
+  };
+
+  // ==================== INTELLIGENCE SOURCES ====================
+  const loadSources = async () => {
+    try {
+      const [sourcesRes, healthRes] = await Promise.all([
+        fetch('/api/osint/sources'),
+        fetch('/api/osint/sources?action=health')
+      ]);
+      const sourcesData = await sourcesRes.json();
+      const healthData = await healthRes.json();
+      if (sourcesData.success) setSources(sourcesData.data || []);
+      if (healthData.success) setSourceHealth(healthData.data || []);
+    } catch (e) {
+      console.error('Failed to load sources:', e);
+    }
+  };
+
+  const handleTestSource = async (id: string) => {
+    showFeedback('Testing source connectivity...', 'info');
+    try {
+      const res = await fetch('/api/osint/sources', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'test', id })
+      });
+      const data = await res.json();
+      showFeedback(data.message || (data.success ? 'Source OK' : 'Source failed'), data.success ? 'success' : 'error');
+      loadSources();
+    } catch (e) {
+      showFeedback('Test failed', 'error');
+    }
+  };
+
+  const handleToggleSource = async (source: any) => {
+    try {
+      const res = await fetch('/api/osint/sources', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: source.id, enabled: !source.enabled })
+      });
+      const data = await res.json();
+      if (data.success) {
+        showFeedback(`${source.name} ${source.enabled ? 'disabled' : 'enabled'}`, 'success');
+        loadSources();
+      }
+    } catch (e) {
+      showFeedback('Update failed', 'error');
+    }
+  };
+
+  const handleAddSource = async () => {
+    if (!newSource.name || !newSource.endpoint) {
+      showFeedback('Name and endpoint required', 'error');
+      return;
+    }
+    showFeedback('Adding source...', 'info');
+    try {
+      const res = await fetch('/api/osint/sources', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newSource)
+      });
+      const data = await res.json();
+      if (data.success) {
+        showFeedback(`Source "${newSource.name}" added`, 'success');
+        setNewSource({ name: '', type: 'CUSTOM', method: 'GET', endpoint: '', apiKeyEnv: '', description: '' });
+        loadSources();
+      } else {
+        showFeedback(data.error || 'Failed to add source', 'error');
+      }
+    } catch (e) {
+      showFeedback('Failed to add source', 'error');
+    }
   };
 
   // Modal Handlers
@@ -503,6 +641,7 @@ export default function OSINTPlatform() {
       value: ioc.value,
       description: ioc.description,
       severity: ioc.severity,
+      status: ioc.status || 'UNKNOWN',
       tags: ioc.tags
     });
     setModalType('edit');
@@ -634,6 +773,7 @@ export default function OSINTPlatform() {
               { id: 'threats', icon: AlertTriangle, label: 'Threat Feeds', color: 'text-amber-400' },
               { id: 'iocs', icon: Database, label: 'IOC Manager', color: 'text-emerald-400' },
               { id: 'export', icon: Download, label: 'Export Data', color: 'text-teal-400' },
+              { id: 'sources', icon: Wifi, label: 'Intelligence Sources', color: 'text-sky-400' },
               { id: 'reports', icon: FileText, label: 'Reports', color: 'text-violet-400' },
             ].map(({ id, icon: Icon, label, color, badge }) => (
               <button
@@ -1095,13 +1235,13 @@ export default function OSINTPlatform() {
                   {apiData.securityAnalysis && (
                     <div className="mt-4 space-y-2">
                       <h4 className="text-sm font-medium">Security Analysis</h4>
-                      {(apiData.securityAnalysis.spf ? [<SecurityCheck label="SPF Record" pass={true} />] : [<SecurityCheck label="SPF Record" pass={false} />])}
-                      {(apiData.securityAnalysis.dmarc ? [<SecurityCheck label="DMARC Record" pass={true} />] : [<SecurityCheck label="DMARC Record" pass={false} />])}
+                      <SecurityCheck key="spf" label="SPF Record" pass={apiData.securityAnalysis.hasSPF === true} />
+                      <SecurityCheck key="dmarc" label="DMARC Record" pass={apiData.securityAnalysis.hasDMARC === true} />
                     </div>
                   )}
 
                   <div className="mt-4 flex flex-wrap gap-2">
-                    <button onClick={() => setInputValue(inputValue) || setActiveTab('forensics')} className="px-3 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-sm flex items-center gap-2">
+                    <button onClick={() => setActiveTab('forensics')} className="px-3 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-sm flex items-center gap-2">
                       <Camera className="w-4 h-4" /> Full Forensics
                     </button>
                     <button onClick={() => copyToClipboard(inputValue)} className="px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm flex items-center gap-2">
@@ -2159,7 +2299,7 @@ export default function OSINTPlatform() {
                   <Database className="w-7 h-7 text-emerald-400" /> IOC Manager
                 </h2>
                 <button
-                  onClick={() => { setModalType('add'); setFormData({ type: 'IP', value: '', description: '', severity: 'MEDIUM', tags: [] }); setShowModal(true); }}
+                  onClick={() => { setModalType('add'); setFormData({ type: 'IP', value: '', description: '', severity: 'MEDIUM', status: 'UNKNOWN', tags: [] }); setShowModal(true); }}
                   className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 rounded-lg font-medium flex items-center gap-2"
                 >
                   <Plus className="w-4 h-4" /> Add IOC
@@ -2301,6 +2441,117 @@ export default function OSINTPlatform() {
                     </div>
                   </div>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* ==================== INTELLIGENCE SOURCES TAB ==================== */}
+          {activeTab === 'sources' && (
+            <div className="space-y-6">
+              <h2 className="text-2xl font-bold flex items-center gap-3">
+                <Wifi className="w-7 h-7 text-sky-400" /> Intelligence Sources
+              </h2>
+
+              {/* Add Source Form */}
+              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                <h3 className="font-semibold mb-3">Add Custom Intelligence Source</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  <input
+                    type="text"
+                    placeholder="Source name (e.g., My Threat Feed)"
+                    value={newSource.name}
+                    onChange={(e) => setNewSource(prev => ({ ...prev, name: e.target.value }))}
+                    className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg"
+                  />
+                  <select
+                    value={newSource.type}
+                    onChange={(e) => setNewSource(prev => ({ ...prev, type: e.target.value }))}
+                    className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg"
+                  >
+                    {['THREAT_FEED', 'GEO_IP', 'DNS', 'CVE', 'REPUTATION', 'BREACH', 'AI', 'CUSTOM'].map(t => (
+                      <option key={t} value={t}>{t.replace('_', ' ')}</option>
+                    ))}
+                  </select>
+                  <select
+                    value={newSource.method}
+                    onChange={(e) => setNewSource(prev => ({ ...prev, method: e.target.value }))}
+                    className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg"
+                  >
+                    <option value="GET">GET</option>
+                    <option value="POST">POST</option>
+                  </select>
+                  <input
+                    type="text"
+                    placeholder="Endpoint URL"
+                    value={newSource.endpoint}
+                    onChange={(e) => setNewSource(prev => ({ ...prev, endpoint: e.target.value }))}
+                    className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg lg:col-span-2"
+                  />
+                  <input
+                    type="text"
+                    placeholder="API key env var (optional)"
+                    value={newSource.apiKeyEnv}
+                    onChange={(e) => setNewSource(prev => ({ ...prev, apiKeyEnv: e.target.value }))}
+                    className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Description"
+                    value={newSource.description}
+                    onChange={(e) => setNewSource(prev => ({ ...prev, description: e.target.value }))}
+                    className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg lg:col-span-2"
+                  />
+                  <button
+                    onClick={handleAddSource}
+                    className="px-4 py-2 bg-sky-600 hover:bg-sky-700 rounded-lg font-medium flex items-center justify-center gap-2"
+                  >
+                    <Plus className="w-4 h-4" /> Add Source
+                  </button>
+                </div>
+              </div>
+
+              {/* Sources List */}
+              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-semibold">Registered Sources ({sources.length})</h3>
+                  <button onClick={loadSources} className="p-2 hover:bg-gray-800 rounded-lg" title="Refresh">
+                    <RefreshCw className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {sources.length === 0 ? (
+                  <p className="text-sm text-gray-500">No sources found.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {sources.map((source: any) => {
+                      const health = sourceHealth.find((h: any) => h.id === source.id);
+                      return (
+                        <div key={source.id} className="flex items-center gap-3 p-3 bg-gray-800/60 rounded-lg">
+                          <span className={`w-2 h-2 rounded-full shrink-0 ${source.enabled ? 'bg-green-500' : 'bg-gray-500'}`}></span>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium truncate">{source.name}</div>
+                            <div className="text-xs text-gray-500">
+                              {source.type} • {source.method} {source.endpoint}
+                            </div>
+                            {health && (
+                              <div className={`text-xs mt-0.5 ${health.ok ? 'text-green-500' : 'text-red-500'}`}>
+                                {health.ok ? `Healthy (HTTP ${health.status || 200})` : health.message}
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex gap-1">
+                            <button onClick={() => handleTestSource(source.id)} className="p-2 hover:bg-gray-700 rounded-lg" title="Test connectivity">
+                              <Zap className="w-4 h-4" />
+                            </button>
+                            <button onClick={() => handleToggleSource(source)} className="p-2 hover:bg-gray-700 rounded-lg" title={source.enabled ? 'Disable' : 'Enable'}>
+                              {source.enabled ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -2484,6 +2735,42 @@ export default function OSINTPlatform() {
                     </div>
                   )}
                 </div>
+              </div>
+
+              {/* Generated Reports History */}
+              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                <h3 className="font-semibold mb-4 flex items-center gap-2">
+                  <FolderOpen className="w-4 h-4 text-violet-400" /> Generated Reports
+                  <span className="text-xs text-gray-500 ml-auto">{reports.length} saved</span>
+                </h3>
+                {reports.length === 0 ? (
+                  <p className="text-sm text-gray-500">No reports generated yet. Configure a report above and click Generate.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {reports.map((report: any) => (
+                      <div key={report.id} className="flex items-center gap-3 p-3 bg-gray-800/60 rounded-lg">
+                        <FileText className="w-4 h-4 text-violet-400 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium truncate">{report.title}</div>
+                          <div className="text-xs text-gray-500">
+                            {new Date(report.createdAt || report.timestamp).toLocaleString()} • {report.modules?.length || 0} modules
+                          </div>
+                        </div>
+                        <div className="flex gap-1">
+                          <a href={`/api/osint/reports?action=download&id=${report.id}&format=json`} target="_blank" rel="noreferrer" className="p-2 hover:bg-gray-700 rounded-lg" title="Download JSON">
+                            <DownloadCloud className="w-4 h-4" />
+                          </a>
+                          <a href={`/api/osint/reports?action=download&id=${report.id}&format=csv`} target="_blank" rel="noreferrer" className="p-2 hover:bg-gray-700 rounded-lg" title="Download CSV">
+                            <FileCode className="w-4 h-4" />
+                          </a>
+                          <a href={`/api/osint/reports?action=download&id=${report.id}&format=html`} target="_blank" rel="noreferrer" className="p-2 hover:bg-gray-700 rounded-lg" title="Open HTML report">
+                            <ExternalLink className="w-4 h-4" />
+                          </a>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}

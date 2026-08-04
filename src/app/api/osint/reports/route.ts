@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { writeFile, mkdir } from 'fs/promises';
-import { join } from 'path';
-import { existsSync } from 'fs';
+import { reporterAgent } from '@/lib/agents';
+import { getIOCs, getStoreStats, getRecentAnalyses } from '@/lib/store';
+import { loadThreatFeeds } from '@/lib/intel';
+import { aiJSON, isAIEnabled } from '@/lib/ai';
+import { kvGet, kvSet, kvPushList, kvGetList } from '@/lib/kv';
 
-const REPORTS_DIR = join(process.cwd(), 'generated-reports');
+export const maxDuration = 60;
 
 interface ReportConfig {
   title: string;
@@ -12,410 +14,405 @@ interface ReportConfig {
   includeIOCs: boolean;
   includeThreats: boolean;
   includeTimeline: boolean;
-  customData?: any;
   executiveSummary: boolean;
   recommendations: boolean;
 }
 
-interface GeneratedReport {
+interface ReportRecord {
   id: string;
+  title: string;
   config: ReportConfig;
   timestamp: string;
-  content: {
-    executiveSummary?: any;
-    moduleData: Record<string, any>;
-    iocs?: any[];
-    threats?: any[];
-    timeline?: any[];
-    statistics: any;
-    recommendations?: string[];
-  };
-  filePath: string;
+  content: any;
 }
 
-async function ensureDir(dir: string) {
-  if (!existsSync(dir)) {
-    await mkdir(dir, { recursive: true });
-  }
-}
+const REPORTS_KEY = 'nexus:reports';
 
 function generateId(): string {
   return `rpt-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
 
-// Generate executive summary based on selected modules
-async function generateExecutiveSummary(modules: string[], iocData: any[], threatData: any[]): Promise<any> {
-  const summary = {
+// ---------- Executive summary via AI agent (or rule-based) ----------
+async function generateExecutiveSummary(
+  config: ReportConfig,
+  bundle: Record<string, any>
+): Promise<{ summary: any; usedAI: boolean }> {
+  const iocData = bundle.iocs?.data || [];
+  const threatData = bundle.threats || [];
+
+  const ruleSummary = {
     overallRiskLevel: 'MEDIUM' as string,
     keyFindings: [] as string[],
-    criticalItems: 0,
-    highRiskItems: 0,
-    totalIndicators: 0,
-    coverage: modules,
-    generatedAt: new Date().toISOString()
+    criticalItems: iocData.filter((i: any) => i.severity === 'CRITICAL').length,
+    highRiskItems: iocData.filter((i: any) => i.severity === 'HIGH').length,
+    totalIndicators: iocData.length,
+    maliciousCount: iocData.filter((i: any) => i.status === 'MALICIOUS').length,
+    threatFeeds: threatData.length,
+    modulesIncluded: config.modules.length,
+    coverage: config.modules,
+    generatedAt: new Date().toISOString(),
   };
-  
-  // Analyze IOCs
-  if (iocData && iocData.length > 0) {
-    summary.totalIndicators = iocData.length;
-    summary.criticalItems = iocData.filter((i: any) => i.severity === 'CRITICAL').length;
-    summary.highRiskItems = iocData.filter((i: any) => i.severity === 'HIGH').length;
-    
-    if (summary.criticalItems > 5) {
-      summary.overallRiskLevel = 'CRITICAL';
-      summary.keyFindings.push(`${summary.criticalItems} CRITICAL severity indicators detected`);
-    } else if (summary.criticalItems > 0 || summary.highRiskItems > 10) {
-      summary.overallRiskLevel = 'HIGH';
-      summary.keyFindings.push(`High concentration of severe indicators`);
+
+  if (ruleSummary.criticalItems > 2) ruleSummary.overallRiskLevel = 'CRITICAL';
+  else if (ruleSummary.criticalItems > 0 || ruleSummary.maliciousCount > 2) ruleSummary.overallRiskLevel = 'HIGH';
+  else if (ruleSummary.threatFeeds > 0 || ruleSummary.totalIndicators > 0) ruleSummary.overallRiskLevel = 'MEDIUM';
+
+  ruleSummary.keyFindings.push(`${ruleSummary.totalIndicators} indicators tracked (${ruleSummary.criticalItems} critical, ${ruleSummary.highRiskItems} high)`);
+  if (ruleSummary.maliciousCount > 0) ruleSummary.keyFindings.push(`${ruleSummary.maliciousCount} confirmed MALICIOUS`);
+  if (ruleSummary.threatFeeds > 0) ruleSummary.keyFindings.push(`Active intelligence from ${ruleSummary.threatFeeds} live threat feed(s)`);
+
+  if (isAIEnabled()) {
+    const { data, usedAI } = await aiJSON<any>(
+      `You are a senior cyber threat intelligence analyst producing an executive summary for leadership.
+Return JSON with exactly: {"overallRiskLevel":"CRITICAL|HIGH|MEDIUM|LOW","narrative":"3-4 sentence executive summary","keyFindings":["..."],"topPriorities":["..."]}.`,
+      `Produce an executive summary for the report "${config.title}".
+Aggregate intelligence:
+- IOCs: ${ruleSummary.totalIndicators} total, ${ruleSummary.criticalItems} critical, ${ruleSummary.highRiskItems} high, ${ruleSummary.maliciousCount} malicious
+- Live threat feeds available: ${threatData.length}
+- Modules covered: ${config.modules.join(', ')}`
+    );
+    if (usedAI && data) {
+      return {
+        summary: {
+          ...ruleSummary,
+          overallRiskLevel: data.overallRiskLevel || ruleSummary.overallRiskLevel,
+          narrative: data.narrative || '',
+          keyFindings: data.keyFindings || ruleSummary.keyFindings,
+          topPriorities: data.topPriorities || [],
+          usedAI: true,
+        },
+        usedAI: true,
+      };
     }
-    
-    const maliciousCount = iocData.filter((i: any) => i.status === 'MALICIOUS').length;
-    if (maliciousCount > 0) {
-      summary.keyFindings.push(`${maliciousCount} indicators confirmed as MALICIOUS`);
-    }
   }
-  
-  // Analyze threats
-  if (threatData && threatData.length > 0) {
-    const activeThreats = threatData.filter((t: any) => t.status !== 'resolved');
-    summary.keyFindings.push(`${activeThreats.length} active threats being tracked`);
-  }
-  
-  // Module-specific findings
-  if (modules.includes('ip')) {
-    summary.keyFindings.push('IP Intelligence analysis included');
-  }
-  if (modules.includes('domain')) {
-    summary.keyFindings.push('Domain forensics analysis included');
-  }
-  if (modules.includes('darkweb')) {
-    summary.keyFindings.push('Dark web monitoring data included');
-    summary.overallRiskLevel = summary.overallRiskLevel === 'MEDIUM' ? 'ELEVATED' : summary.overallRiskLevel;
-  }
-  if (modules.includes('mobile')) {
-    summary.keyFindings.push('Mobile application security assessment included');
-  }
-  
-  return summary;
+
+  return { summary: { ...ruleSummary, usedAI: false }, usedAI: false };
 }
 
-// Generate recommendations based on data
-function generateRecommendations(data: Record<string, any>): string[] {
-  const recommendations: string[] = [];
-  
-  // IOC-based recommendations
-  if (data.iocs) {
-    const criticalIocs = data.iocs.filter((i: any) => i.severity === 'CRITICAL');
-    if (criticalIocs.length > 0) {
-      recommendations.push(`Immediate action required for ${criticalIocs.length} CRITICAL indicators - consider blocking in security controls`);
+function generateRecommendations(bundle: Record<string, any>): string[] {
+  const recs: string[] = [];
+  const iocData = bundle.iocs?.data || [];
+
+  const critical = iocData.filter((i: any) => i.severity === 'CRITICAL');
+  const malicious = iocData.filter((i: any) => i.status === 'MALICIOUS');
+  const threats = bundle.threats || [];
+
+  if (critical.length > 0) {
+    recs.push(`Immediate action required for ${critical.length} CRITICAL indicators — block in security controls and investigate`);
+  }
+  if (malicious.length > 0) {
+    recs.push(`${malicious.length} malicious indicators should be added to blocklists immediately`);
+  }
+  threats.forEach((feed: any) => {
+    const criticalFeeds = feed.entries?.filter((e: any) => e.severity === 'CRITICAL');
+    if (criticalFeeds?.length) {
+      recs.push(`Feed ${feed.source}: ${criticalFeeds.length} critical items requiring patching/hunting`);
     }
-    
-    const maliciousIocs = data.iocs.filter((i: any) => i.status === 'MALICIOUS');
-    if (maliciousIocs.length > 0) {
-      recommendations.push(`${maliciousIocs.length} malicious indicators should be added to blocklists immediately`);
-    }
-  }
-  
-  // Domain-based recommendations
-  if (data.domain?.riskAssessment?.findings) {
-    data.domain.riskAssessment.findings.forEach((finding: string) => {
-      recommendations.push(`Domain Security: ${finding}`);
-    });
-  }
-  
-  // Dark web recommendations
-  if (data.darkweb?.aiAnalysis?.recommendedActions) {
-    recommendations.push(...data.darkweb.aiAnalysis.recommendedActions.slice(0, 3));
-  }
-  
-  // Mobile recommendations
-  if (data.mobile?.aiAssessment?.recommendations) {
-    recommendations.push(...data.mobile.aiAssessment.recommendations.slice(0, 3));
-  }
-  
-  // General recommendations
-  recommendations.push(
+  });
+  recs.push(
     'Schedule regular threat intelligence updates',
     'Review and update IOC feeds weekly',
-    'Conduct security awareness training based on current threats'
+    'Conduct security awareness training based on current threat landscape'
   );
-  
-  return [...new Set(recommendations)].slice(0, 10);
+  return [...new Set(recs)].slice(0, 10);
 }
 
-// Generate timeline of events
-function generateTimeline(modules: string[], allData: Record<string, any>): any[] {
+function generateTimeline(bundle: Record<string, any>): any[] {
   const timeline: any[] = [];
-  const now = new Date();
-  
-  // Add recent events based on modules
-  if (modules.includes('iocs') && allData.iocs) {
-    allData.iocs.slice(0, 5).forEach((ioc: any, idx: number) => {
-      timeline.push({
-        date: new Date(now.getTime() - idx * 3600000).toISOString(),
-        event: `IOC ${ioc.type} ${ioc.value} ${ioc.status}`,
-        type: 'ioc',
-        severity: ioc.severity
-      });
+  const now = Date.now();
+  const iocData = bundle.iocs?.data || [];
+
+  iocData.slice(0, 6).forEach((ioc: any, idx: number) => {
+    timeline.push({
+      date: new Date(now - idx * 3600000).toISOString(),
+      event: `${ioc.type} ${ioc.value} — ${ioc.status}`,
+      type: 'ioc',
+      severity: ioc.severity,
     });
-  }
-  
-  if (modules.includes('threats') && allData.threats) {
-    allData.threats.slice(0, 3).forEach((threat: any, idx: number) => {
-      timeline.push({
-        date: new Date(now.getTime() - (idx + 1) * 7200000).toISOString(),
-        event: `Threat update: ${threat.title || threat.name}`,
-        type: 'threat',
-        severity: 'INFO'
-      });
-    });
-  }
-  
-  // Add system events
-  timeline.push({
-    date: now.toISOString(),
-    event: 'Report generated',
-    type: 'system',
-    severity: 'INFO'
   });
-  
+  const threats = bundle.threats || [];
+  threats.forEach((feed: any, feedIdx: number) => {
+    (feed.entries || []).slice(0, 2).forEach((e: any, idx: number) => {
+      timeline.push({
+        date: new Date(now - (feedIdx * 7200000) - (idx + 1) * 3600000).toISOString(),
+        event: `[${feed.source}] ${e.cveID || e.sha256 || e.signature || e.vulnerabilityName || 'intel item'}`,
+        type: 'threat',
+        severity: e.severity || 'INFO',
+      });
+    });
+  });
+  timeline.push({ date: new Date().toISOString(), event: 'Report generated', type: 'system', severity: 'INFO' });
   return timeline.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 }
 
+// ---------- POST: generate report ----------
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const config: ReportConfig = {
-      title: body.title || 'MONITOR-THREAT Intelligence Report',
-      modules: body.modules || ['dashboard', 'iocs'],
-      format: body.format || 'PDF',
+      title: body.title || 'NEXUS INTEL Intelligence Report',
+      modules: body.modules || ['iocs', 'threats'],
+      format: body.format || 'HTML',
       includeIOCs: body.includeIOCs ?? true,
       includeThreats: body.includeThreats ?? true,
       includeTimeline: body.includeTimeline ?? true,
-      customData: body.customData,
       executiveSummary: body.executiveSummary ?? true,
-      recommendations: body.recommendations ?? true
+      recommendations: body.recommendations ?? true,
     };
-    
-    console.log('[REPORTS] Generating report:', config.title);
-    
-    // Gather data from different sources
+
+    console.log('[REPORTS] Generating:', config.title, '| modules:', config.modules.join(', '));
+
+    // Connect ALL internal modules via the reporter agent
     const moduleData: Record<string, any> = {};
-    
-    // Fetch IOC data if requested
-    let iocData: any[] = [];
-    if (config.includeIOCs || config.modules.includes('iocs')) {
-      try {
-        const iocResponse = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || ''}/api/osint/iocs?limit=100`);
-        if (iocResponse.ok) {
-          const iocResult = await iocResponse.json();
-          iocData = iocResult.data || [];
-          moduleData.iocs = iocData;
-        }
-      } catch (e) {
-        console.log('Could not fetch IOCs for report');
-      }
-    }
-    
-    // Fetch threat data if requested
-    let threatData: any[] = [];
-    if (config.includeThreats || config.modules.includes('threats')) {
-      try {
-        const threatResponse = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || ''}/api/osint/threats?limit=50`);
-        if (threatResponse.ok) {
-          const threatResult = await threatResponse.json();
-          threatData = threatResult.feeds || threatResult.data || [];
-          moduleData.threats = threatData;
-        }
-      } catch (e) {
-        console.log('Could not fetch threats for report');
-      }
-    }
-    
-    // Include custom data if provided
-    if (config.customData) {
-      Object.keys(config.customData).forEach(key => {
-        moduleData[key] = config.customData[key];
-      });
-    }
-    
-    // Generate executive summary
-    let execSummary;
+
+    const iocs = await getIOCs({ limit: 100 });
+    moduleData.iocs = { data: iocs.data, total: iocs.total };
+
+    const threats = await loadThreatFeeds(undefined, 15);
+    moduleData.threats = threats;
+
+    const stats = await getStoreStats();
+    moduleData.stats = stats;
+
+    const recentAnalyses = await getRecentAnalyses(20);
+    moduleData.recentAnalyses = recentAnalyses;
+
+    // Per-module aggregation
+    if (config.modules.includes('threats') || config.includeThreats) moduleData.threatFeeds = threats;
+    if (config.modules.includes('iocs') || config.includeIOCs) moduleData.iocList = iocs.data;
+    if (config.modules.includes('dashboard')) moduleData.dashboardStats = stats;
+
+    // Executive summary (AI agent)
+    let execSummary: any;
+    let usedAI = false;
     if (config.executiveSummary) {
-      execSummary = await generateExecutiveSummary(config.modules, iocData, threatData);
+      const res = await generateExecutiveSummary(config, moduleData);
+      execSummary = res.summary;
+      usedAI = res.usedAI;
     }
-    
-    // Generate recommendations
-    let recs;
+
+    // Recommendations
+    let recommendations: string[] = [];
     if (config.recommendations) {
-      recs = generateRecommendations(moduleData);
+      recommendations = generateRecommendations(moduleData);
     }
-    
-    // Generate timeline
-    let timeline;
+
+    // Timeline
+    let timeline: any[] = [];
     if (config.includeTimeline) {
-      timeline = generateTimeline(config.modules, moduleData);
+      timeline = generateTimeline(moduleData);
     }
-    
-    // Compile report
-    const report: GeneratedReport = {
+
+    const report: ReportRecord = {
       id: generateId(),
+      title: config.title,
       config,
       timestamp: new Date().toISOString(),
       content: {
         executiveSummary: execSummary,
-        moduleData,
-        iocs: config.includeIOCs ? iocData : undefined,
-        threats: config.includeThreats ? threatData : undefined,
+        recommendations,
         timeline,
-        statistics: {
-          totalIOCs: iocData.length,
-          totalThreats: threatData.length,
-          modulesIncluded: config.modules.length,
-          format: config.format
+        moduleData: {
+          iocs: iocs.data,
+          totalIocs: iocs.total,
+          threats,
+          stats,
+          recentAnalyses,
         },
-        recommendations: recs
+        statistics: {
+          totalIOCs: iocs.total,
+          totalThreats: threats.length,
+          modulesIncluded: config.modules.length,
+          format: config.format,
+          aiUsed: usedAI,
+          storage: 'persistent',
+        },
       },
-      filePath: ''
     };
-    
-    // Save report
-    await ensureDir(REPORTS_DIR);
-    const fileName = `${report.id}_${config.format.toLowerCase()}.json`;
-    const filePath = join(REPORTS_DIR, fileName);
-    
-    await writeFile(filePath, JSON.stringify(report, null, 2));
-    report.filePath = filePath;
-    
+
+    // Persist to KV
+    await kvPushList(REPORTS_KEY, report, 50);
+
     return NextResponse.json({
       success: true,
-      source: 'Report Generator v2.0',
+      source: usedAI ? 'Reporter Agent (Groq LLM)' : 'Reporter Agent (rule-based)',
       fetchedLive: true,
+      aiUsed: usedAI,
       data: report,
-      message: `Report "${config.title}" generated successfully`
+      message: `Report "${config.title}" generated and stored successfully`,
     });
-    
   } catch (error) {
     console.error('Report generation error:', error);
-    return NextResponse.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Report generation failed'
-    }, { status: 500 });
+    return NextResponse.json(
+      {
+        success: false,
+        error: error instanceof Error ? error.message : 'Report generation failed',
+      },
+      { status: 500 }
+    );
   }
 }
 
+// ---------- GET: list / get / download ----------
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const action = searchParams.get('action');
-  
+
   if (action === 'list') {
-    // List available reports
-    try {
-      if (!existsSync(REPORTS_DIR)) {
-        return NextResponse.json({ success: true, data: [] });
-      }
-      
-      const { readdir } = require('fs/promises');
-      const files = await readdir(REPORTS_DIR);
-      
-      const reports = files.map(f => ({
-        name: f,
-        created: f.split('_')[1]?.replace('.json', '') || 'unknown'
-      }));
-      
-      return NextResponse.json({ 
-        success: true, 
-        data: reports.sort((a, b) => b.created.localeCompare(a.created))
-      });
-    } catch (error) {
-      return NextResponse.json({ success: false, error: 'Failed to list reports' });
-    }
+    const reports = await kvGetList<ReportRecord>(REPORTS_KEY);
+    return NextResponse.json({
+      success: true,
+      data: reports.map((r) => ({
+        id: r.id,
+        title: r.title,
+        timestamp: r.timestamp,
+        modules: r.config?.modules || [],
+        format: r.config?.format || 'HTML',
+        stats: r.content?.statistics,
+      })),
+      message: `Found ${reports.length} report(s)`,
+    });
   }
-  
+
   if (action === 'get') {
-    // Get specific report
     const id = searchParams.get('id');
-    if (!id) {
-      return NextResponse.json({ success: false, error: 'Report ID required' });
-    }
-    
-    try {
-      const { readFile } = require('fs/promises');
-      const files = await readdir(REPORTS_DIR);
-      const reportFile = files.find(f => f.startsWith(id));
-      
-      if (!reportFile) {
-        return NextResponse.json({ success: false, error: 'Report not found' });
-      }
-      
-      const content = await readFile(join(REPORTS_DIR, reportFile), 'utf-8');
-      return NextResponse.json({ success: true, data: JSON.parse(content) });
-    } catch (error) {
-      return NextResponse.json({ success: false, error: 'Failed to read report' });
-    }
+    if (!id) return NextResponse.json({ success: false, error: 'Report ID required' });
+    const reports = await kvGetList<ReportRecord>(REPORTS_KEY);
+    const report = reports.find((r) => r.id === id);
+    if (!report) return NextResponse.json({ success: false, error: 'Report not found' });
+    return NextResponse.json({ success: true, data: report });
   }
-  
-  // Return report templates and options
+
+  if (action === 'download') {
+    const id = searchParams.get('id');
+    const format = searchParams.get('format') || 'html';
+    if (!id) return NextResponse.json({ success: false, error: 'Report ID required' });
+    const reports = await kvGetList<ReportRecord>(REPORTS_KEY);
+    const report = reports.find((r) => r.id === id);
+    if (!report) return NextResponse.json({ success: false, error: 'Report not found' });
+
+    const content = buildDownloadContent(report, format);
+    return new NextResponse(content.body, {
+      headers: {
+        'Content-Type': content.type,
+        'Content-Disposition': `attachment; filename="${report.id}.${content.ext}"`,
+      },
+    });
+  }
+
+  // Info / templates
   return NextResponse.json({
     success: true,
-    source: 'Report Generator v2.0',
+    source: 'Reporter Agent v10',
     data: {
       templates: [
-        {
-          id: 'executive',
-          name: 'Executive Summary',
-          description: 'High-level overview for leadership',
-          modules: ['dashboard', 'iocs', 'threats'],
-          recommendedFor: ['CISO', 'C-Suite', 'Board']
-        },
-        {
-          id: 'technical',
-          name: 'Technical Analysis',
-          description: 'Detailed technical findings',
-          modules: ['ip', 'domain', 'url', 'hash', 'cve'],
-          recommendedFor: ['SOC Analysts', 'Incident Response', 'Threat Hunters']
-        },
-        {
-          id: 'threat-hunt',
-          name: 'Threat Hunt Report',
-          description: 'Focused threat intelligence',
-          modules: ['darkweb', 'threats', 'ai'],
-          recommendedFor: ['Threat Intelligence Team', 'Red Team']
-        },
-        {
-          id: 'mobile-security',
-          name: 'Mobile Security Assessment',
-          description: 'Mobile app security analysis',
-          modules: ['mobile'],
-          recommendedFor: ['Mobile Security Team', 'App Developers']
-        },
-        {
-          id: 'comprehensive',
-          name: 'Comprehensive Report',
-          description: 'All modules, complete analysis',
-          modules: ['dashboard', 'ip', 'domain', 'url', 'hash', 'cve', 'ai', 'darkweb', 'threats', 'iocs', 'mobile'],
-          recommendedFor: ['Full Security Audit', 'Compliance']
-        },
-        {
-          id: 'forensics',
-          name: 'Digital Forensics',
-          description: 'Domain/IP forensic deep dive',
-          modules: ['domain', 'ip', 'forensics'],
-          recommendedFor: ['DFIR Team', 'Law Enforcement']
-        }
+        { id: 'executive', name: 'Executive Summary', modules: ['dashboard', 'iocs', 'threats'] },
+        { id: 'technical', name: 'Technical Analysis', modules: ['ip', 'domain', 'url', 'hash', 'cve'] },
+        { id: 'threat-hunt', name: 'Threat Hunt Report', modules: ['darkweb', 'threats', 'ai'] },
+        { id: 'comprehensive', name: 'Comprehensive Report', modules: ['dashboard', 'ip', 'domain', 'cve', 'darkweb', 'threats', 'iocs', 'mobile', 'ai'] },
       ],
-      formats: ['PDF', 'JSON', 'CSV', 'HTML'],
-      exportOptions: {
-        includeRawData: true,
-        includeVisualizations: true,
-        includeIOCList: true,
-        includeRecommendations: true,
-        includeTimeline: true
-      },
-      scheduling: {
-        supported: true,
-        intervals: ['daily', 'weekly', 'monthly', 'quarterly']
-      }
-    }
+      formats: ['HTML', 'JSON', 'CSV', 'PDF'],
+      aiEnabled: isAIEnabled(),
+      storage: 'persistent',
+    },
   });
+}
+
+function buildDownloadContent(report: ReportRecord, format: string): { body: string; type: string; ext: string } {
+  switch (format.toLowerCase()) {
+    case 'json':
+      return {
+        body: JSON.stringify(report, null, 2),
+        type: 'application/json',
+        ext: 'json',
+      };
+    case 'csv': {
+      const lines: string[] = ['Section,Key,Value'];
+      const push = (section: string, obj: any) => {
+        if (!obj || typeof obj !== 'object') return;
+        Object.entries(obj).forEach(([k, v]) => lines.push(`"${section}","${k}","${String(v).replace(/"/g, '""')}"`));
+      };
+      push('Executive Summary', report.content.executiveSummary);
+      push('Statistics', report.content.statistics);
+      report.content.recommendations?.forEach((r: string, i: number) =>
+        lines.push(`"Recommendations","${i + 1}","${r.replace(/"/g, '""')}"`)
+      );
+      return { body: lines.join('\n'), type: 'text/csv', ext: 'csv' };
+    }
+    case 'html':
+    default:
+      return { body: renderHTML(report), type: 'text/html', ext: 'html' };
+  }
+}
+
+function renderHTML(report: ReportRecord): string {
+  const c = report.content;
+  const esc = (s: any) => String(s ?? '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]!));
+
+  const recs = (c.recommendations || [])
+    .map((r: string) => `<li>${esc(r)}</li>`)
+    .join('');
+
+  const iocRows = (c.moduleData?.iocs || [])
+    .slice(0, 25)
+    .map((i: any) => `<tr><td>${esc(i.type)}</td><td><code>${esc(i.value)}</code></td><td>${esc(i.severity)}</td><td>${esc(i.status)}</td></tr>`)
+    .join('');
+
+  const threatRows = (c.moduleData?.threats || [])
+    .flatMap((f: any) => (f.entries || []).slice(0, 3).map((e: any) => `<tr><td>${esc(f.source)}</td><td>${esc(e.cveID || e.sha256 || e.signature || e.vulnerabilityName || '-')}</td><td>${esc(e.severity || 'INFO')}</td></tr>`))
+    .slice(0, 30)
+    .join('');
+
+  const timeline = (c.timeline || [])
+    .slice(0, 15)
+    .map((t: any) => `<li><strong>${esc(t.type)}</strong> — ${esc(t.event)} <small>(${esc(new Date(t.date).toLocaleString())})</small></li>`)
+    .join('');
+
+  return `<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8"><title>${esc(report.title)}</title>
+<style>
+body{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;background:#0b0f19;color:#e5e7eb;margin:0;padding:24px}
+.wrap{max-width:900px;margin:0 auto}
+h1{color:#f87171;border-bottom:2px solid #1f2937;padding-bottom:12px}
+h2{color:#60a5fa;margin-top:32px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{background:#1f2937;text-align:left;padding:8px;color:#9ca3af}
+td{border-bottom:1px solid #1f2937;padding:8px}
+code{background:#1f2937;padding:2px 6px;border-radius:4px;font-size:13px}
+.card{background:#111827;border:1px solid #1f2937;border-radius:10px;padding:18px;margin-top:16px}
+.badge{display:inline-block;padding:4px 10px;border-radius:9999px;font-weight:700;font-size:12px}
+.critical{background:#dc2626;color:#fff}.high{background:#f97316;color:#000}.medium{background:#eab308;color:#000}.low{background:#22c55e;color:#000}
+.footer{margin-top:40px;font-size:12px;color:#6b7280;text-align:center}
+</style></head>
+<body><div class="wrap">
+<h1>🛡️ ${esc(report.title)}</h1>
+<p><em>Generated ${esc(new Date(report.timestamp).toLocaleString())} · NEXUS INTEL v10 · Reporter Agent${c.statistics?.aiUsed ? ' (AI)':''}</em></p>
+
+<div class="card">
+<span class="badge ${esc((c.executiveSummary?.overallRiskLevel || 'MEDIUM').toLowerCase())}">${esc(c.executiveSummary?.overallRiskLevel || 'MEDIUM')} RISK</span>
+<p>${esc(c.executiveSummary?.narrative || c.executiveSummary?.keyFindings?.[0] || '')}</p>
+</div>
+
+<h2>Key Findings</h2>
+<ul>${(c.executiveSummary?.keyFindings || []).map((f: string) => `<li>${esc(f)}</li>`).join('')}</ul>
+
+<h2>Statistics</h2>
+<div class="card">
+<p>Total IOCs: <strong>${esc(c.statistics?.totalIOCs)}</strong> · Threat feeds: <strong>${esc(c.statistics?.totalThreats)}</strong> · Modules: <strong>${esc(c.statistics?.modulesIncluded)}</strong></p>
+</div>
+
+<h2>Recommendations</h2>
+<ol>${recs}</ol>
+
+<h2>Indicators of Compromise</h2>
+<table><tr><th>Type</th><th>Value</th><th>Severity</th><th>Status</th></tr>${iocRows}</table>
+
+<h2>Live Threat Feeds</h2>
+<table><tr><th>Feed</th><th>Item</th><th>Severity</th></tr>${threatRows}</table>
+
+<h2>Timeline</h2>
+<ul>${timeline}</ul>
+
+<div class="footer">Generated by NEXUS INTEL — OSINT &amp; Threat Intelligence Platform</div>
+</div></body></html>`;
 }

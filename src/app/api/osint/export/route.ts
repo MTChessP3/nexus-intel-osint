@@ -1,67 +1,55 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { getIOCs } from '@/lib/store';
 
-// Export functionality - PDF, CSV, JSON
+// Export functionality — JSON, CSV, STIX 2.1 (backed by the persistent store)
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
-  const format = searchParams.get('format') || 'json'; // json, csv
-  const type = searchParams.get('type'); // Filter by IOC type
-  const status = searchParams.get('status');
-  const severity = searchParams.get('severity');
-  
+  const format = searchParams.get('format') || 'json'; // json, csv, stix
+  const type = searchParams.get('type') || undefined;
+  const status = searchParams.get('status') || undefined;
+  const severity = searchParams.get('severity') || undefined;
+
   try {
-    // Build query
-    const where: any = {};
-    if (type) where.type = type.toUpperCase();
-    if (status) where.status = status.toUpperCase();
-    if (severity) where.severity = severity.toUpperCase();
-    
-    const iocs = await db.iOC.findMany({
-      where,
-      orderBy: { lastUpdated: 'desc' },
-      include: {
-        analyses: { take: 1 },
-        alerts: { where: { status: 'ACTIVE' }, take: 3 }
-      }
-    });
-    
+    const { data: iocs } = await getIOCs({ type, status, severity, limit: 1000 });
     const timestamp = new Date().toISOString();
-    
+
     switch (format.toLowerCase()) {
       case 'csv':
         return exportCSV(iocs, timestamp);
-      
+      case 'stix':
+        return exportSTIX(iocs, timestamp);
       case 'json':
       default:
         return exportJSON(iocs, timestamp);
     }
-    
   } catch (error) {
     console.error('Export Error:', error);
-    return NextResponse.json({
-      success: false,
-      error: 'Export failed',
-      details: error instanceof Error ? error.message : 'Unknown error'
-    }, { status: 500 });
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'Export failed',
+        details: error instanceof Error ? error.message : 'Unknown error',
+      },
+      { status: 500 }
+    );
   }
 }
 
 function exportJSON(iocs: any[], timestamp: string) {
   const report = {
     metadata: {
-      title: 'MONITOR-THREAT Export',
+      title: 'NEXUS INTEL Export',
       generatedAt: timestamp,
-      platform: 'OSINT-Platform v8.0',
+      platform: 'NEXUS-INTEL v10',
       totalIOCs: iocs.length,
-      sources: [...new Set(iocs.map(i => i.source).filter(Boolean))]
+      sources: [...new Set(iocs.map((i) => i.source).filter(Boolean))],
     },
     summary: {
       byType: countBy(iocs, 'type'),
       bySeverity: countBy(iocs, 'severity'),
       byStatus: countBy(iocs, 'status'),
-      bySource: countBy(iocs, 'source')
     },
-    data: iocs.map(ioc => ({
+    data: iocs.map((ioc) => ({
       id: ioc.id,
       type: ioc.type,
       value: ioc.value,
@@ -70,61 +58,116 @@ function exportJSON(iocs: any[], timestamp: string) {
       confidence: ioc.confidence,
       status: ioc.status,
       source: ioc.source,
-      tags: JSON.parse(ioc.tags || '[]'),
+      tags: ioc.tags || [],
       firstSeen: ioc.firstSeen,
       lastUpdated: ioc.lastUpdated,
-      analysisCount: ioc.analyses?.length || 0,
-      activeAlerts: ioc.alerts?.length || 0,
-      rawResponse: ioc.rawResponse ? JSON.parse(ioc.rawResponse) : null
-    }))
+    })),
   };
-  
+
   return new NextResponse(JSON.stringify(report, null, 2), {
     headers: {
       'Content-Type': 'application/json',
-      'Content-Disposition': `attachment; filename="osint-export-${timestamp.split('T')[0]}.json"`
-    }
+      'Content-Disposition': `attachment; filename="nexus-export-${timestamp.split('T')[0]}.json"`,
+    },
   });
 }
 
 function exportCSV(iocs: any[], timestamp: string) {
   const headers = [
-    'ID', 'Type', 'Value', 'Description', 'Severity', 
-    'Confidence', 'Status', 'Source', 'Tags', 
-    'First Seen', 'Last Updated', 'Analyses', 'Alerts'
+    'ID', 'Type', 'Value', 'Description', 'Severity',
+    'Confidence', 'Status', 'Source', 'Tags', 'First Seen', 'Last Updated',
   ];
-  
-  const rows = iocs.map(ioc => [
+
+  const rows = iocs.map((ioc) => [
     ioc.id,
     ioc.type,
-    ioc.value,
+    `"${(ioc.value || '').replace(/"/g, '""')}"`,
     `"${(ioc.description || '').replace(/"/g, '""')}"`,
     ioc.severity,
     ioc.confidence,
     ioc.status,
     ioc.source || '',
-    `"${JSON.parse(ioc.tags || '[]').join('; ')}"`,
+    `"${(ioc.tags || []).join('; ').replace(/"/g, '""')}"`,
     ioc.firstSeen,
     ioc.lastUpdated,
-    ioc.analyses?.length || 0,
-    ioc.alerts?.length || 0
   ]);
-  
+
   const csvContent = [
-    `# MONITOR-THREAT Export`,
+    '# NEXUS INTEL Export',
     `# Generated: ${timestamp}`,
     `# Total IOCs: ${iocs.length}`,
     '',
     headers.join(','),
-    ...rows.map(row => row.join(','))
+    ...rows.map((r) => r.join(',')),
   ].join('\n');
-  
+
   return new NextResponse(csvContent, {
     headers: {
       'Content-Type': 'text/csv',
-      'Content-Disposition': `attachment; filename="osint-export-${timestamp.split('T')[0]}.csv"`
-    }
+      'Content-Disposition': `attachment; filename="nexus-export-${timestamp.split('T')[0]}.csv"`,
+    },
   });
+}
+
+// STIX 2.1 indicators bundle
+function exportSTIX(iocs: any[], timestamp: string) {
+  const objects = iocs.map((ioc) => ({
+    type: 'indicator',
+    id: `indicator--${ioc.id.replace(/[^a-zA-Z0-9]/g, '') || cryptoUUID()}`,
+    created: ioc.firstSeen || timestamp,
+    modified: ioc.lastUpdated || timestamp,
+    name: ioc.value,
+    description: ioc.description || `${ioc.type} indicator`,
+    pattern: stixPattern(ioc.type, ioc.value),
+    valid_from: ioc.firstSeen || timestamp,
+    labels: [stixLabel(ioc.status)],
+    confidence: ioc.confidence,
+    source: ioc.source,
+  }));
+
+  const bundle = {
+    type: 'bundle',
+    id: `bundle--${cryptoUUID()}`,
+    spec_version: '2.1',
+    created: timestamp,
+    modified: timestamp,
+    objects,
+  };
+
+  return new NextResponse(JSON.stringify(bundle, null, 2), {
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Disposition': `attachment; filename="nexus-iocs-${timestamp.split('T')[0]}.stix2.json"`,
+    },
+  });
+}
+
+function stixPattern(type: string, value: string): string {
+  const v = value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  switch (type.toUpperCase()) {
+    case 'IP':
+      return `[ipv4-addr:value = '${v}']`;
+    case 'DOMAIN':
+      return `[domain-name:value = '${v}']`;
+    case 'URL':
+      return `[url:value = '${v}']`;
+    case 'HASH':
+      return `[file:hashes.'SHA-256' = '${v}']`;
+    case 'EMAIL':
+      return `[email-addr:value = '${v}']`;
+    default:
+      return `[indicator:pattern = '${v}']`;
+  }
+}
+
+function stixLabel(status: string): string {
+  const mapping: Record<string, string> = {
+    MALICIOUS: 'malicious-activity',
+    SUSPICIOUS: 'suspicious-activity',
+    BENIGN: 'benign',
+    UNKNOWN: 'unknown',
+  };
+  return mapping[status?.toUpperCase() || ''] || 'unknown';
 }
 
 function countBy(arr: any[], field: string): Record<string, number> {
@@ -133,4 +176,8 @@ function countBy(arr: any[], field: string): Record<string, number> {
     acc[key] = (acc[key] || 0) + 1;
     return acc;
   }, {} as Record<string, number>);
+}
+
+function cryptoUUID(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).substr(2, 12)}`;
 }
