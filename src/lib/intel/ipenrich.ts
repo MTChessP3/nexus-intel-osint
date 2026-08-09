@@ -13,6 +13,7 @@ import { promises as dns } from 'dns';
 export interface DnsblResult {
   name: string;
   zone: string;
+  group: string;
   listed: boolean;
   blocked: boolean;
   records: string[];
@@ -58,55 +59,55 @@ export interface IpScan {
 
 const DNSBL_ZONES = [
   // Tier 1 — major global lists
-  { name: 'Spamhaus ZEN', zone: 'zen.spamhaus.org' },
-  { name: 'SpamCop', zone: 'bl.spamcop.net' },
-  { name: 'Barracuda', zone: 'b.barracudacentral.org' },
-  { name: 'SORBS', zone: 'dnsbl.sorbs.net' },
-  { name: 'Abusix Combined', zone: 'combined.mail.abusix.zone' },
-  { name: 'Abusix Black', zone: 'black.mail.abusix.zone' },
-  { name: 'Spamrats Dyna', zone: 'dyna.spamrats.com' },
-  { name: 'Spamrats Spam', zone: 'spam.spamrats.com' },
-  { name: 'Spamrats NoPtr', zone: 'noptr.spamrats.com' },
-  { name: 'DroneBL', zone: 'dnsbl.dronebl.org' },
-  { name: 'blocklist.de', zone: 'bl.blocklist.de' },
-  { name: 'S5H', zone: 'all.s5h.net' },
-  { name: 'PSBL', zone: 'psbl.surriel.com' },
-  { name: 'Hostkarma', zone: 'hostkarma.junkemailfilter.com' },
-  { name: 'Mailspike', zone: 'bl.mailspike.net' },
-  { name: 'abuse.ch DNSBL', zone: 'dnsbl.abuse.ch' },
-  { name: 'DShield', zone: 'dnsbl.dshield.org' },
-  { name: 'Backscatterer', zone: 'ips.backscatterer.org' },
-  { name: 'SPFBL', zone: 'dnsbl.spfbl.net' },
+  { group: 'Major', name: 'Spamhaus ZEN', zone: 'zen.spamhaus.org' },
+  { group: 'Major', name: 'SpamCop', zone: 'bl.spamcop.net' },
+  { group: 'Major', name: 'Barracuda', zone: 'b.barracudacentral.org' },
+  { group: 'Major', name: 'SORBS', zone: 'dnsbl.sorbs.net' },
+  { group: 'Major', name: 'Abusix Combined', zone: 'combined.mail.abusix.zone' },
+  { group: 'Major', name: 'Abusix Black', zone: 'black.mail.abusix.zone' },
+  { group: 'Major', name: 'Spamrats Dyna', zone: 'dyna.spamrats.com' },
+  { group: 'Major', name: 'Spamrats Spam', zone: 'spam.spamrats.com' },
+  { group: 'Major', name: 'Spamrats NoPtr', zone: 'noptr.spamrats.com' },
+  { group: 'Major', name: 'DroneBL', zone: 'dnsbl.dronebl.org' },
+  { group: 'Major', name: 'blocklist.de', zone: 'bl.blocklist.de' },
+  { group: 'Major', name: 'S5H', zone: 'all.s5h.net' },
+  { group: 'Major', name: 'PSBL', zone: 'psbl.surriel.com' },
+  { group: 'Major', name: 'Hostkarma', zone: 'hostkarma.junkemailfilter.com' },
+  { group: 'Major', name: 'Mailspike', zone: 'bl.mailspike.net' },
+  { group: 'Major', name: 'abuse.ch DNSBL', zone: 'dnsbl.abuse.ch' },
+  { group: 'Major', name: 'DShield', zone: 'dnsbl.dshield.org' },
+  { group: 'Major', name: 'Backscatterer', zone: 'ips.backscatterer.org' },
+  { group: 'Major', name: 'SPFBL', zone: 'dnsbl.spfbl.net' },
   // UCEPROTECT levels (Level 1-3 list increasingly broad ISP/ASN ranges)
-  { name: 'UCEPROTECT L0', zone: 'dnsbl-0.uceprotect.net' },
-  { name: 'UCEPROTECT L1', zone: 'dnsbl-1.uceprotect.net' },
-  { name: 'UCEPROTECT L2', zone: 'dnsbl-2.uceprotect.net' },
-  { name: 'UCEPROTECT L3', zone: 'dnsbl-3.uceprotect.net' },
+  { group: 'UCEPROTECT', name: 'L0', zone: 'dnsbl-0.uceprotect.net' },
+  { group: 'UCEPROTECT', name: 'L1', zone: 'dnsbl-1.uceprotect.net' },
+  { group: 'UCEPROTECT', name: 'L2', zone: 'dnsbl-2.uceprotect.net' },
+  { group: 'UCEPROTECT', name: 'L3', zone: 'dnsbl-3.uceprotect.net' },
   // Unsubscribe / Lashback
-  { name: 'UBL (Lashback)', zone: 'ubl.unsubscore.com' },
+  { group: 'Other', name: 'UBL (Lashback)', zone: 'ubl.unsubscore.com' },
   // Polspam family
-  { name: 'Polspam BL', zone: 'bl.rbl.polspam.pl' },
-  { name: 'Polspam H1', zone: 'bl-h1.rbl.polspam.pl' },
-  { name: 'Polspam H2', zone: 'bl-h2.rbl.polspam.pl' },
-  { name: 'Polspam H3', zone: 'bl-h3.rbl.polspam.pl' },
-  { name: 'Polspam H4', zone: 'bl-h4.rbl.polspam.pl' },
-  { name: 'Polspam Dyn', zone: 'dyn.rbl.polspam.pl' },
-  { name: 'Polspam RBLIP4', zone: 'rblip4.rbl.polspam.pl' },
+  { group: 'Polspam', name: 'BL', zone: 'bl.rbl.polspam.pl' },
+  { group: 'Polspam', name: 'H1', zone: 'bl-h1.rbl.polspam.pl' },
+  { group: 'Polspam', name: 'H2', zone: 'bl-h2.rbl.polspam.pl' },
+  { group: 'Polspam', name: 'H3', zone: 'bl-h3.rbl.polspam.pl' },
+  { group: 'Polspam', name: 'H4', zone: 'bl-h4.rbl.polspam.pl' },
+  { group: 'Polspam', name: 'Dyn', zone: 'dyn.rbl.polspam.pl' },
+  { group: 'Polspam', name: 'RBLIP4', zone: 'rblip4.rbl.polspam.pl' },
   // Regional / specialty IP lists
-  { name: 'rbldns.ru', zone: 'rbl.rbldns.ru' },
-  { name: 'Scientific Spam', zone: 'bl.scientificspam.net' },
-  { name: 'NordSpam', zone: 'bl.nordspam.com' },
-  { name: 'JustSpam', zone: 'dnsbl.justspam.org' },
-  { name: 'ZapBL', zone: 'dnsbl.zapbl.net' },
-  { name: 'Suomispam', zone: 'bl.suomispam.net' },
-  { name: 'V4BL', zone: 'ip.v4bl.org' },
-  { name: 'V4BL-Free', zone: 'free.v4bl.org' },
-  { name: 'pofon.foobar.hu', zone: 'pofon.foobar.hu' },
-  { name: 'Virusfree BAD', zone: 'bad.virusfree.cz' },
-  { name: 'fabel.dk', zone: 'spamsources.fabel.dk' },
-  { name: 'ImproWare', zone: 'spamrbl.imp.ch' },
-  { name: "Woody's SMTP", zone: 'blacklist.woody.ch' },
-  { name: 'OXL Risk DB', zone: 'ip.dnsbl.risk.oxl.app' },
+  { group: 'Other', name: 'rbldns.ru', zone: 'rbl.rbldns.ru' },
+  { group: 'Other', name: 'Scientific Spam', zone: 'bl.scientificspam.net' },
+  { group: 'Other', name: 'NordSpam', zone: 'bl.nordspam.com' },
+  { group: 'Other', name: 'JustSpam', zone: 'dnsbl.justspam.org' },
+  { group: 'Other', name: 'ZapBL', zone: 'dnsbl.zapbl.net' },
+  { group: 'Other', name: 'Suomispam', zone: 'bl.suomispam.net' },
+  { group: 'Other', name: 'V4BL', zone: 'ip.v4bl.org' },
+  { group: 'Other', name: 'V4BL-Free', zone: 'free.v4bl.org' },
+  { group: 'Other', name: 'pofon.foobar.hu', zone: 'pofon.foobar.hu' },
+  { group: 'Other', name: 'Virusfree BAD', zone: 'bad.virusfree.cz' },
+  { group: 'Other', name: 'fabel.dk', zone: 'spamsources.fabel.dk' },
+  { group: 'Other', name: 'ImproWare', zone: 'spamrbl.imp.ch' },
+  { group: 'Other', name: "Woody's SMTP", zone: 'blacklist.woody.ch' },
+  { group: 'Other', name: 'OXL Risk DB', zone: 'ip.dnsbl.risk.oxl.app' },
 ];
 
 const TOR_DNSBL_ZONE = 'tor.dan.me.uk';
@@ -186,7 +187,7 @@ async function queryDnsbl(ip: string): Promise<DnsblResult[]> {
         const txt = await resolveTxtWithTimeout(`${reversed}.${entry.zone}`, 3000);
         message = txt.filter(Boolean).join(' | ') || undefined;
       }
-      return { name: entry.name, zone: entry.zone, listed, blocked, records, message };
+      return { name: entry.name, zone: entry.zone, group: entry.group, listed, blocked, records, message };
     })
   );
   return results;

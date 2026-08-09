@@ -75,6 +75,188 @@ const STATUS_COLORS: Record<IOCStatus, string> = {
 
 const CHART_COLORS = ['#dc2626', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899'];
 
+// Known-vulnerable services exposed by the active scan.
+// Rendered only for OPEN ports; each entry documents the attack vector and
+// standard verification/exploitation steps for defensive validation.
+interface VulnProfile {
+  risk: 'CRITICAL' | 'HIGH' | 'MEDIUM';
+  title: string;
+  desc: string;
+  cves: string[];
+  vector: string;
+  steps: string[];
+}
+const VULNERABLE_SERVICES: Record<number, VulnProfile> = {
+  21: {
+    risk: 'HIGH',
+    title: 'FTP — cleartext + anonymous access',
+    desc: 'FTP transmits credentials in cleartext. Misconfigurations commonly allow anonymous logon, and older servers (vsftpd 2.3.4) contain a remote backdoor.',
+    cves: ['CVE-2011-2523'],
+    vector: 'Network: TCP/21 reachable without source restrictions. Credentials are sniffable in transit; anonymous mode needs no credentials.',
+    steps: [
+      'Enumerate: nmap -p21 --script ftp-anon,ftp-vsftpd-backdoor <ip>',
+      'Test anonymous logon: ftp <ip>  (user: anonymous, pass: any) → if logged in, check for writable directories',
+      'Capture cleartext creds with a passive sniffer (tcpdump/wireshark) on the segment',
+      'If banner is vsftpd 2.3.4: attempt the backdoor on TCP/6200 (msf: exploit/unix/ftp/vsftpd_234_backdoor)',
+      'Escalate: upload a webshell to a served FTP root or abuse writable shares',
+    ],
+  },
+  22: {
+    risk: 'HIGH',
+    title: 'SSH — brute force / weak credentials',
+    desc: 'An exposed SSH service is a primary brute-force and credential-stuffing target. Weak passwords and old OpenSSH versions enable user enumeration and auth bypass.',
+    cves: ['CVE-2018-15473', 'CVE-2024-6387'],
+    vector: 'Network: TCP/22 open to the Internet. Relies on password auth; no rate limiting or fail2ban present.',
+    steps: [
+      'Enumerate users: nmap -p22 --script ssh2-enum-algos,ssh-hostkey <ip>',
+      'Version check: ssh -V + banner; if OpenSSH <9.8 → check regreSSHion CVE-2024-6387',
+      'User enumeration: nmap --script ssh-auth-methods <ip>',
+      'Credential attack: hydra -L users.txt -P pass.txt ssh://<ip> (use only on owned/authorized targets)',
+      'If weak creds found: log in, escalate privileges with local enumeration (linpeas / winPEAS)',
+    ],
+  },
+  23: {
+    risk: 'CRITICAL',
+    title: 'Telnet — unencrypted legacy remote access',
+    desc: 'Telnet sends all traffic in cleartext and often runs with default/weak credentials on network devices and IoT equipment. Trivially sniffable.',
+    cves: ['CVE-2005-2011', 'CVE-1999-0619'],
+    vector: 'Network: TCP/23 exposed; sessions are plaintext, credentials are captured in transit.',
+    steps: [
+      'Sniff the session: tcpdump -i eth0 port 23 → credentials appear in cleartext',
+      'Test default creds on common devices (admin/admin, root/root, cisco/cisco)',
+      'Banner grab: nc -nv <ip> 23 → identify device model / firmware',
+      'After access: enumerate config, SNMP communities, and management VLANs',
+    ],
+  },
+  25: {
+    risk: 'MEDIUM',
+    title: 'SMTP — open relay / user enumeration',
+    desc: 'Open SMTP relays are abused to send spam; misconfigured servers also allow user enumeration and mail spoofing for phishing.',
+    cves: ['CVE-1999-0521', 'CWE-1389'],
+    vector: 'Network: TCP/25 open, no sender/recipient validation.',
+    steps: [
+      'Banner: nc -nv <ip> 25',
+      'Test open relay: MAIL FROM:<a@b.com> / RCPT TO:<c@d.com> → if accepted for foreign domains, it is an open relay',
+      'User enumeration: VRFY root / EXPN root → confirms valid accounts',
+      'SPF/DMARC check for spoofing feasibility: dig TXT <domain>',
+      'Block inbound spoofing by enforcing SPF/DKIM/DMARC + relay restrictions',
+    ],
+  },
+  445: {
+    risk: 'CRITICAL',
+    title: 'SMB — EternalBlue / SMBv1 / anonymous shares',
+    desc: 'Windows file sharing exposed on the Internet. SMBv1 and unpatched versions are remotely exploitable for RCE (EternalBlue chain) and anonymous shares leak data.',
+    cves: ['CVE-2017-0143', 'CVE-2017-0144', 'CVE-2020-0796'],
+    vector: 'Network: TCP/445 open; authenticated or anonymous access to SMB shares and SMBv1 protocol handling.',
+    steps: [
+      'Vuln scan: nmap -p445 --script smb-vuln-ms17-010,smb-vuln-ms10-061,smb-enum-shares <ip>',
+      'SMBv1 detection: nmap --script smb-protocols <ip>',
+      'Anonymous share enum: smbclient -L //<ip> -N → check for open/print/IPC shares',
+      'If MS17-010 confirmed: msf exploit/windows/smb/ms17_010_eternalblue (authorized tests only)',
+      'Remediate: disable SMBv1, patch, restrict 445/139 to trusted networks',
+    ],
+  },
+  3306: {
+    risk: 'HIGH',
+    title: 'MySQL — exposed database',
+    desc: 'A database port reachable from the Internet is a prime target for credential attacks and known auth-bypass/overflow exploits in older versions.',
+    cves: ['CVE-2012-2122', 'CVE-2016-6662'],
+    vector: 'Network: TCP/3306 open; brute-forceable credentials, direct queries once authenticated.',
+    steps: [
+      'Version + probe: nmap -p3306 --script mysql-info,mysql-enum <ip>',
+      'Check weak/blank root: mysql -h <ip> -u root (test root/root, root/admin)',
+      'CVE-2012-2122 auth bypass probe: loop attempts with incorrect password to trigger the memcmp() bug',
+      'Once in: enumerate databases, extract credentials (mysql.user), pivot to app servers',
+      'Lock down: bind to 127.0.0.1, use strong passwords, limit source IPs',
+    ],
+  },
+  3389: {
+    risk: 'CRITICAL',
+    title: 'RDP — BlueKeep / brute force',
+    desc: 'Remote Desktop exposed to the Internet. Unpatched versions are remotely exploitable pre-auth (BlueKeep); others are relentlessly brute-forced.',
+    cves: ['CVE-2019-0708', 'CVE-2023-35332'],
+    vector: 'Network: TCP/3389 open; pre-auth code path (BlueKeep) or weak RDP credentials.',
+    steps: [
+      'NLA check: nmap -p3389 --script rdp-ntlm-info <ip>',
+      'BlueKeep probe: msf auxiliary/scanner/rdp/cve_2019_0708_bluekeep',
+      'Credential attack: hydra -s 3389 rdp://<ip> -L users.txt -P pass.txt (authorized only)',
+      'If RDP open but not exploitable → still a high-value brute-force target: require NLA + strong creds + account lockout',
+    ],
+  },
+  5432: {
+    risk: 'HIGH',
+    title: 'PostgreSQL — exposed database',
+    desc: 'Internet-exposed PostgreSQL allows credential attacks and known extensions/version-specific exploits leading to RCE.',
+    cves: ['CVE-2018-1058', 'CVE-2020-25695'],
+    vector: 'Network: TCP/5432 open; weak superuser credentials or insecure pg_hba.conf entries.',
+    steps: [
+      'Probe: nmap -p5432 --script pgsql-brute,ssl-cert <ip>',
+      'Try default superuser: psql -h <ip> -U postgres (postgres/postgres)',
+      'If authenticated: COPY ... FROM PROGRAM to achieve RCE (CVE-2019-9193), enumerate roles/databases',
+      'Lock down: listen on localhost only, restrict pg_hba.conf, strong passwords',
+    ],
+  },
+  5900: {
+    risk: 'HIGH',
+    title: 'VNC — no/weak authentication',
+    desc: 'VNC servers frequently run with no password or with weak shared passwords; compromised sessions give full remote GUI control.',
+    cves: ['CVE-2006-2369', 'CVE-2019-17270'],
+    vector: 'Network: TCP/5900 open; empty or brute-forceable VNC password, unencrypted session.',
+    steps: [
+      'Auth check: vncinfo / vncviewer <ip>:5900 → prompts for password?',
+      'Brute force: hydra vnc://<ip> -P pass.txt',
+      'Exploit realVNC/UltraVNC known CVEs based on version banner',
+      'Remediate: require strong VNC password + tunnel over SSH/VPN, restrict sources',
+    ],
+  },
+  6379: {
+    risk: 'CRITICAL',
+    title: 'Redis — unauthenticated RCE',
+    desc: 'Redis exposed without authentication lets attackers write SSH keys, cron jobs, or webshells, and chain known CVEs for remote code execution.',
+    cves: ['CVE-2022-0543', 'CVE-2015-4335', 'CVE-2022-24735'],
+    vector: 'Network: TCP/6379 open, no requirepass configured → direct redis-cli commands.',
+    steps: [
+      'Test unauthenticated access: redis-cli -h <ip> info server',
+      'Write SSH key: SET \'cron\' ... config set dir /root/.ssh → set filename authorized_keys',
+      'Webshell: config set dir /var/www/html; set + dbfilename shell.php',
+      'Cron RCE: config set dir /var/spool/cron; set filename root → reverse shell via cron',
+      'Remediate: requirepass, bind 127.0.0.1, disable CONFIG (rename-command)',
+    ],
+  },
+  8080: {
+    risk: 'MEDIUM',
+    title: 'HTTP-Alt — admin panels / default credentials',
+    desc: 'Alternate HTTP ports frequently host admin consoles, APIs, or proxied apps with default credentials and unpatched web CVEs.',
+    cves: ['CWE-798', 'CVE-2023-48795'],
+    vector: 'Network: TCP/8080 open; web application reachable directly.',
+    steps: [
+      'Identify app: curl -sI http://<ip>:8080 → grab Server header and redirects',
+      'Directory scan: gobuster dir -u http://<ip>:8080 -w wordlist.txt (look for /admin, /manager, /console)',
+      'Default creds: test common combos on login panels',
+      'Version-specific CVEs via banner/technology fingerprinting (whatweb, wappalyzer)',
+    ],
+  },
+  9090: {
+    risk: 'MEDIUM',
+    title: 'Web-Admin — exposed management interface',
+    desc: 'Management consoles (e.g. monitoring, container tools) on TCP/9090 often ship with default credentials or known CVEs.',
+    cves: ['CWE-798', 'CVE-2017-12617'],
+    vector: 'Network: TCP/9090 open; administrative interface reachable.',
+    steps: [
+      'Fingerprint: curl -sI http://<ip>:9090 → Server header / login page',
+      'Search for default credentials for the identified product',
+      'If it exposes an API: enumerate /api with unauth probes',
+      'Restrict management ports to trusted networks',
+    ],
+  },
+};
+
+const VULN_RISK_COLORS: Record<string, string> = {
+  CRITICAL: 'text-red-300 bg-red-500/20 border-red-500/40',
+  HIGH: 'text-orange-300 bg-orange-500/15 border-orange-500/40',
+  MEDIUM: 'text-yellow-300 bg-yellow-500/10 border-yellow-500/40',
+};
+
 // Live Threat Timeline Data Generator
 const generateTimelineData = (): TimelineEvent[] => {
   const events: TimelineEvent[] = [];
@@ -1269,25 +1451,59 @@ export default function OSINTPlatform() {
                         </h4>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div>
-                            <p className="text-xs text-gray-400 mb-1">
-                              DNS Blacklists (DNSBL) — {apiData.reputation.dnsbl.filter((d: any) => d.listed).length} of {apiData.reputation.dnsbl.length} listed
-                            </p>
+                            <p className="text-xs text-gray-400 mb-1">DNS Blacklists (DNSBL)</p>
                             {apiData.reputation.dnsbl.length === 0 ? (
                               <p className="text-xs text-gray-500">Not applicable (IPv6 / unavailable)</p>
                             ) : (
-                              <ul className="space-y-1 max-h-48 overflow-y-auto pr-1">
-                                {apiData.reputation.dnsbl.map((d: any) => (
-                                  <li key={d.zone} className={`flex flex-col text-xs px-2 py-1 rounded ${d.listed ? 'bg-red-500/20 text-red-400' : d.blocked ? 'bg-yellow-500/10 text-yellow-400' : 'bg-green-500/10 text-green-400'}`}>
-                                    <span className="flex items-center justify-between">
-                                      <span>{d.name}</span>
-                                      <span>{d.listed ? `LISTED ${d.records.join(',')}` : d.blocked ? 'blocked (resolver)' : 'clean'}</span>
-                                    </span>
-                                    {d.listed && d.message && (
-                                      <span className="text-[10px] text-gray-400 break-all mt-0.5">{d.message}</span>
+                              (() => {
+                                const dnsbl: any[] = apiData.reputation.dnsbl || [];
+                                const listed = dnsbl.filter((d: any) => d.listed);
+                                const blocked = dnsbl.filter((d: any) => d.blocked);
+                                const clean = dnsbl.filter((d: any) => !d.listed && !d.blocked);
+                                const groups: string[] = Array.from(new Set(clean.map((d: any) => d.group))).sort();
+                                return (
+                                  <div className="space-y-2">
+                                    <div className="flex flex-wrap gap-1 text-[11px]">
+                                      <span className={`px-2 py-0.5 rounded border ${listed.length ? 'bg-red-500/20 text-red-300 border-red-500/40' : 'bg-gray-900 text-gray-500 border-gray-700'}`}>{listed.length} listed</span>
+                                      <span className={`px-2 py-0.5 rounded border ${blocked.length ? 'bg-yellow-500/10 text-yellow-300 border-yellow-500/40' : 'bg-gray-900 text-gray-500 border-gray-700'}`}>{blocked.length} blocked</span>
+                                      <span className="px-2 py-0.5 rounded bg-gray-900 text-gray-400 border border-gray-700">{dnsbl.length} lists checked</span>
+                                    </div>
+                                    {listed.length === 0 && blocked.length === 0 && (
+                                      <p className="text-xs text-green-400">No blacklist hits across {dnsbl.length} DNSBL zones.</p>
                                     )}
-                                  </li>
-                                ))}
-                              </ul>
+                                    {(listed.length > 0 || blocked.length > 0) && (
+                                      <ul className="space-y-1">
+                                        {[...listed, ...blocked].map((d: any) => (
+                                          <li key={d.zone} className={`flex flex-col text-xs px-2 py-1 rounded ${d.listed ? 'bg-red-500/20 text-red-300 border border-red-500/30' : 'bg-yellow-500/10 text-yellow-300 border border-yellow-500/30'}`}>
+                                            <span className="flex items-center justify-between gap-2">
+                                              <span className="font-medium">{d.name} <span className="text-gray-500 font-normal">[{d.group}]</span></span>
+                                              <span className="font-mono shrink-0">{d.listed ? `LISTED ${d.records.join(',')}` : 'BLOCKED (resolver)'}</span>
+                                            </span>
+                                            {d.listed && d.message && (
+                                              <span className="text-[10px] text-gray-400 break-all mt-0.5">{d.message}</span>
+                                            )}
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    )}
+                                    <details className="text-xs">
+                                      <summary className="cursor-pointer text-gray-400 hover:text-gray-300">Show all clean lists ({clean.length})</summary>
+                                      <div className="mt-1.5 space-y-1.5">
+                                        {groups.map((g: string) => (
+                                          <div key={g}>
+                                            <p className="text-[10px] uppercase tracking-wide text-gray-500">{g}</p>
+                                            <div className="flex flex-wrap gap-1">
+                                              {clean.filter((d: any) => d.group === g).map((d: any) => (
+                                                <span key={d.zone} className="px-1.5 py-0.5 rounded bg-green-500/10 text-green-400 text-[11px]">{d.name}</span>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </details>
+                                  </div>
+                                );
+                              })()
                             )}
                           </div>
                           <div>
@@ -1336,16 +1552,53 @@ export default function OSINTPlatform() {
                           <Terminal className="w-4 h-4 text-purple-400" /> Active Scan — Exposed Services
                         </h4>
                         <p className="text-xs text-gray-400 mb-2">Estimated OS: <span className="text-purple-300 font-medium">{apiData.scan.os}</span></p>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                          {apiData.scan.ports.map((p: any) => (
-                            <div key={p.port} className={`flex items-center gap-2 text-xs px-2 py-1 rounded ${p.state === 'open' ? 'bg-red-500/20 text-red-300' : p.state === 'filtered' ? 'bg-gray-900 text-gray-500' : 'bg-gray-900 text-gray-600'}`}>
-                              <span className="font-mono w-14">{p.port}</span>
-                              <span className="w-20">{p.service}</span>
-                              <span className="w-16 font-medium">{p.state === 'open' ? 'OPEN' : p.state.toUpperCase()}</span>
-                              {p.banner && <span className="text-gray-400 truncate flex-1" title={p.banner}>{p.banner}</span>}
-                            </div>
-                          ))}
-                        </div>
+                        {(apiData.scan.ports || []).filter((p: any) => p.state === 'open').length === 0 ? (
+                          <p className="text-xs text-green-400">No open ports detected. Only exposed services with vulnerable configurations are shown; filtered/closed ports are omitted.</p>
+                        ) : (
+                          <div className="space-y-2">
+                            {(apiData.scan.ports || []).filter((p: any) => p.state === 'open').map((p: any) => {
+                              const profile = VULNERABLE_SERVICES[Number(p.port)];
+                              return profile ? (
+                                <div key={p.port} className="p-3 rounded-lg border border-red-500/30 bg-red-500/10">
+                                  <div className="flex flex-wrap items-center gap-2 text-sm">
+                                    <span className="font-mono font-bold text-red-300">port {p.port}</span>
+                                    <span className="text-gray-300 font-medium">{p.service}</span>
+                                    <span className="text-[10px] px-2 py-0.5 rounded border font-medium uppercase tracking-wide {profile ? VULN_RISK_COLORS[profile.risk] : VULN_RISK_COLORS.MEDIUM}">Risk {profile.risk}</span>
+                                  </div>
+                                  <p className="text-xs text-red-200 font-medium mt-1">{profile.title}</p>
+                                  <p className="text-xs text-gray-300 mt-1">{profile.desc}</p>
+                                  {profile.cves.length > 0 && (
+                                    <div className="flex flex-wrap gap-1 mt-2">
+                                      {profile.cves.map((cve) => (
+                                        <span key={cve} className="text-[10px] px-1.5 py-0.5 rounded bg-gray-900 text-purple-300 border border-purple-500/30 font-mono">{cve}</span>
+                                      ))}
+                                    </div>
+                                  )}
+                                  <div className="mt-2 text-xs">
+                                    <p className="text-gray-400 font-medium flex items-center gap-1"><Target className="w-3 h-3" /> Attack vector</p>
+                                    <p className="text-gray-300 mt-0.5">{profile.vector}</p>
+                                  </div>
+                                  <div className="mt-2 text-xs">
+                                    <p className="text-gray-400 font-medium flex items-center gap-1"><Terminal className="w-3 h-3" /> Verification / exploitation steps</p>
+                                    <ol className="list-decimal list-inside mt-0.5 space-y-0.5 text-gray-300">
+                                      {profile.steps.map((s, i) => (
+                                        <li key={i}>{s}</li>
+                                      ))}
+                                    </ol>
+                                  </div>
+                                  {p.banner && <p className="text-[10px] text-gray-500 font-mono mt-2 break-all">Banner: {p.banner}</p>}
+                                </div>
+                              ) : (
+                                <div key={p.port} className="flex items-center gap-2 text-xs px-2 py-1 rounded bg-orange-500/10 text-orange-300 border border-orange-500/30">
+                                  <span className="font-mono w-14 font-bold">{p.port}</span>
+                                  <span className="w-20">{p.service}</span>
+                                  <span className="font-medium text-orange-300">OPEN — no known vuln profile in this build</span>
+                                  {p.banner && <span className="text-gray-400 truncate flex-1" title={p.banner}>{p.banner}</span>}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     )}
 
