@@ -1155,20 +1155,6 @@ export default function OSINTPlatform() {
                     Analyze IP
                   </button>
                 </div>
-
-                {/* Sample IPs to click */}
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <span className="text-xs text-gray-500">Try:</span>
-                  {['8.8.8.8', '1.1.1.1', '208.67.222.222', '114.114.114.114'].map(ip => (
-                    <button
-                      key={ip}
-                      onClick={() => { setInputValue(ip); handleIPRecon(); }}
-                      className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs font-mono"
-                    >
-                      {ip}
-                    </button>
-                  ))}
-                </div>
               </div>
 
               {/* Results Display */}
@@ -1180,26 +1166,74 @@ export default function OSINTPlatform() {
                       {apiData.fetchedLive && <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded">LIVE DATA</span>}
                     </h3>
                     
+                    {/* Network classification + threat level */}
+                    <div className="flex flex-wrap gap-2 mb-4">
+                      {apiData.analysis?.threatLevel && (
+                        <span className={`px-2 py-1 rounded border text-xs font-medium ${apiData.analysis.threatLevel === 'ELEVATED' ? 'bg-orange-500/20 text-orange-400 border-orange-500/40' : 'bg-green-500/20 text-green-400 border-green-500/40'}`}>
+                          Threat Level: {apiData.analysis.threatLevel}
+                        </span>
+                      )}
+                      {apiData.data.proxy && <span className="px-2 py-1 rounded border text-xs font-medium bg-orange-500/20 text-orange-400 border-orange-500/40">Proxy / VPN</span>}
+                      {apiData.data.hosting && <span className="px-2 py-1 rounded border text-xs font-medium bg-red-500/20 text-red-400 border-red-500/40">Hosting / Cloud</span>}
+                      {apiData.data.mobile && <span className="px-2 py-1 rounded border text-xs font-medium bg-purple-500/20 text-purple-400 border-purple-500/40">Mobile Network</span>}
+                      {!apiData.data.proxy && !apiData.data.hosting && <span className="px-2 py-1 rounded border text-xs font-medium bg-green-500/20 text-green-400 border-green-500/40">Residential / Business</span>}
+                    </div>
+
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                       {(apiData.data.query || apiData.data.ip) && (
                         <>
                           <InfoCard label="IP Address" value={apiData.data.query || apiData.data.ip} icon={<Globe className="w-4 h-4" />} />
+                          <InfoCard label="Hostname (reverse DNS)" value={apiData.data.reverse || 'N/A'} icon={<Network className="w-4 h-4" />} />
                           <InfoCard label="Country" value={`${apiData.data.country || 'N/A'} (${apiData.data.countryCode || ''})`} icon={<MapPin className="w-4 h-4" />} />
                           <InfoCard label="Region" value={apiData.data.regionName || 'N/A'} icon={<MapPin className="w-4 h-4" />} />
                           <InfoCard label="City" value={apiData.data.city || 'N/A'} icon={<Server className="w-4 h-4" />} />
+                          <InfoCard label="District" value={apiData.data.district || 'N/A'} icon={<MapPin className="w-4 h-4" />} />
+                          <InfoCard label="Postal Code" value={apiData.data.zip || 'N/A'} icon={<FileCode className="w-4 h-4" />} />
+                          <InfoCard label="Continent" value={`${apiData.data.continent || 'N/A'} (${apiData.data.continentCode || ''})`} icon={<Globe2 className="w-4 h-4" />} />
                           <InfoCard label="ISP" value={apiData.data.isp || 'N/A'} icon={<Wifi className="w-4 h-4" />} />
                           <InfoCard label="Organization" value={apiData.data.org || 'N/A'} icon={<Database className="w-4 h-4" />} />
+                          <InfoCard label="ASN" value={`${apiData.data.as || 'N/A'}${apiData.data.asname ? ` — ${apiData.data.asname}` : ''}`} icon={<Radar className="w-4 h-4" />} />
                           <InfoCard label="Latitude" value={apiData.data.lat || 'N/A'} icon={<Target className="w-4 h-4" />} />
                           <InfoCard label="Longitude" value={apiData.data.lon || 'N/A'} icon={<Target className="w-4 h-4" />} />
                           <InfoCard label="Timezone" value={apiData.data.timezone || 'N/A'} icon={<Clock className="w-4 h-4" />} />
+                          <InfoCard label="Local Time" value={apiData.data.timezone ? new Intl.DateTimeFormat('en-GB', { timeZone: apiData.data.timezone, dateStyle: 'medium', timeStyle: 'medium' }).format(new Date()) : 'N/A'} icon={<Clock className="w-4 h-4" />} />
+                          <InfoCard label="Currency" value={apiData.data.currency || 'N/A'} icon={<Database className="w-4 h-4" />} />
                         </>
                       )}
                     </div>
+
+                    {/* Map */}
+                    {apiData.data.lat && apiData.data.lon && (
+                      <div className="mt-4 rounded-lg overflow-hidden border border-gray-700">
+                        <iframe
+                          title="IP Location Map"
+                          src={`https://www.openstreetmap.org/export/embed.html?bbox=${Number(apiData.data.lon) - 0.1}%2C${Number(apiData.data.lat) - 0.1}%2C${Number(apiData.data.lon) + 0.1}%2C${Number(apiData.data.lat) + 0.1}&layer=mapnik&marker=${apiData.data.lat}%2C${apiData.data.lon}`}
+                          className="w-full h-64"
+                          loading="lazy"
+                        />
+                      </div>
+                    )}
 
                     {apiData.data.location && (
                       <div className="mt-4 p-4 bg-gray-800/50 rounded-lg">
                         <h4 className="text-sm font-medium mb-2">Location Details</h4>
                         <p className="text-sm text-gray-300">{apiData.data.location}</p>
+                      </div>
+                    )}
+
+                    {/* RDAP / WHOIS ownership */}
+                    {apiData.data.rdap && (
+                      <div className="mt-4 p-4 bg-gray-800/50 rounded-lg border border-gray-700">
+                        <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                          <Shield className="w-4 h-4 text-green-400" /> Network Ownership (RDAP)
+                        </h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                          {apiData.data.rdap.name && <div><span className="text-gray-400">Network:</span> <span className="font-mono">{apiData.data.rdap.name}</span></div>}
+                          {apiData.data.rdap.startAddress && apiData.data.rdap.endAddress && <div><span className="text-gray-400">Range:</span> <span className="font-mono">{apiData.data.rdap.startAddress} — {apiData.data.rdap.endAddress}</span></div>}
+                          {apiData.data.rdap.entities?.length > 0 && <div><span className="text-gray-400">Registrant:</span> <span>{apiData.data.rdap.entities.join(', ')}</span></div>}
+                          {apiData.data.rdap.country && <div><span className="text-gray-400">Registry Country:</span> <span>{apiData.data.rdap.country}</span></div>}
+                          {apiData.data.rdap.status?.length > 0 && <div><span className="text-gray-400">Status:</span> <span>{apiData.data.rdap.status.join(', ')}</span></div>}
+                        </div>
                       </div>
                     )}
 

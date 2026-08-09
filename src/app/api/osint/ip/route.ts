@@ -23,6 +23,39 @@ export async function GET(request: NextRequest) {
 
     const threatLevel = data.proxy || data.hosting ? 'ELEVATED' : 'NORMAL';
 
+    let rdap: any = null;
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const rdapRes = await fetch(`https://rdap.org/ip/${encodeURIComponent(ip)}`, {
+        headers: { Accept: 'application/rdap+json', 'User-Agent': 'NEXUS-INTEL/1.0' },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (rdapRes.ok) {
+        const rd = await rdapRes.json();
+        const entities = (rd.entities || []).flatMap((e: any) => {
+          const vcard = e.vcardArray?.[1] || [];
+          const fn = vcard.find((line: any) => line[0] === 'fn')?.[3];
+          const org = vcard.find((line: any) => line[0] === 'org')?.[3];
+          return [fn || org].filter(Boolean);
+        });
+        rdap = {
+          handle: rd.handle,
+          name: rd.name,
+          type: rd.type,
+          startAddress: rd.startAddress,
+          endAddress: rd.endAddress,
+          country: rd.country,
+          parent: rd.parent,
+          entities: [...new Set(entities)],
+          status: rd.status,
+        };
+      }
+    } catch (rdapError) {
+      console.log('[INTEL] RDAP lookup failed:', rdapError instanceof Error ? rdapError.message : rdapError);
+    }
+
     try {
       const ioc = await upsertIOC({
         type: 'IP',
@@ -63,7 +96,7 @@ export async function GET(request: NextRequest) {
       source,
       timestamp: new Date().toISOString(),
       fetchedLive: live,
-      data,
+      data: { ...data, rdap },
       analysis: {
         threatLevel,
         recommendations:
