@@ -136,6 +136,9 @@ interface HAReport {
   tags?: string[];
   signatures?: HASignature[];
   mitre_attcks?: { tactic?: string; technique?: string; attck_id?: string }[];
+  state?: string;
+  hosts?: string[];
+  domains?: string[];
 }
 
 export async function submitHybridAnalysis(url: string): Promise<ExternalJob | null> {
@@ -165,13 +168,18 @@ export async function pollHybridAnalysis(url: string, host: string, jobId: strin
   const job: ExternalJob = { source: 'hybrid-analysis', jobId, status: 'processing' };
   if (!hybridAnalysisKey) return { ...job, status: 'error', error: 'No API key configured' };
   try {
-    const res = await fetch(`${HYBRID_ANALYSIS_API}/report/${jobId}/report/json`, {
+    // The full report JSON requires 'default' privileges (full API key).
+    // The summary endpoint is available to restricted keys and includes
+    // signatures + MITRE + hosts + domains.
+    const res = await fetch(`${HYBRID_ANALYSIS_API}/report/${jobId}/summary`, {
       headers: { 'api-key': hybridAnalysisKey, Accept: 'application/json' },
     });
-    if (res.status === 404) return job; // still processing
+    if (res.status === 404) return job; // not ready yet
+    if (res.status === 403) return job; // no report yet for this key level
     if (!res.ok) return { ...job, status: 'error', error: `Hybrid Analysis HTTP ${res.status}` };
     const data: HAReport = await res.json();
-    const reportId = (data as any).report_id || jobId;
+    const state = (data.state || '').toLowerCase();
+    if (state === 'in progress' || state === 'unknown' || state === '') return job;
 
     const indicators: ContentIndicator[] = [];
     const staticFlags: StaticFlag[] = [];
@@ -199,6 +207,11 @@ export async function pollHybridAnalysis(url: string, host: string, jobId: strin
       });
     }
 
+    for (const d of data.domains || []) {
+      if (!d || d === host) continue;
+      staticFlags.push({ label: `Connected to ${d}`, weight: 2, category: 'network' });
+    }
+
     if ((data.av_detect ?? 0) > 0) {
       staticFlags.push({ label: `AV detection ${data.av_detect}/${data.total_av ?? '?'}`, weight: 8, category: 'av' });
     }
@@ -208,7 +221,7 @@ export async function pollHybridAnalysis(url: string, host: string, jobId: strin
 
     const score = verdictToScore(data.verdict, indicators.map((i) => (i.severity === 'CRITICAL' ? 8 : i.severity === 'HIGH' ? 5 : i.severity === 'MEDIUM' ? 3 : 1)));
     const result = buildResult(url, host, 'Hybrid Analysis (dynamic detonation)', indicators, staticFlags, data.verdict, score);
-    result.verdict.reasons = data.verdict ? [`Hybrid Analysis verdict: ${data.verdict}`, `report: https://www.hybrid-analysis.com/report/${reportId}`] : [];
+    result.verdict.reasons = data.verdict ? [`Hybrid Analysis verdict: ${data.verdict}`, `report: https://www.hybrid-analysis.com/report/${jobId}`] : [];
 
     return { ...job, status: 'completed', result };
   } catch (e) {
