@@ -111,7 +111,7 @@ async function queryDnsbl(ip: string): Promise<DnsblResult[]> {
   const reversed = reverseOctets(ip);
   const results = await Promise.all(
     DNSBL_ZONES.map(async (entry) => {
-      const records = (await resolveWithTimeout(`${reversed}.${entry.zone}`, 6000)).filter((r) =>
+      const records = (await resolveWithTimeout(`${reversed}.${entry.zone}`, 4000)).filter((r) =>
         r.startsWith('127.0.0.')
       );
       return { name: entry.name, zone: entry.zone, listed: records.length > 0, records };
@@ -122,7 +122,7 @@ async function queryDnsbl(ip: string): Promise<DnsblResult[]> {
 
 async function checkTorExit(ip: string): Promise<boolean> {
   if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) return false;
-  const records = await resolveWithTimeout(`${reverseOctets(ip)}.${TOR_DNSBL_ZONE}`, 6000);
+  const records = await resolveWithTimeout(`${reverseOctets(ip)}.${TOR_DNSBL_ZONE}`, 4000);
   return records.length > 0;
 }
 
@@ -141,7 +141,7 @@ async function lookupUrlhaus(ip: string): Promise<UrlhausResult> {
         'User-Agent': 'NEXUS-INTEL/1.0',
       },
       body: `host=${encodeURIComponent(ip)}`,
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(8000),
     });
     if (!response.ok) return empty;
     const data = await response.json();
@@ -166,7 +166,7 @@ async function lookupUrlhaus(ip: string): Promise<UrlhausResult> {
 async function lookupCrt(ip: string): Promise<CertificateResult[]> {
   try {
     const response = await fetch(`https://crt.sh/?q=${encodeURIComponent(ip)}&output=json`, {
-      signal: AbortSignal.timeout(12000),
+      signal: AbortSignal.timeout(4000),
       headers: { 'User-Agent': 'NEXUS-INTEL/1.0' },
     });
     if (!response.ok) return [];
@@ -209,8 +209,8 @@ function checkPort(ip: string, target: { port: number; service: string }): Promi
         resolve({ port: target.port, service: target.service, state, banner: banner || null });
       }
     };
-    const connectTimer = setTimeout(() => finish('filtered'), 1800);
-    sock.setTimeout(1800);
+    const connectTimer = setTimeout(() => finish('filtered'), 1200);
+    sock.setTimeout(1200);
     sock.setEncoding('utf8');
     let data = '';
     sock.on('data', (chunk) => {
@@ -218,14 +218,14 @@ function checkPort(ip: string, target: { port: number; service: string }): Promi
     });
     sock.once('connect', () => {
       clearTimeout(connectTimer);
-      sock.setTimeout(3000);
+      sock.setTimeout(2500);
       setTimeout(() => {
         const banner = data
           .slice(0, 240)
           .replace(/[\r\n\t]+/g, ' ')
           .trim();
         finish('open', banner || null);
-      }, 500);
+      }, 300);
     });
     sock.on('error', () => {
       clearTimeout(connectTimer);
@@ -262,19 +262,18 @@ export async function enrichIP(ip: string, opts: { scan?: boolean } = {}): Promi
   pivot: IpPivot;
   scan: IpScan;
 }> {
-  const [dnsbl, torExit, urlhaus, certificates] = await Promise.all([
+  const scanPromise =
+    opts.scan !== false ? scanPorts(ip) : Promise.resolve<IpScan>({ os: 'Unknown', ports: [] });
+
+  const [dnsbl, torExit, urlhaus, certificates, scan] = await Promise.all([
     queryDnsbl(ip),
     checkTorExit(ip),
     lookupUrlhaus(ip),
     lookupCrt(ip),
+    scanPromise,
   ]);
 
   const reputation: IpReputation = { dnsbl, torExit, urlhaus };
-
-  let scan: IpScan = { os: 'Unknown', ports: [] };
-  if (opts.scan !== false) {
-    scan = await scanPorts(ip);
-  }
 
   return { reputation, pivot: { certificates }, scan };
 }

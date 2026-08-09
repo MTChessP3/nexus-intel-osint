@@ -535,20 +535,41 @@ export default function OSINTPlatform() {
       showFeedback('No result to add — run an analysis first', 'error');
       return;
     }
+
+    let severity = 'MEDIUM';
+    let status = 'UNKNOWN';
+    let description = `Added from ${activeTab} analysis`;
+    let tags: string[] = [activeTab, 'from-result'];
+
+    // IP results: carry the DNSBL/blacklist markings from the lookup
+    if (iocType === 'IP' && apiData?.reputation) {
+      const listed = (apiData.reputation.dnsbl || []).filter((d: any) => d.listed);
+      const torExit = apiData.reputation.torExit || false;
+      const urlCount = apiData.reputation.urlhaus?.urlCount || 0;
+      const blacklisted = listed.length > 0 || torExit || urlCount > 0;
+      severity = blacklisted ? 'HIGH' : 'MEDIUM';
+      status = blacklisted ? 'SUSPICIOUS' : 'UNKNOWN';
+      tags = [activeTab, 'from-result', ...listed.map((d: any) => `dnsbl:${d.name.toLowerCase()}`)];
+      if (torExit) tags.push('tor-exit');
+      if (urlCount > 0) tags.push(`urlhaus:${urlCount}`);
+      const marks = listed.map((d: any) => `${d.name}(${d.records.join(',')})`).join(', ') || 'clean';
+      description = `IP ${target} — DNSBL: ${marks}${torExit ? ', Tor exit' : ''}${urlCount > 0 ? `, URLhaus: ${urlCount}` : ''} (multirbl.valli.org check)`;
+    }
+
     showFeedback(`Adding ${iocType}: ${target} to IOCs...`, 'info');
     const result = await callAPI('/api/osint/iocs', {
       method: 'POST',
       body: JSON.stringify({
         type: iocType,
         value: target,
-        description: `Added from ${activeTab} analysis`,
-        severity: 'MEDIUM',
-        status: 'UNKNOWN',
-        tags: [activeTab, 'from-result']
+        description,
+        severity,
+        status,
+        tags
       })
     });
     if (result?.success) {
-      showFeedback(`Added ${target} to IOCs`, 'success');
+      showFeedback(`Added ${target} to IOCs${severity === 'HIGH' ? ' (blacklisted)' : ''}`, 'success');
       loadIOCs();
     }
   };
@@ -1341,9 +1362,6 @@ export default function OSINTPlatform() {
                       </button>
                       <button onClick={() => handleAddIOCFromResult()} className="px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm flex items-center gap-2">
                         <Plus className="w-4 h-4" /> Add to IOCs
-                      </button>
-                      <button onClick={() => setActiveTab('forensics')} className="px-3 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg text-sm flex items-center gap-2">
-                        <Camera className="w-4 h-4" /> Run Forensics
                       </button>
                     </div>
                   </div>

@@ -3,6 +3,52 @@ import { lookupIP } from '@/lib/intel';
 import { enrichIP } from '@/lib/intel/ipenrich';
 import { upsertIOC, createAnalysis, createAlert } from '@/lib/store';
 
+async function fetchRdap(ip: string): Promise<any> {
+  let rdap: any = null;
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const rdapRes = await fetch(`https://rdap.org/ip/${encodeURIComponent(ip)}`, {
+      headers: { Accept: 'application/rdap+json', 'User-Agent': 'NEXUS-INTEL/1.0' },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    if (rdapRes.ok) {
+      const rd = await rdapRes.json();
+      const entities = (rd.entities || []).flatMap((e: any) => {
+        const vcard = e.vcardArray?.[1] || [];
+        const fn = vcard.find((line: any) => line[0] === 'fn')?.[3];
+        const org = vcard.find((line: any) => line[0] === 'org')?.[3];
+        return [fn || org].filter(Boolean);
+      });
+      const abuseContacts = (rd.entities || [])
+        .filter((e: any) => (e.roles || []).includes('abuse'))
+        .flatMap((e: any) => {
+          const vcard = e.vcardArray?.[1] || [];
+          return vcard
+            .filter((line: any) => line[0] === 'email')
+            .map((line: any) => line[3])
+            .filter(Boolean);
+        });
+      rdap = {
+        handle: rd.handle,
+        name: rd.name,
+        type: rd.type,
+        startAddress: rd.startAddress,
+        endAddress: rd.endAddress,
+        country: rd.country,
+        parent: rd.parent,
+        entities: [...new Set(entities)],
+        abuseContacts: [...new Set(abuseContacts)],
+        status: rd.status,
+      };
+    }
+  } catch (rdapError) {
+    console.log('[INTEL] RDAP lookup failed:', rdapError instanceof Error ? rdapError.message : rdapError);
+  }
+  return rdap;
+}
+
 // IP Intelligence — real ip-api.com lookup + free OSINT enrichment + active fingerprinting
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -23,50 +69,7 @@ export async function GET(request: NextRequest) {
   try {
     const { live, source, data } = await lookupIP(ip);
 
-    let rdap: any = null;
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
-      const rdapRes = await fetch(`https://rdap.org/ip/${encodeURIComponent(ip)}`, {
-        headers: { Accept: 'application/rdap+json', 'User-Agent': 'NEXUS-INTEL/1.0' },
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-      if (rdapRes.ok) {
-        const rd = await rdapRes.json();
-        const entities = (rd.entities || []).flatMap((e: any) => {
-          const vcard = e.vcardArray?.[1] || [];
-          const fn = vcard.find((line: any) => line[0] === 'fn')?.[3];
-          const org = vcard.find((line: any) => line[0] === 'org')?.[3];
-          return [fn || org].filter(Boolean);
-        });
-        const abuseContacts = (rd.entities || [])
-          .filter((e: any) => (e.roles || []).includes('abuse'))
-          .flatMap((e: any) => {
-            const vcard = e.vcardArray?.[1] || [];
-            return vcard
-              .filter((line: any) => line[0] === 'email')
-              .map((line: any) => line[3])
-              .filter(Boolean);
-          });
-        rdap = {
-          handle: rd.handle,
-          name: rd.name,
-          type: rd.type,
-          startAddress: rd.startAddress,
-          endAddress: rd.endAddress,
-          country: rd.country,
-          parent: rd.parent,
-          entities: [...new Set(entities)],
-          abuseContacts: [...new Set(abuseContacts)],
-          status: rd.status,
-        };
-      }
-    } catch (rdapError) {
-      console.log('[INTEL] RDAP lookup failed:', rdapError instanceof Error ? rdapError.message : rdapError);
-    }
-
-    const enrichment = await enrichIP(ip, { scan });
+    const [rdap, enrichment] = await Promise.all([fetchRdap(ip), enrichIP(ip, { scan })]);
 
     try {
       const ioc = await upsertIOC({
