@@ -45,6 +45,31 @@ interface TimelineEvent {
   severity?: Severity;
 }
 
+interface IpQueueEntry {
+  id: string;
+  ip: string;
+  addedAt: string;
+  riskScore: number;
+  severity: Severity;
+  threatLevel: string;
+  blacklistCount: number;
+  blockedCount: number;
+  blacklistNames: string[];
+  torExit: boolean;
+  urlhausCount: number;
+  category: string;
+  abuseScore: number;
+  asn: string;
+  isp: string;
+  country: string;
+  flag: string;
+  lastSeen: string | null;
+  openPorts: string[];
+  malware: string | null;
+  tags: string[];
+  description: string;
+}
+
 interface APIResponse {
   success: boolean;
   source?: string;
@@ -74,6 +99,113 @@ const STATUS_COLORS: Record<IOCStatus, string> = {
 };
 
 const CHART_COLORS = ['#dc2626', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899'];
+
+// ==================== IP QUEUE HELPERS ====================
+const QUEUE_MAX = 20;
+
+function getFlagEmoji(code?: string): string {
+  if (!code || code.length !== 2) return '';
+  return code.toUpperCase().replace(/./g, (c) => String.fromCodePoint(127397 + c.charCodeAt(0)));
+}
+
+function timeAgo(iso: string): string {
+  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} h ago`;
+  return `${Math.floor(hrs / 24)} d ago`;
+}
+
+function computeAbuseScore(apiData: any): number {
+  let score = 0;
+  const dnsbl = (apiData?.reputation?.dnsbl || []).filter((d: any) => d.listed);
+  score += Math.min(dnsbl.length * 12, 60);
+  if (apiData?.reputation?.torExit) score += 25;
+  if ((apiData?.reputation?.urlhaus?.urlCount || 0) > 0) score += 15;
+  if (apiData?.data?.proxy) score += 10;
+  if (apiData?.data?.hosting) score += 5;
+  const open = (apiData?.scan?.ports || []).filter((p: any) => p.state === 'open');
+  if (open.length > 0) score += Math.min(open.length * 3, 15);
+  return Math.min(score, 100);
+}
+
+function riskSeverityFrom(apiData: any): Severity {
+  const score = computeAbuseScore(apiData);
+  const dnsbl = (apiData?.reputation?.dnsbl || []).filter((d: any) => d.listed).length;
+  const urlCount = apiData?.reputation?.urlhaus?.urlCount || 0;
+  if (score >= 75 || dnsbl >= 5 || urlCount >= 5) return 'CRITICAL';
+  if (score >= 50 || dnsbl >= 2 || apiData?.reputation?.torExit) return 'HIGH';
+  if (score >= 25 || dnsbl >= 1 || apiData?.data?.proxy || urlCount > 0) return 'MEDIUM';
+  return 'LOW';
+}
+
+function networkCategory(apiData: any): string {
+  if (apiData?.data?.proxy) return 'Proxy / VPN';
+  if (apiData?.data?.hosting) return 'Hosting / Cloud';
+  if (apiData?.data?.mobile) return 'Mobile Network';
+  return 'Residential / Business';
+}
+
+function threatBadgeClass(apiData: any): string {
+  switch (riskSeverityFrom(apiData)) {
+    case 'CRITICAL': return 'bg-red-600/30 text-red-300 border-red-500/60';
+    case 'HIGH': return 'bg-orange-500/20 text-orange-300 border-orange-500/40';
+    case 'MEDIUM': return 'bg-yellow-500/15 text-yellow-300 border-yellow-500/40';
+    default: return 'bg-green-500/15 text-green-300 border-green-500/40';
+  }
+}
+
+function abuseScoreColor(score: number): string {
+  if (score >= 75) return '#dc2626';
+  if (score >= 50) return '#f97316';
+  if (score >= 25) return '#eab308';
+  return '#22c55e';
+}
+
+function buildQueueEntry(apiData: any): IpQueueEntry {
+  const ip = apiData?.data?.query || apiData?.data?.ip || '';
+  const listed = (apiData?.reputation?.dnsbl || []).filter((d: any) => d.listed);
+  const blocked = (apiData?.reputation?.dnsbl || []).filter((d: any) => d.blocked);
+  const urlCount = apiData?.reputation?.urlhaus?.urlCount || 0;
+  const threats = (apiData?.reputation?.urlhaus?.urls || []).map((u: any) => u.threat).filter(Boolean);
+  const lastDate = (apiData?.reputation?.urlhaus?.urls || []).map((u: any) => u.dateAdded).filter(Boolean).sort().slice(-1)[0];
+  const open = (apiData?.scan?.ports || []).filter((p: any) => p.state === 'open');
+  const abuseScore = computeAbuseScore(apiData);
+  const malware = threats.length > 0
+    ? [...new Set(threats)].slice(0, 2).join(', ')
+    : apiData?.reputation?.torExit
+      ? 'Tor exit (anonymization)'
+      : null;
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    ip,
+    addedAt: new Date().toISOString(),
+    riskScore: abuseScore,
+    severity: riskSeverityFrom(apiData),
+    threatLevel: apiData?.analysis?.threatLevel || 'NORMAL',
+    blacklistCount: listed.length,
+    blockedCount: blocked.length,
+    blacklistNames: listed.map((d: any) => d.name),
+    torExit: !!apiData?.reputation?.torExit,
+    urlhausCount: urlCount,
+    category: networkCategory(apiData),
+    abuseScore,
+    asn: `${apiData?.data?.as || 'AS?'}${apiData?.data?.asname ? ` (${apiData.data.asname})` : ''}`,
+    isp: apiData?.data?.isp || apiData?.data?.org || 'N/A',
+    country: `${apiData?.data?.country || 'N/A'}${apiData?.data?.city ? ` (${apiData.data.city})` : ''}`,
+    flag: getFlagEmoji(apiData?.data?.countryCode),
+    lastSeen: lastDate || null,
+    openPorts: open.map((p: any) => `${p.port} ${p.service}`),
+    malware,
+    tags: [
+      ...listed.map((d: any) => `dnsbl:${d.name.toLowerCase()}`),
+      ...(apiData?.reputation?.torExit ? ['tor-exit'] : []),
+      ...(urlCount > 0 ? [`urlhaus:${urlCount}`] : []),
+    ],
+    description: `IP ${ip} — DNSBL: ${listed.map((d: any) => `${d.name}(${d.records.join(',')})`).join(', ') || 'clean'}${apiData?.reputation?.torExit ? ', Tor exit' : ''}${urlCount > 0 ? `, URLhaus: ${urlCount}` : ''}`,
+  };
+}
 
 // Known-vulnerable services exposed by the active scan.
 // Rendered only for OPEN ports; each entry documents the attack vector and
@@ -462,6 +594,10 @@ export default function OSINTPlatform() {
   const [modalType, setModalType] = useState<'detail' | 'edit' | 'add'>('detail');
   const [searchQuery, setSearchQuery] = useState('');
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+  const [ipQueue, setIpQueue] = useState<IpQueueEntry[]>([]);
+  const [selectedQueue, setSelectedQueue] = useState<Set<string>>(new Set());
+  const [showDnsblDetail, setShowDnsblDetail] = useState(false);
+  const [showEnrichment, setShowEnrichment] = useState(true);
   
   // Input State
   const [inputValue, setInputValue] = useState('');
@@ -517,6 +653,24 @@ export default function OSINTPlatform() {
     loadIOCs();
     loadForensicsHistory();
   }, []);
+
+  // Persistent IP analysis queue (localStorage, FIFO, max 20)
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('nexus-ip-queue');
+      if (raw) setIpQueue((JSON.parse(raw) || []).slice(0, QUEUE_MAX));
+    } catch (e) {
+      console.error('Load IP queue error:', e);
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('nexus-ip-queue', JSON.stringify(ipQueue));
+    } catch (e) {
+      console.error('Save IP queue error:', e);
+    }
+  }, [ipQueue]);
 
   // Timeline auto-refresh
   useEffect(() => {
@@ -914,6 +1068,71 @@ export default function OSINTPlatform() {
       showFeedback(`Added ${target} to IOCs${severity === 'HIGH' ? ' (blacklisted)' : ''}`, 'success');
       loadIOCs();
     }
+    if (iocType === 'IP' && apiData) {
+      enqueueIp(buildQueueEntry(apiData));
+    }
+  };
+
+  // ==================== IP ANALYSIS QUEUE (FIFO, max 20) ====================
+  const enqueueIp = (entry: IpQueueEntry) => {
+    setIpQueue((prev) => [entry, ...prev.filter((e) => e.ip !== entry.ip)].slice(0, QUEUE_MAX));
+  };
+
+  const toggleQueueSelect = (id: string) => {
+    setSelectedQueue((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAllQueue = () => {
+    setSelectedQueue(new Set(ipQueue.map((e) => e.id)));
+  };
+
+  const deleteSelectedFromQueue = () => {
+    if (selectedQueue.size === 0) {
+      showFeedback('Select at least one IP to remove', 'error');
+      return;
+    }
+    setIpQueue((prev) => prev.filter((e) => !selectedQueue.has(e.id)));
+    setSelectedQueue(new Set());
+    showFeedback('Selected IPs removed from queue', 'success');
+  };
+
+  const clearIpQueue = () => {
+    if (!confirm('Clear the entire IP analysis queue?')) return;
+    setIpQueue([]);
+    setSelectedQueue(new Set());
+    showFeedback('Queue cleared', 'success');
+  };
+
+  const exportIpQueue = (format: 'csv' | 'json') => {
+    if (ipQueue.length === 0) {
+      showFeedback('Queue is empty — nothing to export', 'error');
+      return;
+    }
+    const filename = `ip-ioc-queue-${new Date().toISOString().slice(0, 10)}`;
+    const triggerDownload = (content: string, mime: string, ext: string) => {
+      const blob = new Blob([content], { type: mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${filename}.${ext}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+    if (format === 'json') {
+      triggerDownload(JSON.stringify(ipQueue, null, 2), 'application/json', 'json');
+    } else {
+      const headers = ['ip', 'addedAt', 'severity', 'riskScore', 'abuseScore', 'threatLevel', 'blacklistCount', 'blockedCount', 'torExit', 'urlhausCount', 'category', 'asn', 'isp', 'country', 'flag', 'lastSeen', 'openPorts', 'malware', 'tags', 'description'];
+      const esc = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+      const rows = ipQueue.map((e) =>
+        [e.ip, e.addedAt, e.severity, e.riskScore, e.abuseScore, e.threatLevel, e.blacklistCount, e.blockedCount, e.torExit, e.urlhausCount, e.category, e.asn, e.isp, e.country, e.flag, e.lastSeen || '', e.openPorts.join(';'), e.malware || '', e.tags.join(';'), e.description].map(esc).join(',')
+      );
+      triggerDownload([headers.join(','), ...rows].join('\n'), 'text/csv', 'csv');
+    }
+    showFeedback(`Exported ${ipQueue.length} IP(s) (${format.toUpperCase()})`, 'success');
   };
 
   const handleUpdateIOC = async () => {
@@ -1520,6 +1739,78 @@ export default function OSINTPlatform() {
                 </div>
               </div>
 
+              {/* IP Analysis Queue (FIFO, persistent) */}
+              <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                  <h3 className="font-semibold flex items-center gap-2">
+                    <Database className="w-5 h-5 text-cyan-400" /> IP Analysis Queue
+                    <span className="text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded">{ipQueue.length}/{QUEUE_MAX}</span>
+                  </h3>
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    <button onClick={() => exportIpQueue('csv')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded flex items-center gap-1"><Download className="w-3 h-3" /> CSV</button>
+                    <button onClick={() => exportIpQueue('json')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded flex items-center gap-1"><Download className="w-3 h-3" /> JSON</button>
+                    {ipQueue.length > 0 && (
+                      <>
+                        <button onClick={selectAllQueue} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded flex items-center gap-1"><Check className="w-3 h-3" /> Select all</button>
+                        <button onClick={deleteSelectedFromQueue} className="px-2 py-1 bg-red-600/20 hover:bg-red-600/40 text-red-300 rounded flex items-center gap-1"><Trash2 className="w-3 h-3" /> Delete selected ({selectedQueue.size})</button>
+                        <button onClick={clearIpQueue} className="px-2 py-1 bg-red-600/20 hover:bg-red-600/40 text-red-300 rounded flex items-center gap-1"><Ban className="w-3 h-3" /> Clear all</button>
+                      </>
+                    )}
+                  </div>
+                </div>
+                {ipQueue.length === 0 ? (
+                  <p className="text-xs text-gray-500">
+                    No IPs analyzed yet. Click <span className="text-blue-400">+ Add to IOC</span> on an IP result to keep it in this persistent FIFO queue (max {QUEUE_MAX}).
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {(() => {
+                      const top = [...ipQueue].sort((a, b) => b.riskScore - a.riskScore)[0];
+                      const sevClass = (s: string) => s === 'CRITICAL' ? 'text-red-300 bg-red-500/20 border-red-500/40' : s === 'HIGH' ? 'text-orange-300 bg-orange-500/15 border-orange-500/40' : s === 'MEDIUM' ? 'text-yellow-300 bg-yellow-500/10 border-yellow-500/40' : 'text-green-300 bg-green-500/10 border-green-500/40';
+                      return (
+                        <>
+                          {top && (
+                            <div className="p-3 rounded-lg border-2 border-red-500/40 bg-red-500/10">
+                              <div className="flex flex-wrap items-center gap-2 text-xs">
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-600 text-white font-bold uppercase tracking-wide">Top Risk</span>
+                                <span className="font-mono font-bold text-red-200">{top.ip}</span>
+                                <span className={`px-2 py-0.5 rounded border text-[10px] font-medium uppercase ${sevClass(top.severity)}`}>{top.severity}</span>
+                                <span className="text-gray-400">{top.flag} {top.country}</span>
+                                <span className="text-gray-500">Risk {top.riskScore}/100</span>
+                              </div>
+                              <div className="mt-1 h-1.5 bg-gray-700 rounded overflow-hidden">
+                                <div className="h-1.5 rounded" style={{ width: `${top.riskScore}%`, backgroundColor: abuseScoreColor(top.riskScore) }} />
+                              </div>
+                              <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-gray-400">
+                                <span><span className="text-gray-300 font-medium">{top.abuseScore}%</span> abuse</span>
+                                <span>{top.blacklistCount} blacklisted{top.blockedCount ? ` · ${top.blockedCount} blocked` : ''}</span>
+                                <span>{top.torExit ? 'Tor exit' : 'No Tor'}</span>
+                                <span>URLhaus: {top.urlhausCount}</span>
+                                {top.malware && <span className="text-red-300">{top.malware}</span>}
+                              </div>
+                            </div>
+                          )}
+                          {ipQueue.map((e) => (
+                            <div key={e.id} className={`flex flex-wrap items-center gap-2 text-xs px-2 py-1.5 rounded border ${selectedQueue.has(e.id) ? 'bg-cyan-500/10 border-cyan-500/40' : 'bg-gray-800/50 border-gray-700'}`}>
+                              <input type="checkbox" checked={selectedQueue.has(e.id)} onChange={() => toggleQueueSelect(e.id)} className="accent-cyan-500" />
+                              <span className="font-mono font-medium w-28 truncate" title={e.ip}>{e.ip}</span>
+                              <span className={`px-1.5 py-0.5 rounded border text-[10px] font-medium uppercase ${sevClass(e.severity)}`}>{e.severity}</span>
+                              <span className="text-gray-400">{e.flag} {e.country}</span>
+                              <span className="text-gray-400 hidden md:inline">{e.category}</span>
+                              <span className="text-gray-400">{e.abuseScore}% abuse</span>
+                              <span className="text-gray-400">{e.blacklistCount} listed</span>
+                              {e.openPorts.length > 0 && <span className="font-mono text-red-300 truncate max-w-[180px]" title={e.openPorts.join(', ')}>Ports: {e.openPorts.join(', ')}</span>}
+                              {e.malware && <span className="text-red-300 truncate max-w-[140px]" title={e.malware}>{e.malware}</span>}
+                              <span className="text-gray-500 ml-auto shrink-0">{timeAgo(e.addedAt)}</span>
+                            </div>
+                          ))}
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+
               {/* Results Display */}
               {apiData && apiData.data && (
                 <div className="space-y-4">
@@ -1529,20 +1820,70 @@ export default function OSINTPlatform() {
                       {apiData.fetchedLive && <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded">LIVE DATA</span>}
                     </h3>
                     
-                    {/* Network classification + threat level */}
-                    <div className="flex flex-wrap gap-2 mb-4">
-                      {apiData.analysis?.threatLevel && (
-                        <span className={`px-2 py-1 rounded border text-xs font-medium ${apiData.analysis.threatLevel === 'ELEVATED' ? 'bg-orange-500/20 text-orange-400 border-orange-500/40' : 'bg-green-500/20 text-green-400 border-green-500/40'}`}>
-                          Threat Level: {apiData.analysis.threatLevel}
-                        </span>
-                      )}
-                      {apiData.data.proxy && <span className="px-2 py-1 rounded border text-xs font-medium bg-orange-500/20 text-orange-400 border-orange-500/40">Proxy / VPN</span>}
-                      {apiData.reputation?.torExit && <span className="px-2 py-1 rounded border text-xs font-medium bg-red-600/30 text-red-300 border-red-500/50">Tor Exit Node</span>}
-                      {(apiData.reputation?.dnsbl?.filter((d: any) => d.listed)?.length || 0) > 0 && <span className="px-2 py-1 rounded border text-xs font-medium bg-red-500/20 text-red-400 border-red-500/40">Blacklisted ({apiData.reputation.dnsbl.filter((d: any) => d.listed).length} lists)</span>}
-                      {apiData.data.hosting && <span className="px-2 py-1 rounded border text-xs font-medium bg-red-500/20 text-red-400 border-red-500/40">Hosting / Cloud</span>}
-                      {apiData.data.mobile && <span className="px-2 py-1 rounded border text-xs font-medium bg-purple-500/20 text-purple-400 border-purple-500/40">Mobile Network</span>}
-                      {!apiData.data.proxy && !apiData.data.hosting && <span className="px-2 py-1 rounded border text-xs font-medium bg-green-500/20 text-green-400 border-green-500/40">Residential / Business</span>}
+                    {/* Status cards: threat level / blacklists / network category */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
+                      <div className={`px-3 py-2 rounded-lg border flex items-center gap-2 ${threatBadgeClass(apiData)}`}>
+                        <AlertTriangle className="w-4 h-4 shrink-0" />
+                        <div className="min-w-0">
+                          <div className="text-[10px] uppercase tracking-wide opacity-80">Threat Level</div>
+                          <div className="font-bold truncate">{apiData.analysis?.threatLevel || 'NORMAL'}</div>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setShowDnsblDetail((v) => !v)}
+                        className={`px-3 py-2 rounded-lg border flex items-center gap-2 text-left ${(apiData.reputation?.dnsbl?.filter((d: any) => d.listed)?.length || 0) > 0 ? 'bg-red-500/20 text-red-300 border-red-500/40' : 'bg-green-500/10 text-green-300 border-green-500/40'}`}
+                      >
+                        <Ban className="w-4 h-4 shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[10px] uppercase tracking-wide opacity-80">Blacklists</div>
+                          <div className="font-bold truncate">
+                            {(apiData.reputation?.dnsbl?.filter((d: any) => d.listed)?.length || 0) > 0
+                              ? `Blacklisted (${apiData.reputation.dnsbl.filter((d: any) => d.listed).length} lists)`
+                              : 'Not blacklisted'}
+                          </div>
+                        </div>
+                        <ChevronDown className={`w-3 h-3 shrink-0 transition-transform ${showDnsblDetail ? 'rotate-180' : ''}`} />
+                      </button>
+                      <div className="px-3 py-2 rounded-lg border border-gray-700 bg-gray-800/50 flex items-center gap-2">
+                        <Wifi className="w-4 h-4 shrink-0 text-blue-400" />
+                        <div className="min-w-0">
+                          <div className="text-[10px] uppercase tracking-wide text-gray-500">Network</div>
+                          <div className="font-bold text-gray-200 truncate">{networkCategory(apiData)}</div>
+                        </div>
+                      </div>
                     </div>
+
+                    {/* DNSBL detail (toggled from the Blacklists card) */}
+                    {showDnsblDetail && apiData.reputation && (
+                      <div className="mb-4 p-3 bg-gray-900/60 rounded-lg border border-gray-700">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-xs text-gray-400 font-medium">DNSBL detail — {apiData.reputation.dnsbl.length} zones checked</p>
+                          <button onClick={() => setShowDnsblDetail(false)} className="text-gray-500 hover:text-gray-300"><X className="w-4 h-4" /></button>
+                        </div>
+                        {(() => {
+                          const listed = (apiData.reputation.dnsbl || []).filter((d: any) => d.listed);
+                          const blocked = (apiData.reputation.dnsbl || []).filter((d: any) => d.blocked);
+                          const flagged = [...listed, ...blocked];
+                          return flagged.length === 0 ? (
+                            <p className="text-xs text-green-400">No blacklist hits across {apiData.reputation.dnsbl.length} DNSBL zones.</p>
+                          ) : (
+                            <ul className="space-y-1">
+                              {flagged.map((d: any) => (
+                                <li key={d.zone} className={`flex flex-col text-xs px-2 py-1 rounded ${d.listed ? 'bg-red-500/20 text-red-300 border border-red-500/30' : 'bg-yellow-500/10 text-yellow-300 border border-yellow-500/30'}`}>
+                                  <span className="flex items-center justify-between gap-2">
+                                    <span className="font-medium">{d.name} <span className="text-gray-500 font-normal">[{d.group}]</span></span>
+                                    <span className="font-mono shrink-0">{d.listed ? `LISTED ${d.records.join(',')}` : 'BLOCKED (resolver)'}</span>
+                                  </span>
+                                  {d.listed && d.message && (
+                                    <span className="text-[10px] text-gray-400 break-all mt-0.5">{d.message}</span>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          );
+                        })()}
+                      </div>
+                    )}
 
                     <div className="grid grid-cols-2 gap-3">
                       {(apiData.data.query || apiData.data.ip) && (
@@ -1742,7 +2083,7 @@ export default function OSINTPlatform() {
                                           <div className="flex flex-wrap items-center gap-2 text-sm">
                                             <span className="font-mono font-bold text-red-300">port {p.port}</span>
                                             <span className="text-gray-300 font-medium">{p.service}</span>
-                                            <span className="text-[10px] px-2 py-0.5 rounded border font-medium uppercase tracking-wide {profile ? VULN_RISK_COLORS[profile.risk] : VULN_RISK_COLORS.MEDIUM}">Risk {profile.risk}</span>
+                                            <span className={`text-[10px] px-2 py-0.5 rounded border font-medium uppercase tracking-wide ${VULN_RISK_COLORS[profile.risk] || VULN_RISK_COLORS.MEDIUM}`}>Risk {profile.risk}</span>
                                           </div>
                                           <p className="text-xs text-red-200 font-medium mt-1">{profile.title}</p>
                                           <p className="text-xs text-gray-300 mt-1">{profile.desc}</p>
@@ -1798,13 +2139,83 @@ export default function OSINTPlatform() {
                       </div>
                     </div>
 
+                    {/* Analysis enrichment widgets */}
+                    {apiData.data && (
+                      <div className="mt-4 p-4 bg-gray-800/50 rounded-lg border border-gray-700">
+                        <div className="flex items-center justify-between mb-3">
+                          <h4 className="text-sm font-medium flex items-center gap-2">
+                            <Radar className="w-4 h-4 text-cyan-400" /> Analysis Enrichment
+                          </h4>
+                          <button onClick={() => setShowEnrichment((v) => !v)} className="text-gray-500 hover:text-gray-300" aria-label="Toggle enrichment">
+                            <ChevronDown className={`w-4 h-4 transition-transform ${showEnrichment ? 'rotate-180' : ''}`} />
+                          </button>
+                        </div>
+                        {showEnrichment && (() => {
+                          const score = computeAbuseScore(apiData);
+                          const open = (apiData.scan?.ports || []).filter((p: any) => p.state === 'open');
+                          const threats = (apiData.reputation?.urlhaus?.urls || []).map((u: any) => u.threat).filter(Boolean);
+                          const lastDate = (apiData.reputation?.urlhaus?.urls || []).map((u: any) => u.dateAdded).filter(Boolean).sort().slice(-1)[0];
+                          const malware = threats.length > 0 ? [...new Set(threats)].slice(0, 2).join(', ') : apiData.reputation?.torExit ? 'Tor exit (anonymization)' : null;
+                          return (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
+                              <div className="p-3 bg-gray-900/60 rounded-lg">
+                                <div className="text-gray-400 mb-1 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Abuse Confidence</div>
+                                <div className="flex items-center gap-2">
+                                  <div className="flex-1 h-2 bg-gray-700 rounded overflow-hidden">
+                                    <div className="h-2 rounded" style={{ width: `${score}%`, backgroundColor: abuseScoreColor(score) }} />
+                                  </div>
+                                  <span className="font-mono font-bold">{score}%</span>
+                                </div>
+                              </div>
+                              <div className="p-3 bg-gray-900/60 rounded-lg">
+                                <div className="text-gray-400 mb-1 flex items-center gap-1"><Radar className="w-3 h-3" /> ASN & ISP</div>
+                                <div className="font-medium break-words">{apiData.data.as ? `AS${apiData.data.as}` : 'AS?'}{apiData.data.asname ? ` (${apiData.data.asname})` : ''}</div>
+                                <div className="text-gray-500 break-words">{apiData.data.isp || apiData.data.org || 'N/A'}</div>
+                              </div>
+                              <div className="p-3 bg-gray-900/60 rounded-lg">
+                                <div className="text-gray-400 mb-1 flex items-center gap-1"><MapPin className="w-3 h-3" /> Geolocation</div>
+                                <div className="font-medium">{getFlagEmoji(apiData.data.countryCode)} {apiData.data.country || 'N/A'}{apiData.data.city ? ` (${apiData.data.city})` : ''}</div>
+                                <div className="text-gray-500">{apiData.data.regionName || ''}</div>
+                              </div>
+                              <div className="p-3 bg-gray-900/60 rounded-lg">
+                                <div className="text-gray-400 mb-1 flex items-center gap-1"><Clock className="w-3 h-3" /> Last Seen</div>
+                                <div className="font-medium">{lastDate ? timeAgo(lastDate) : 'No recent malicious activity'}</div>
+                                <div className="text-gray-500">{lastDate ? `via URLhaus (${lastDate.slice(0, 10)})` : 'Not seen on public feeds'}</div>
+                              </div>
+                              <div className="p-3 bg-gray-900/60 rounded-lg">
+                                <div className="text-gray-400 mb-1 flex items-center gap-1"><Terminal className="w-3 h-3" /> Open Ports / Services</div>
+                                {open.length === 0 ? (
+                                  <div className="font-medium text-green-400">None open (20-port probe)</div>
+                                ) : (
+                                  <div className="flex flex-wrap gap-1">
+                                    {open.map((p: any) => (
+                                      <span key={p.port} className="px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 border border-red-500/30 font-mono text-[10px]">{p.port} {p.service}</span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                              <div className="p-3 bg-gray-900/60 rounded-lg">
+                                <div className="text-gray-400 mb-1 flex items-center gap-1"><Skull className="w-3 h-3" /> Malware / C2</div>
+                                {malware ? (
+                                  <div className="font-medium text-red-300 break-words">{malware}</div>
+                                ) : (
+                                  <div className="font-medium text-green-400">No known association</div>
+                                )}
+                                <div className="text-gray-500">{apiData.reputation?.urlhaus?.urlCount > 0 ? `${apiData.reputation.urlhaus.urlCount} malicious URL(s)` : 'URLhaus: clean'}</div>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    )}
+
                     {/* Action Buttons on Result */}
                     <div className="mt-4 flex flex-wrap gap-2">
                       <button onClick={() => copyToClipboard(apiData.data.query || apiData.data.ip)} className="px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm flex items-center gap-2">
                         <Copy className="w-4 h-4" /> Copy IP
                       </button>
                       <button onClick={() => handleAddIOCFromResult()} className="px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm flex items-center gap-2">
-                        <Plus className="w-4 h-4" /> Add to IOCs
+                        <Plus className="w-4 h-4" /> + Add to IOC
                       </button>
                     </div>
                   </div>
