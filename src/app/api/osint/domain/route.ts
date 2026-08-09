@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { lookupDomain } from '@/lib/intel';
+import { buildDomainIntel } from '@/lib/intel/domain';
 import { upsertIOC } from '@/lib/store';
 
-// Domain Intelligence — real DNS (Google DoH) + RDAP WHOIS
+export const maxDuration = 60;
+
+// Domain Intelligence — DNS, email security, WHOIS/RDAP, subdomains (crt.sh),
+// IP/ASN infrastructure and risk scoring via the Domain Intel module.
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const domain = searchParams.get('domain');
@@ -19,27 +22,19 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const { live, source, dns, whois, security } = await lookupDomain(domain);
-
-    const aCount = dns.A?.Answer?.length || 0;
-    const summary =
-      dns.A?.Status === 3
-        ? 'Domain does not exist (NXDOMAIN)'
-        : aCount > 0
-          ? `Active domain — ${aCount} A record(s), ${dns.MX?.Answer?.length || 0} MX, ${dns.NS?.Answer?.length || 0} NS`
-          : 'Domain queried — review DNS records for details';
+    const intel = await buildDomainIntel(domain);
 
     try {
       await upsertIOC({
         type: 'DOMAIN',
-        value: domain,
-        description: `Domain: ${domain} — ${summary}`,
-        severity: security.riskLevel || 'MEDIUM',
-        confidence: 85,
-        status: security.riskLevel === 'HIGH' ? 'SUSPICIOUS' : 'UNKNOWN',
-        source: live ? source : 'fallback',
-        rawResponse: JSON.stringify({ dns, whois, security }),
-        tags: ['dns', 'recon', security.riskLevel.toLowerCase()],
+        value: intel.domain,
+        description: `Domain: ${intel.domain} — ${intel.summary}`,
+        severity: intel.risk.level,
+        confidence: 100 - intel.risk.score,
+        status: intel.risk.level === 'HIGH' || intel.risk.level === 'CRITICAL' ? 'SUSPICIOUS' : 'UNKNOWN',
+        source: intel.source,
+        rawResponse: JSON.stringify(intel).substring(0, 3000),
+        tags: ['dns', 'recon', intel.risk.level.toLowerCase()],
       });
     } catch (storeError) {
       console.error('Store save error (non-critical):', storeError);
@@ -47,31 +42,29 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      domain,
-      timestamp: new Date().toISOString(),
-      source,
-      fetchedLive: live,
-      dns,
-      whois,
-      securityAnalysis: security,
-      summary,
+      domain: intel.domain,
+      timestamp: intel.timestamp,
+      source: intel.source,
+      fetchedLive: intel.live,
+      // Backward-compatible keys used by older UI sections:
+      dns: intel.records,
+      whois: intel.whois,
+      securityAnalysis: {
+        hasSPF: intel.emailSecurity.hasSPF,
+        hasDMARC: intel.emailSecurity.hasDMARC,
+        hasDKIM: intel.emailSecurity.hasDKIM,
+        riskLevel: intel.emailSecurity.riskLevel,
+        findings: intel.emailSecurity.findings,
+      },
+      summary: intel.summary,
+      // Full Domain Intel payload consumed by the Domain Intel panel:
+      domainIntel: intel,
     });
   } catch (error) {
     console.error('Domain Lookup Error:', error);
-    return NextResponse.json({
-      success: true,
-      source: 'emergency-fallback',
-      timestamp: new Date().toISOString(),
-      fetchedLive: false,
-      domain,
-      dns: {},
-      securityAnalysis: {
-        hasSPF: false,
-        hasDMARC: false,
-        riskLevel: 'HIGH',
-        findings: ['Could not complete DNS analysis — showing limited data'],
-      },
-      error: 'DNS lookup failed, showing cached data',
-    });
+    return NextResponse.json(
+      { success: false, error: error instanceof Error ? error.message : 'Domain lookup failed' },
+      { status: 500 }
+    );
   }
 }

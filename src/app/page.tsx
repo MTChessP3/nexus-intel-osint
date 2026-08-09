@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import DomainIntelPanel from '@/components/domain/DomainIntelPanel';
 import { 
   Search, Globe, Shield, Bug, FileText, Download, Upload, 
   Trash2, Edit3, Plus, Eye, AlertTriangle, CheckCircle, XCircle,
@@ -945,13 +946,14 @@ export default function OSINTPlatform() {
   };
 
   // Domain Analysis Handler
-  const handleDomainRecon = async () => {
-    if (!inputValue) {
+  const handleDomainRecon = async (domain?: string) => {
+    const target = domain || inputValue;
+    if (!target) {
       showFeedback('Enter a domain', 'error');
       return;
     }
-    showFeedback(`Resolving domain: ${inputValue}...`, 'info');
-    await callAPI(`/api/osint/domain?domain=${encodeURIComponent(inputValue)}`);
+    showFeedback(`Resolving domain: ${target}...`, 'info');
+    await callAPI(`/api/osint/domain?domain=${encodeURIComponent(target)}`);
   };
 
   // URL Scanner Handler
@@ -2507,96 +2509,18 @@ export default function OSINTPlatform() {
           {activeTab === 'domain' && (
             <div className="space-y-6">
               <h2 className="text-2xl font-bold flex items-center gap-3">
-                <Server className="w-7 h-7 text-purple-400" /> Domain Intelligence
+                <Server className="w-7 h-7 text-purple-400" /> Domain Intel
+                <span className="text-sm font-normal text-gray-400">passive recon · DNS · WHOIS · subdomains · infra graph</span>
               </h2>
-              
-              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-                <div className="flex gap-4">
-                  <div className="flex-1">
-                    <input
-                      type="text"
-                      placeholder="Enter domain (e.g., google.com, example.org)"
-                      value={inputValue}
-                      onChange={(e) => setInputValue(e.target.value)}
-                      onKeyPress={(e) => e.key === 'Enter' && handleDomainRecon()}
-                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-purple-500 focus:outline-none"
-                    />
-                  </div>
-                  <button
-                    onClick={handleDomainRecon}
-                    disabled={loading || !inputValue}
-                    className="px-6 py-3 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
-                  >
-                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-                    Resolve DNS
-                  </button>
-                </div>
-
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <span className="text-xs text-gray-500">Try:</span>
-                  {['google.com', 'github.com', 'microsoft.com', 'amazonaws.com'].map(domain => (
-                    <button
-                      key={domain}
-                      onClick={() => { setInputValue(domain); handleDomainRecon(); }}
-                      className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs font-mono"
-                    >
-                      {domain}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {apiData?.dns && (
-                <div className="bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-purple-500/30 rounded-xl p-5">
-                  <h3 className="font-semibold mb-3 flex items-center gap-2">
-                    <CheckCircle className="w-5 h-5 text-purple-400" /> DNS Records
-                  </h3>
-                  
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {Object.entries(apiData.dns).map(([type, records]: [string, any]) => (
-                      <div key={type} className="p-3 bg-gray-800/50 rounded-lg">
-                        <h4 className="text-sm font-medium text-purple-400 mb-2">{type} Records</h4>
-                        {records?.data?.length > 0 ? (
-                          <div className="space-y-1">
-                            {records.data.map((record: any, idx: number) => (
-                              <div key={idx} className="text-xs font-mono text-gray-300 bg-gray-900 p-2 rounded">
-                                {record.name || record.data || JSON.stringify(record)}
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="text-xs text-gray-500">No records found</p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-
-                  {apiData.securityAnalysis && (
-                    <div className="mt-4 space-y-2">
-                      <h4 className="text-sm font-medium">Security Analysis</h4>
-                      <SecurityCheck key="spf" label="SPF Record" pass={apiData.securityAnalysis.hasSPF === true} />
-                      <SecurityCheck key="dmarc" label="DMARC Record" pass={apiData.securityAnalysis.hasDMARC === true} />
-                    </div>
-                  )}
-
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <button onClick={() => setActiveTab('forensics')} className="px-3 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-sm flex items-center gap-2">
-                      <Camera className="w-4 h-4" /> Full Forensics
-                    </button>
-                    <button onClick={() => copyToClipboard(inputValue)} className="px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm flex items-center gap-2">
-                      <Copy className="w-4 h-4" /> Copy Domain
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {!apiData && !loading && (
-                <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
-                  <Server className="w-16 h-16 mx-auto mb-4 text-gray-600" />
-                  <h3 className="text-lg font-semibold mb-2">DNS Resolution Ready</h3>
-                  <p className="text-gray-400">Enter a domain to resolve DNS records including A, MX, NS, TXT records.</p>
-                </div>
-              )}
+              <DomainIntelPanel
+                intel={apiData?.domainIntel || null}
+                loading={loading}
+                inputValue={inputValue}
+                setInputValue={setInputValue}
+                onAnalyze={handleDomainRecon}
+                onCopy={copyToClipboard}
+                onGoForensics={() => setActiveTab('forensics')}
+              />
             </div>
           )}
 
@@ -4743,18 +4667,6 @@ function InfoCard({ label, value, icon, alert }: { label: string; value: string 
     <div className={`p-3 bg-gray-800/50 rounded-lg min-w-0 ${alert ? 'border border-red-500/30' : ''}`}>
       <div className="flex items-center gap-2 text-gray-400 text-xs mb-1">{icon}{label}</div>
       <div className={`font-medium text-sm break-words ${alert ? 'text-red-400' : ''}`}>{value}</div>
-    </div>
-  );
-}
-
-function SecurityCheck({ label, pass }: { label: string; pass: boolean }) {
-  return (
-    <div className={`p-3 rounded-lg flex items-center gap-3 ${pass ? 'bg-green-500/10' : 'bg-red-500/10'}`}>
-      {pass ? <CheckCircle className="w-5 h-5 text-green-500" /> : <XCircle className="w-5 h-5 text-red-500" />}
-      <div>
-        <p className="font-medium text-sm">{label}</p>
-        <p className={`text-xs ${pass ? 'text-green-400' : 'text-red-400'}`}>{pass ? 'Configured' : 'Not Found'}</p>
-      </div>
     </div>
   );
 }
