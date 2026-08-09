@@ -166,36 +166,37 @@ function classifyKind(contentType: string | null, url: string): KitArtifact['kin
 }
 
 // Kit-family signatures matched against downloaded file content.
-const KIT_SIGNATURES: { family: string; confidence: number; indicators: string[]; patterns: RegExp[] }[] = [
-  {
-    family: 'GenericPHP Phishing Kit',
-    confidence: 0.6,
-    indicators: ['login/password POST handler', 'base64_encoded token'],
-    patterns: [/<\?php/i, /(?:$_POST\[['"]?(?:username|login|user|email|password|pass)['"]?\])/i, /base64_(?:encode|decode)\s*\(/i],
-  },
+// Generic families require an exfiltration channel (telegram / off-domain
+// post / encoded stealer) to fire — otherwise legit JS (atob, getElementById,
+// login forms) would false-positive.
+const KIT_SIGNATURES: { family: string; confidence: number; indicators: string[]; patterns: RegExp[]; needsExfil: boolean }[] = [
   {
     family: 'Telegram Exfil Kit',
-    confidence: 0.75,
+    confidence: 0.85,
     indicators: ['bot token', 'chat_id', 'sendMessage'],
     patterns: [/api\.telegram\.org\/bot\d{8,10}:[A-Za-z0-9_-]{35}/, /chat_id/, /sendMessage/],
+    needsExfil: false,
   },
   {
     family: 'OTP / 2FA Harvester',
-    confidence: 0.6,
+    confidence: 0.7,
     indicators: ['one-time-code field', 'SMS/OTP endpoint'],
     patterns: [/one.?time.?code|otp|verification.?code/i, /(?:sms|email).{0,30}(?:code|otp)/i],
+    needsExfil: true,
   },
   {
-    family: 'JavaScript Credential Stealer',
-    confidence: 0.6,
-    indicators: ['atob/base64 decode', 'credential fields read'],
-    patterns: [/(?:atob\s*\(|fromCharCode|btoa\s*\()/i, /(?:querySelector|getElementById)['\"]{0,2}(?:user|pass|login|email)/i],
+    family: 'Credential Stealer JS',
+    confidence: 0.7,
+    indicators: ['reads password field', 'atob/base64 encode', 'exfil by base64/telegram'],
+    patterns: [/atob\s*\(|fromCharCode|btoa\s*\(/, /(?:getElementById|querySelector)\(['"]{0,2}(?:pass|user|login|email|password)['"]{0,2}\)/i, /(?:\+|\s*\.\s*)(?:atob|btoa)\s*\(/],
+    needsExfil: true,
   },
   {
-    family: 'Fake Login Template',
-    confidence: 0.5,
-    indicators: ['sign-in form', 'brand impersonation keywords'],
-    patterns: [/<form[^>]*>/i, /(?:sign\s*in|log\s*in|password|credentials)/i, /<input[^>]*type=["'](?:password|text)["']/i],
+    family: 'GenericPHP Phishing Kit',
+    confidence: 0.7,
+    indicators: ['login/password POST handler', 'exfil function'],
+    patterns: [/<\?php/i, /(?:$_POST|$_GET)\[['"]?(?:username|login|user|email|password|pass)['"]?\]/i, /(?:mail\s*\(|file_get_contents\s*\(\s*['"]https?:\/\/|curl_|base64_(?:encode|decode))/i],
+    needsExfil: true,
   },
 ];
 
@@ -212,7 +213,7 @@ function noteMatches(text: string): string[] {
   return Array.from(new Set(notes)).slice(0, 8);
 }
 
-export function fingerprintKitFiles(files: KitArtifact[]): KitMatch[] {
+export function fingerprintKitFiles(files: KitArtifact[], hasExfil: boolean): KitMatch[] {
   const matches: KitMatch[] = [];
   const familyHits: Record<string, { hits: number; indicators: Set<string> }> = {};
   for (const file of files) {
@@ -231,9 +232,11 @@ export function fingerprintKitFiles(files: KitArtifact[]): KitMatch[] {
   }
   for (const [family, acc] of Object.entries(familyHits)) {
     const sig = KIT_SIGNATURES.find((s) => s.family === family)!;
+    // Generic families only confirmed when an exfiltration channel exists.
+    if (sig.needsExfil && !hasExfil) continue;
     matches.push({
       family,
-      confidence: Math.min(1, sig.confidence + acc.hits * 0.12),
+      confidence: Math.min(1, sig.confidence + (acc.hits >= 2 ? 0.1 : 0)),
       indicators: Array.from(acc.indicators),
     });
   }

@@ -80,7 +80,7 @@ function scoreScanner(params: {
     reasons.push(`${params.exfilCount} exfiltration endpoint(s)`);
   }
 
-  if (params.rep.dnsblListed > 0) { score += Math.min(params.rep.dnsblListed * 4, 12); reasons.push(`${params.rep.dnsblListed} DNSBL listing(s)`); }
+  if (params.rep.dnsblListed >= 2) { score += Math.min(params.rep.dnsblListed * 3, 12); reasons.push(`${params.rep.dnsblListed} DNSBL listing(s)`); }
   if (params.rep.torExit) { score += 8; reasons.push('IP is a Tor exit node'); }
   if (params.rep.urlhausCount > 0) { score += Math.min(params.rep.urlhausCount * 2, 10); reasons.push(`${params.rep.urlhausCount} URLhaus hit(s)`); }
   if (params.rep.proxy) { score += 4; reasons.push('IP flagged as proxy/VPN'); }
@@ -121,17 +121,20 @@ export async function scanUrl(url: string): Promise<UrlScannerResult> {
 
   // Attack surface — fuzz from origin root
   const fuzz = await fuzzPaths(origin + '/');
-  const exposedSensitive = fuzz.filter((f) => f.sensitive && f.status !== null && f.status >= 200 && f.status < 400 && f.status !== 404).length;
-
-  // Download + fingerprint kit files
-  const kitFiles = await downloadKitFiles(http?.finalUrl || clean, content, resources);
-  const kitMatches = fingerprintKitFiles(kitFiles);
-  const kitDetected = kitMatches.length > 0;
-  const kitConfidence = kitMatches.reduce((acc, m) => Math.max(acc, m.confidence), 0);
+  // Only 2xx counts as truly exposed (3xx redirects are common on legit panels).
+  const exposedSensitive = fuzz.filter((f) => f.sensitive && f.status !== null && f.status >= 200 && f.status < 300).length;
 
   // Attribution + artifacts
   const exfil = collectExfil(content, http?.finalUrl || clean);
   const artifacts = collectArtifacts({ content, resources, exfil, host });
+
+  // Download + fingerprint kit files (generic families need strong exfil evidence:
+  // telegram bot, off-domain form post, or http-post receiver — not just an email)
+  const kitFiles = await downloadKitFiles(http?.finalUrl || clean, content, resources);
+  const hasStrongExfil = exfil.some((e) => e.kind !== 'email');
+  const kitMatches = fingerprintKitFiles(kitFiles, hasStrongExfil);
+  const kitDetected = kitMatches.length > 0;
+  const kitConfidence = kitMatches.reduce((acc, m) => Math.max(acc, m.confidence), 0);
 
   // Reputation: resolve first A record → ip-api geo + DNSBL/Tor/URLhaus via enrichIP
   const rep: DomainReputation = {
