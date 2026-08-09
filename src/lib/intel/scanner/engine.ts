@@ -148,11 +148,17 @@ export async function probeBaseline(baseUrl: string): Promise<CatchAllBaseline> 
 export function looksLikeBaseline(f: FuzzPathResult, baseline: CatchAllBaseline): boolean {
   if (!baseline.catchAll) return false;
   if (f.status !== baseline.status) return false;
-  // Same status + same declared size → almost certainly the catch-all page.
-  if (f.size !== null && baseline.size !== null && f.size === baseline.size) return true;
-  // Same status + same content type but unknown size → treat as likely catch-all.
-  if (f.contentType && baseline.contentType && f.contentType === baseline.contentType && f.status === baseline.status) return true;
-  return false;
+  // A different content type strongly implies real content, not the catch-all.
+  if (f.contentType && baseline.contentType && f.contentType !== baseline.contentType) return false;
+  // Same status. If both sizes known, require the size to differ meaningfully
+  // (SPA pages embed the requested URL, so the catch-all is rarely byte-identical).
+  if (f.size !== null && baseline.size !== null && baseline.size > 0) {
+    const diff = Math.abs(f.size - baseline.size);
+    if (diff > baseline.size * 0.3 && diff > 4000) return false;
+    return true;
+  }
+  // Unknown size + same content type → treat as likely catch-all.
+  return true;
 }
 
 // ---------------- kit download + fingerprinting ----------------
