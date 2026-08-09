@@ -112,27 +112,28 @@ const DNSBL_ZONES = [
 
 const TOR_DNSBL_ZONE = 'tor.dan.me.uk';
 
+// yougetsignal.com open-ports style fixed probe list (20 ports)
 const SCAN_PORTS: { port: number; service: string }[] = [
   { port: 21, service: 'FTP' },
   { port: 22, service: 'SSH' },
-  { port: 23, service: 'Telnet' },
+  { port: 23, service: 'TELNET' },
   { port: 25, service: 'SMTP' },
   { port: 53, service: 'DNS' },
   { port: 80, service: 'HTTP' },
   { port: 110, service: 'POP3' },
+  { port: 115, service: 'SFTP' },
+  { port: 135, service: 'RPC' },
+  { port: 139, service: 'NetBIOS' },
   { port: 143, service: 'IMAP' },
-  { port: 443, service: 'HTTPS' },
+  { port: 194, service: 'IRC' },
+  { port: 443, service: 'SSL/HTTPS' },
   { port: 445, service: 'SMB' },
-  { port: 993, service: 'IMAPS' },
-  { port: 995, service: 'POP3S' },
+  { port: 1433, service: 'MSSQL' },
   { port: 3306, service: 'MySQL' },
-  { port: 3389, service: 'RDP' },
-  { port: 5432, service: 'PostgreSQL' },
+  { port: 3389, service: 'Remote Desktop' },
+  { port: 5632, service: 'PCAnywhere' },
   { port: 5900, service: 'VNC' },
-  { port: 6379, service: 'Redis' },
-  { port: 8080, service: 'HTTP-Alt' },
-  { port: 8443, service: 'HTTPS-Alt' },
-  { port: 9090, service: 'Web-Admin' },
+  { port: 25565, service: 'Minecraft' },
 ];
 
 function reverseOctets(ip: string): string {
@@ -320,13 +321,16 @@ async function scanPorts(ip: string): Promise<IpScan> {
   const open = results.filter((r) => r.state === 'open');
   const openPorts = new Set(open.map((r) => r.port));
   let os = 'Unknown';
-  if (openPorts.has(3389)) os = 'Windows (RDP)';
+  if (openPorts.has(3389)) os = 'Windows (Remote Desktop)';
+  else if (openPorts.has(5632)) os = 'Windows (PCAnywhere)';
   else if (openPorts.has(445) && !openPorts.has(22)) os = 'Windows (SMB)';
+  else if (openPorts.has(139) && !openPorts.has(22)) os = 'Windows (NetBIOS/SMB)';
   else if (openPorts.has(22) && openPorts.has(80) && openPorts.has(443)) os = 'Linux/Unix server';
-  else if (openPorts.has(22)) os = 'Linux/Unix';
+  else if (openPorts.has(22) || openPorts.has(115)) os = 'Linux/Unix';
   else if (openPorts.has(53)) os = 'DNS server (BIND/Unbound)';
-  else if (openPorts.has(3306) || openPorts.has(5432) || openPorts.has(6379)) os = 'Database server';
-  else if (openPorts.has(80) || openPorts.has(443) || openPorts.has(8080) || openPorts.has(8443)) os = 'Web server';
+  else if (openPorts.has(3306) || openPorts.has(1433)) os = 'Database server';
+  else if (openPorts.has(80) || openPorts.has(443)) os = 'Web server';
+  else if (openPorts.has(25565)) os = 'Game server (Minecraft)';
   return { os, ports: results };
 }
 

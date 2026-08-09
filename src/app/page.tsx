@@ -249,6 +249,166 @@ const VULNERABLE_SERVICES: Record<number, VulnProfile> = {
       'Restrict management ports to trusted networks',
     ],
   },
+  53: {
+    risk: 'MEDIUM',
+    title: 'DNS — open recursive resolver (amplification)',
+    desc: 'An open recursive resolver on the public Internet is abused for DNS amplification DDoS and domain data disclosure. It should only be reachable by its own clients.',
+    cves: ['CVE-1999-0532', 'CWE-918'],
+    vector: 'Network: TCP/UDP 53 open and accepting recursive queries from arbitrary hosts.',
+    steps: [
+      'Test recursion: dig @<ip> google.com A → if it answers for external names, it is an open resolver',
+      'Amplification check: dig @<ip> any . TXT +dnssec → measure response size vs query',
+      'Enumerate domain data: axfr zone transfer attempt (dig @<ip> <domain> axfr)',
+      'Remediate: restrict recursion to internal clients, enable RRL, block zone transfers',
+    ],
+  },
+  80: {
+    risk: 'MEDIUM',
+    title: 'HTTP — exposed web service',
+    desc: 'Public web services frequently run outdated software, default admin panels, or exposed debug endpoints.',
+    cves: ['CWE-798', 'CWE-79'],
+    vector: 'Network: TCP/80 open; application served without TLS, credentials and data in cleartext.',
+    steps: [
+      'Fingerprint: curl -sI http://<ip>/ → Server, X-Powered-By, redirects',
+      'Directory scan: gobuster dir -u http://<ip>/ -w wordlist.txt → /admin, /wp-login.php, /.git, /backup',
+      'Technology + CVE mapping: whatweb / wappalyzer, then search CVEs for the version',
+      'If WordPress: wpscan --url http://<ip>/ to enumerate plugins/themes with known vulnerabilities',
+      'Harden: patch software, disable dir listing, enforce HTTPS (see port 443)',
+    ],
+  },
+  110: {
+    risk: 'MEDIUM',
+    title: 'POP3 — cleartext mail retrieval',
+    desc: 'POP3 retrieves mail without encryption; credentials and message content are sniffable. Older servers expose user enumeration.',
+    cves: ['CVE-1999-0619', 'CWE-319'],
+    vector: 'Network: TCP/110 open; mail session in cleartext.',
+    steps: [
+      'Banner: nc -nv <ip> 110 → +OK banner identifies server/version',
+      'User enumeration: USER <name> → observe OK/ERR responses for valid accounts',
+      'Sniff the session to capture credentials (must be on-path/authorized)',
+      'Check STARTTLS availability; if unsupported, migrate clients to 995 (POP3S)',
+    ],
+  },
+  115: {
+    risk: 'HIGH',
+    title: 'SFTP (SSH) — exposed file transfer',
+    desc: 'SFTP runs over SSH, so the exposure mirrors port 22: brute-forceable credentials and OpenSSH CVEs. It often sits on file servers storing sensitive data.',
+    cves: ['CVE-2024-6387', 'CVE-2018-15473'],
+    vector: 'Network: TCP/115 open; SSH-based file transfer reachable, password auth enabled.',
+    steps: [
+      'Version: ssh-keyscan -p 115 <ip> → banner; if OpenSSH <9.8 check regreSSHion (CVE-2024-6387)',
+      'User enum: ssh2-enum-algos / ssh-auth-methods via nmap',
+      'Weak creds: hydra -s 115 -L users.txt -P pass.txt ssh://<ip> (authorized targets only)',
+      'Once in: extract files, ssh keys, and configs; check for writable upload dirs',
+    ],
+  },
+  135: {
+    risk: 'CRITICAL',
+    title: 'MSRPC — DCOM / RPC exposure',
+    desc: 'Microsoft RPC (135/TCP) exposed publicly is the entry point for DCOM object attacks and is part of the EternalBlue/remote management attack chains.',
+    cves: ['CVE-2008-4250', 'CVE-2017-0143', 'CVE-2021-1675'],
+    vector: 'Network: TCP/135 open; DCOM/RPC endpoints reachable from the Internet.',
+    steps: [
+      'Endpoint enum: rpcdump.py <ip> (Impacket) → list RPC interfaces and bindings',
+      'Vuln scan: nmap -p135 --script msrpc-enum,ms-sql-info <ip>',
+      'PrintNightmare check (CVE-2021-1675) if Print Spooler RPC endpoint exposed',
+      'If combined with SMB (445) → assess EternalBlue chain for full RCE',
+      'Remediate: block 135/139/445 at the edge; patch MS17-010-class vulnerabilities',
+    ],
+  },
+  139: {
+    risk: 'HIGH',
+    title: 'NetBIOS — SMB session services',
+    desc: 'NetBIOS-SSN exposes legacy SMB session services used by Windows file sharing; it leaks hostnames, shares and enables SMBv1-era exploits.',
+    cves: ['CVE-2017-0143', 'CVE-2017-0144'],
+    vector: 'Network: TCP/139 open; NBT session service reachable, anonymous enumeration possible.',
+    steps: [
+      'Enumeration: nmap -p139 --script nbstat.nse <ip> → NetBIOS name table (hostname, logged-in users)',
+      'Share enum: smbclient -L //<ip> -N → list available shares',
+      'SMBv1/EternalBlue assessment if SMB protocol negotiation succeeds',
+      'Remediate: disable NetBIOS over TCP/IP (WINS), block 139 at edge, patch SMB',
+    ],
+  },
+  143: {
+    risk: 'MEDIUM',
+    title: 'IMAP — cleartext mail retrieval',
+    desc: 'IMAP without TLS exposes credentials and mail in transit; vulnerable/legacy servers have memory-overflow and DoS CVEs.',
+    cves: ['CVE-1999-0619', 'CWE-319', 'CVE-2004-2650'],
+    vector: 'Network: TCP/143 open; cleartext mail session and STARTTLS negotiation.',
+    steps: [
+      'Banner: nc -nv <ip> 143 → server version',
+      'Auth probe: a001 LOGIN user pass → test default/weak creds on own tenants',
+      'Check STARTTLS: if unsupported, credential sniffing is trivial on-path',
+      'Migrate to 993 (IMAPS) and require TLS 1.2+',
+    ],
+  },
+  194: {
+    risk: 'MEDIUM',
+    title: 'IRC — cleartext chat / botnet C2',
+    desc: 'IRC serves as botnet command-and-control and leaks channel/operator metadata. Open IRC servers are abused for DDoS bot networks and credential dumping.',
+    cves: ['CWE-319', 'CVE-2005-3557'],
+    vector: 'Network: TCP/194 open; IRC session reachable without transport encryption.',
+    steps: [
+      'Probe: nc -nv <ip> 194 → 020 banner reveals server software (e.g. InspIRCd, UnrealIRCd)',
+      'Version CVEs: UnrealIRCd pre-3.2.8.1 backdoor (CVE-2010-2075), InspIRCd flaws',
+      'Monitor channel/oper activity for C2 indicators (nick patterns, topic updates)',
+      'Check for unauthenticated channel access and excessive connection flood',
+    ],
+  },
+  443: {
+    risk: 'MEDIUM',
+    title: 'SSL/HTTPS — exposed web service',
+    desc: 'TLS services hide admin panels, APIs and vulnerable apps; weak TLS configs and exposed login endpoints are prime attack surface.',
+    cves: ['CWE-798', 'CVE-2023-48795', 'CWE-295'],
+    vector: 'Network: TCP/443 open; TLS service reachable from the Internet.',
+    steps: [
+      'TLS audit: nmap -p443 --script ssl-enum-ciphers <ip> → weak ciphers/protocols',
+      'Scanning: testssl.sh <ip>:443 → protocol/cipher weaknesses',
+      'App discovery: curl -skI https://<ip>/ → Server header, login paths (/admin, /login, /api)',
+      'Certificate info: openssl s_client -connect <ip>:443 → check expiry, SANs, issuer (pivot data)',
+      'Harden: modern TLS config, HSTS, patch app, restrict admin routes',
+    ],
+  },
+  1433: {
+    risk: 'CRITICAL',
+    title: 'MSSQL — exposed database / sa brute force',
+    desc: 'SQL Server on the public Internet with a weak or empty sa password is an instant database takeover; older versions have remote RCE CVEs.',
+    cves: ['CVE-2019-1068', 'CVE-2020-0618', 'CVE-2008-5416'],
+    vector: 'Network: TCP/1433 open; TDS protocol reachable, sa credentials brute-forceable.',
+    steps: [
+      'Probe: nmap -p1433 --script ms-sql-info,ms-sql-ntlm-info <ip> → instance, version, patch level',
+      'Default sa password test (only on owned/authorized targets): sqlcmd -S <ip> -U sa -P \'sa\' / empty',
+      'Brute force: msf auxiliary/scanner/mssql/mssql_login with common passwords',
+      'If compromised: xp_cmdshell RCE → take over the OS account running SQL Server',
+      'Lock down: strong sa password, Windows Auth, restrict 1433 to app networks',
+    ],
+  },
+  5632: {
+    risk: 'HIGH',
+    title: 'PCAnywhere — legacy remote control',
+    desc: 'Symantec pcAnywhere is legacy remote-control software with known authentication-bypass and default-credential CVEs; long unsupported.',
+    cves: ['CVE-2006-4048', 'CVE-2007-3612'],
+    vector: 'Network: TCP/5632 open; remote-control service with weak/known auth reachable.',
+    steps: [
+      'Banner: nc -nv <ip> 5632 → version fingerprint',
+      'Default password test (authorized only) → pcAnywhere host passwords are commonly left default',
+      'Known auth-bypass assessment per version banner (CVE-2006-4048)',
+      'Remediate: uninstall pcAnywhere, replace with a modern patched remote-control solution',
+    ],
+  },
+  25565: {
+    risk: 'MEDIUM',
+    title: 'Minecraft — game server exposed',
+    desc: 'Public Minecraft servers can leak player data, are brute-forced for admin accounts, and vulnerable plugin stacks expose RCE/DoS.',
+    cves: ['CVE-2021-3854', 'CWE-798', 'CWE-400'],
+    vector: 'Network: TCP/25565 open; Minecraft protocol reachable, RCON/admin brute-forceable.',
+    steps: [
+      'Handshake: python or mcstatus to query server → version, MOTD, player list, mods',
+      'RCON check: if RCON enabled (default port 25575), brute-force admin password (authorized only)',
+      'Plugin/version CVEs: map the modpack/plugin list to known CVEs (Log4Shell family)',
+      'Look for console exposure and offline-mode (cracked) servers leaking identities',
+    ],
+  },
 };
 
 const VULN_RISK_COLORS: Record<string, string> = {
@@ -1552,53 +1712,76 @@ export default function OSINTPlatform() {
                           <Terminal className="w-4 h-4 text-purple-400" /> Active Scan — Exposed Services
                         </h4>
                         <p className="text-xs text-gray-400 mb-2">Estimated OS: <span className="text-purple-300 font-medium">{apiData.scan.os}</span></p>
-                        {(apiData.scan.ports || []).filter((p: any) => p.state === 'open').length === 0 ? (
-                          <p className="text-xs text-green-400">No open ports detected. Only exposed services with vulnerable configurations are shown; filtered/closed ports are omitted.</p>
-                        ) : (
-                          <div className="space-y-2">
-                            {(apiData.scan.ports || []).filter((p: any) => p.state === 'open').map((p: any) => {
-                              const profile = VULNERABLE_SERVICES[Number(p.port)];
-                              return profile ? (
-                                <div key={p.port} className="p-3 rounded-lg border border-red-500/30 bg-red-500/10">
-                                  <div className="flex flex-wrap items-center gap-2 text-sm">
-                                    <span className="font-mono font-bold text-red-300">port {p.port}</span>
-                                    <span className="text-gray-300 font-medium">{p.service}</span>
-                                    <span className="text-[10px] px-2 py-0.5 rounded border font-medium uppercase tracking-wide {profile ? VULN_RISK_COLORS[profile.risk] : VULN_RISK_COLORS.MEDIUM}">Risk {profile.risk}</span>
-                                  </div>
-                                  <p className="text-xs text-red-200 font-medium mt-1">{profile.title}</p>
-                                  <p className="text-xs text-gray-300 mt-1">{profile.desc}</p>
-                                  {profile.cves.length > 0 && (
-                                    <div className="flex flex-wrap gap-1 mt-2">
-                                      {profile.cves.map((cve) => (
-                                        <span key={cve} className="text-[10px] px-1.5 py-0.5 rounded bg-gray-900 text-purple-300 border border-purple-500/30 font-mono">{cve}</span>
-                                      ))}
-                                    </div>
-                                  )}
-                                  <div className="mt-2 text-xs">
-                                    <p className="text-gray-400 font-medium flex items-center gap-1"><Target className="w-3 h-3" /> Attack vector</p>
-                                    <p className="text-gray-300 mt-0.5">{profile.vector}</p>
-                                  </div>
-                                  <div className="mt-2 text-xs">
-                                    <p className="text-gray-400 font-medium flex items-center gap-1"><Terminal className="w-3 h-3" /> Verification / exploitation steps</p>
-                                    <ol className="list-decimal list-inside mt-0.5 space-y-0.5 text-gray-300">
-                                      {profile.steps.map((s, i) => (
-                                        <li key={i}>{s}</li>
-                                      ))}
-                                    </ol>
-                                  </div>
-                                  {p.banner && <p className="text-[10px] text-gray-500 font-mono mt-2 break-all">Banner: {p.banner}</p>}
-                                </div>
+                        {(() => {
+                          const ports = apiData.scan.ports || [];
+                          const open = ports.filter((p: any) => p.state === 'open');
+                          const closed = ports.filter((p: any) => p.state === 'closed');
+                          const filtered = ports.filter((p: any) => p.state === 'filtered');
+                          return (
+                            <div className="space-y-3">
+                              <div className="flex flex-wrap gap-1 text-[11px]">
+                                <span className="px-2 py-0.5 rounded bg-gray-900 text-gray-400 border border-gray-700">Scanned {ports.length} ports (yougetsignal-style)</span>
+                                <span className={`px-2 py-0.5 rounded border ${open.length ? 'bg-red-500/20 text-red-300 border-red-500/40' : 'bg-gray-900 text-gray-500 border-gray-700'}`}>{open.length} open</span>
+                                <span className={`px-2 py-0.5 rounded border ${closed.length ? 'bg-green-500/10 text-green-400 border-green-500/40' : 'bg-gray-900 text-gray-500 border-gray-700'}`}>{closed.length} closed</span>
+                                <span className={`px-2 py-0.5 rounded border ${filtered.length ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/40' : 'bg-gray-900 text-gray-500 border-gray-700'}`}>{filtered.length} filtered/timeout</span>
+                              </div>
+                              {open.length === 0 ? (
+                                <p className="text-xs text-green-400">No open ports detected on the 20-port probe list. Filtered/closed ports are omitted below.</p>
                               ) : (
-                                <div key={p.port} className="flex items-center gap-2 text-xs px-2 py-1 rounded bg-orange-500/10 text-orange-300 border border-orange-500/30">
-                                  <span className="font-mono w-14 font-bold">{p.port}</span>
-                                  <span className="w-20">{p.service}</span>
-                                  <span className="font-medium text-orange-300">OPEN — no known vuln profile in this build</span>
-                                  {p.banner && <span className="text-gray-400 truncate flex-1" title={p.banner}>{p.banner}</span>}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
+                                <>
+                                  <div className="flex flex-wrap gap-1">
+                                    {open.map((p: any) => (
+                                      <span key={p.port} className="px-2 py-0.5 rounded bg-red-500/20 text-red-300 border border-red-500/40 text-xs font-mono">{p.port} {p.service}</span>
+                                    ))}
+                                  </div>
+                                  <div className="space-y-2">
+                                    {open.map((p: any) => {
+                                      const profile = VULNERABLE_SERVICES[Number(p.port)];
+                                      return profile ? (
+                                        <div key={p.port} className="p-3 rounded-lg border border-red-500/30 bg-red-500/10">
+                                          <div className="flex flex-wrap items-center gap-2 text-sm">
+                                            <span className="font-mono font-bold text-red-300">port {p.port}</span>
+                                            <span className="text-gray-300 font-medium">{p.service}</span>
+                                            <span className="text-[10px] px-2 py-0.5 rounded border font-medium uppercase tracking-wide {profile ? VULN_RISK_COLORS[profile.risk] : VULN_RISK_COLORS.MEDIUM}">Risk {profile.risk}</span>
+                                          </div>
+                                          <p className="text-xs text-red-200 font-medium mt-1">{profile.title}</p>
+                                          <p className="text-xs text-gray-300 mt-1">{profile.desc}</p>
+                                          {profile.cves.length > 0 && (
+                                            <div className="flex flex-wrap gap-1 mt-2">
+                                              {profile.cves.map((cve) => (
+                                                <span key={cve} className="text-[10px] px-1.5 py-0.5 rounded bg-gray-900 text-purple-300 border border-purple-500/30 font-mono">{cve}</span>
+                                              ))}
+                                            </div>
+                                          )}
+                                          <div className="mt-2 text-xs">
+                                            <p className="text-gray-400 font-medium flex items-center gap-1"><Target className="w-3 h-3" /> Attack vector</p>
+                                            <p className="text-gray-300 mt-0.5">{profile.vector}</p>
+                                          </div>
+                                          <div className="mt-2 text-xs">
+                                            <p className="text-gray-400 font-medium flex items-center gap-1"><Terminal className="w-3 h-3" /> Verification / exploitation steps</p>
+                                            <ol className="list-decimal list-inside mt-0.5 space-y-0.5 text-gray-300">
+                                              {profile.steps.map((s, i) => (
+                                                <li key={i}>{s}</li>
+                                              ))}
+                                            </ol>
+                                          </div>
+                                          {p.banner && <p className="text-[10px] text-gray-500 font-mono mt-2 break-all">Banner: {p.banner}</p>}
+                                        </div>
+                                      ) : (
+                                        <div key={p.port} className="flex items-center gap-2 text-xs px-2 py-1 rounded bg-orange-500/10 text-orange-300 border border-orange-500/30">
+                                          <span className="font-mono w-14 font-bold">{p.port}</span>
+                                          <span className="w-20">{p.service}</span>
+                                          <span className="font-medium text-orange-300">OPEN — no known vuln profile in this build</span>
+                                          {p.banner && <span className="text-gray-400 truncate flex-1" title={p.banner}>{p.banner}</span>}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </div>
                     )}
 
