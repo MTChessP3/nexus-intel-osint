@@ -163,6 +163,49 @@ function abuseScoreColor(score: number): string {
   return '#22c55e';
 }
 
+interface AbuseFactor {
+  key: string;
+  label: string;
+  points: number;
+  detail: string;
+  section: string | null;
+}
+
+function computeAbuseBreakdown(apiData: any): AbuseFactor[] {
+  const factors: AbuseFactor[] = [];
+  const listed = (apiData?.reputation?.dnsbl || []).filter((d: any) => d.listed);
+  if (listed.length > 0) {
+    factors.push({ key: 'dnsbl', label: 'DNS Blacklists', points: Math.min(listed.length * 12, 60), detail: `${listed.length} list(s): ${listed.map((d: any) => d.name).join(', ')}`, section: 'ip-reputation' });
+  }
+  if (apiData?.reputation?.torExit) {
+    factors.push({ key: 'tor', label: 'Tor exit node', points: 25, detail: 'Known anonymization — traffic origin masked.', section: 'ip-reputation' });
+  }
+  const urlCount = apiData?.reputation?.urlhaus?.urlCount || 0;
+  if (urlCount > 0) {
+    factors.push({ key: 'urlhaus', label: 'Malicious URLs (URLhaus)', points: 15, detail: `${urlCount} malicious URL(s) associated with this IP.`, section: 'ip-reputation' });
+  }
+  const open = (apiData?.scan?.ports || []).filter((p: any) => p.state === 'open');
+  if (open.length > 0) {
+    factors.push({ key: 'ports', label: 'Exposed services', points: Math.min(open.length * 3, 15), detail: `Open ports: ${open.map((p: any) => `${p.port} ${p.service}`).join(', ')}`, section: 'ip-scan' });
+  }
+  if (apiData?.data?.proxy) {
+    factors.push({ key: 'proxy', label: 'Proxy / VPN', points: 10, detail: 'Tunneled traffic — hides the true origin.', section: null });
+  }
+  if (apiData?.data?.hosting) {
+    factors.push({ key: 'hosting', label: 'Hosting / Cloud', points: 5, detail: 'Datacenter range — common for C2 and bulk attacks.', section: null });
+  }
+  return factors;
+}
+
+function riskVerdict(sev: Severity): string {
+  switch (sev) {
+    case 'CRITICAL': return 'Critical — multiple independent sources flag this IP; treat it as actively hostile.';
+    case 'HIGH': return 'High — confirmed blacklists and/or anonymization; block at the perimeter.';
+    case 'MEDIUM': return 'Medium — some indicators present; verify before taking action.';
+    default: return 'Low — no significant threat signals detected.';
+  }
+}
+
 function buildQueueEntry(apiData: any): IpQueueEntry {
   const ip = apiData?.data?.query || apiData?.data?.ip || '';
   const listed = (apiData?.reputation?.dnsbl || []).filter((d: any) => d.listed);
@@ -694,7 +737,7 @@ export default function OSINTPlatform() {
   const [ipQueue, setIpQueue] = useState<IpQueueEntry[]>([]);
   const [selectedQueue, setSelectedQueue] = useState<Set<string>>(new Set());
   const [showDnsblDetail, setShowDnsblDetail] = useState(false);
-  const [showEnrichment, setShowEnrichment] = useState(true);
+  const [showEnrichment, setShowEnrichment] = useState(false);
   const [openArtifact, setOpenArtifact] = useState<string | null>('timestamps');
   
   // Input State
@@ -1246,6 +1289,10 @@ export default function OSINTPlatform() {
   const copyAllArtifactQueries = async () => {
     const all = FORENSIC_ARTIFACTS.map((a) => `${a.title}\n${a.queries.map((q) => `  [${q.label}] ${q.query}`).join('\n')}`).join('\n\n');
     await copyText(all, 'all forensic queries');
+  };
+
+  const scrollToSection = (id: string) => {
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   const downloadForensicChecklist = () => {
@@ -2093,7 +2140,7 @@ export default function OSINTPlatform() {
 
                     {/* Reputation & Threat Intelligence */}
                     {apiData.reputation && (
-                      <div className="mt-4 p-4 bg-gray-800/50 rounded-lg border border-gray-700">
+                      <div id="ip-reputation" className="mt-4 p-4 bg-gray-800/50 rounded-lg border border-gray-700 scroll-mt-4">
                         <h4 className="text-sm font-medium mb-3 flex items-center gap-2">
                           <ShieldAlert className="w-4 h-4 text-red-400" /> Reputation & Threat Intelligence
                         </h4>
@@ -2195,7 +2242,7 @@ export default function OSINTPlatform() {
 
                     {/* Active scan */}
                     {apiData.scan?.ports?.length > 0 && (
-                      <div className="mt-4 p-4 bg-gray-800/50 rounded-lg border border-gray-700">
+                      <div id="ip-scan" className="mt-4 p-4 bg-gray-800/50 rounded-lg border border-gray-700 scroll-mt-4">
                         <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
                           <Terminal className="w-4 h-4 text-purple-400" /> Active Scan — Exposed Services
                         </h4>
@@ -2339,71 +2386,94 @@ export default function OSINTPlatform() {
                       </div>
                     </div>
 
-                    {/* Analysis enrichment widgets */}
+                    {/* Threat Assessment — summarized, click to expand */}
                     {apiData.data && (
                       <div className="mt-4 p-4 bg-gray-800/50 rounded-lg border border-gray-700">
-                        <div className="flex items-center justify-between mb-3">
-                          <h4 className="text-sm font-medium flex items-center gap-2">
-                            <Radar className="w-4 h-4 text-cyan-400" /> Analysis Enrichment
-                          </h4>
-                          <button onClick={() => setShowEnrichment((v) => !v)} className="text-gray-500 hover:text-gray-300" aria-label="Toggle enrichment">
-                            <ChevronDown className={`w-4 h-4 transition-transform ${showEnrichment ? 'rotate-180' : ''}`} />
-                          </button>
-                        </div>
-                        {showEnrichment && (() => {
-                          const score = computeAbuseScore(apiData);
-                          const open = (apiData.scan?.ports || []).filter((p: any) => p.state === 'open');
-                          const threats = (apiData.reputation?.urlhaus?.urls || []).map((u: any) => u.threat).filter(Boolean);
+                        {(() => {
+                          const severity = riskSeverityFrom(apiData);
+                          const abuseScore = computeAbuseScore(apiData);
+                          const factors = computeAbuseBreakdown(apiData);
                           const lastDate = (apiData.reputation?.urlhaus?.urls || []).map((u: any) => u.dateAdded).filter(Boolean).sort().slice(-1)[0];
+                          const threats = (apiData.reputation?.urlhaus?.urls || []).map((u: any) => u.threat).filter(Boolean);
                           const malware = threats.length > 0 ? [...new Set(threats)].slice(0, 2).join(', ') : apiData.reputation?.torExit ? 'Tor exit (anonymization)' : null;
+                          const open = (apiData.scan?.ports || []).filter((p: any) => p.state === 'open');
+                          const sevClass = severity === 'CRITICAL' ? 'bg-red-600/30 text-red-300 border-red-500/60' : severity === 'HIGH' ? 'bg-orange-500/20 text-orange-300 border-orange-500/40' : severity === 'MEDIUM' ? 'bg-yellow-500/15 text-yellow-300 border-yellow-500/40' : 'bg-green-500/15 text-green-300 border-green-500/40';
+                          const summaryText = [
+                            `Threat Assessment — ${apiData.data.query || apiData.data.ip}`,
+                            `Risk: ${severity} · Abuse confidence: ${abuseScore}%`,
+                            factors.length ? `Signals: ${factors.map((f) => `${f.label} (+${f.points})`).join(', ')}` : 'Signals: none',
+                            `Geolocation: ${getFlagEmoji(apiData.data.countryCode)} ${apiData.data.country || 'N/A'}${apiData.data.city ? ` (${apiData.data.city})` : ''}`,
+                            `ASN & ISP: ${apiData.data.as ? `AS${apiData.data.as}` : 'AS?'}${apiData.data.asname ? ` (${apiData.data.asname})` : ''} — ${apiData.data.isp || apiData.data.org || 'N/A'}`,
+                            `Open ports: ${open.length ? open.map((p: any) => `${p.port} ${p.service}`).join(', ') : 'none'}`,
+                            `Malware/C2: ${malware || 'none'}`,
+                            `Last seen: ${lastDate ? timeAgo(lastDate) : 'no recent malicious activity'}`,
+                          ].join('\n');
                           return (
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
-                              <div className="p-3 bg-gray-900/60 rounded-lg">
-                                <div className="text-gray-400 mb-1 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Abuse Confidence</div>
-                                <div className="flex items-center gap-2">
-                                  <div className="flex-1 h-2 bg-gray-700 rounded overflow-hidden">
-                                    <div className="h-2 rounded" style={{ width: `${score}%`, backgroundColor: abuseScoreColor(score) }} />
+                            <>
+                              <button onClick={() => setShowEnrichment((v) => !v)} className="w-full flex flex-wrap items-center gap-2 text-left">
+                                <ShieldAlert className="w-4 h-4 text-red-400 shrink-0" />
+                                <span className="text-sm font-medium flex-1">Threat Assessment</span>
+                                <span className={`px-2 py-0.5 rounded border text-[10px] font-bold uppercase ${sevClass}`}>{severity}</span>
+                                <span className="text-xs font-mono text-gray-300">{abuseScore}% abuse</span>
+                                <ChevronDown className={`w-4 h-4 text-gray-500 shrink-0 transition-transform ${showEnrichment ? 'rotate-180' : ''}`} />
+                              </button>
+                              <div className="mt-2 flex flex-wrap gap-1 text-[11px]">
+                                {factors.length === 0 ? (
+                                  <span className="px-2 py-0.5 rounded bg-green-500/10 text-green-400 border border-green-500/40">No negative signals detected</span>
+                                ) : factors.map((f) => (
+                                  <span key={f.key} className={`px-2 py-0.5 rounded border ${f.points >= 15 ? 'bg-red-500/15 text-red-300 border-red-500/40' : 'bg-yellow-500/10 text-yellow-300 border-yellow-500/40'}`}>{f.label} +{f.points}</span>
+                                ))}
+                              </div>
+                              {showEnrichment && (
+                                <div className="mt-3 space-y-3">
+                                  <div>
+                                    <div className="flex items-center justify-between text-xs mb-1">
+                                      <span className="text-gray-400">Abuse confidence</span>
+                                      <span className="font-mono font-bold">{abuseScore}%</span>
+                                    </div>
+                                    <div className="h-2 bg-gray-700 rounded overflow-hidden">
+                                      <div className="h-2 rounded" style={{ width: `${abuseScore}%`, backgroundColor: abuseScoreColor(abuseScore) }} />
+                                    </div>
+                                    <p className="mt-2 text-xs text-gray-300">{riskVerdict(severity)}</p>
                                   </div>
-                                  <span className="font-mono font-bold">{score}%</span>
+                                  <div>
+                                    <p className="text-gray-400 text-xs font-medium mb-1">What drives the score</p>
+                                    {factors.length === 0 ? (
+                                      <p className="text-xs text-green-400">Clean on all checked sources — score stays low.</p>
+                                    ) : (
+                                      <ul className="space-y-1">
+                                        {factors.map((f) => {
+                                          const section = f.section;
+                                          return (
+                                            <li key={f.key} className="flex flex-wrap items-center gap-2 text-xs px-2 py-1.5 rounded bg-gray-900/60 border border-gray-700">
+                                              <span className="font-mono w-14 text-right font-bold" style={{ color: abuseScoreColor(f.points) }}>+{f.points}</span>
+                                              <span className="font-medium">{f.label}</span>
+                                              <span className="text-gray-400 truncate flex-1 min-w-0">{f.detail}</span>
+                                              {section && (
+                                                <button onClick={() => scrollToSection(section)} className="px-1.5 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-blue-300 text-[10px] shrink-0">View detail ▸</button>
+                                              )}
+                                            </li>
+                                          );
+                                        })}
+                                      </ul>
+                                    )}
+                                  </div>
+                                  <div>
+                                    <p className="text-gray-400 text-xs font-medium mb-1">Additional context</p>
+                                    <ul className="space-y-1 text-xs text-gray-300">
+                                      <li><span className="text-gray-400">ASN & ISP:</span> {apiData.data.as ? `AS${apiData.data.as}` : 'AS?'}{apiData.data.asname ? ` (${apiData.data.asname})` : ''} — {apiData.data.isp || apiData.data.org || 'N/A'}</li>
+                                      <li><span className="text-gray-400">Geolocation:</span> {getFlagEmoji(apiData.data.countryCode)} {apiData.data.country || 'N/A'}{apiData.data.city ? ` (${apiData.data.city})` : ''}</li>
+                                      <li><span className="text-gray-400">Malware / C2:</span> {malware || 'No known association'}</li>
+                                      <li><span className="text-gray-400">Last seen:</span> {lastDate ? `${timeAgo(lastDate)} via URLhaus (${lastDate.slice(0, 10)})` : 'No recent malicious activity'}</li>
+                                    </ul>
+                                  </div>
+                                  <div className="flex flex-wrap gap-2 text-xs">
+                                    <button onClick={() => copyText(summaryText, 'threat summary')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded flex items-center gap-1"><Copy className="w-3 h-3" /> Copy summary</button>
+                                    <button onClick={() => handleAddIOCFromResult()} className="px-2 py-1 bg-blue-600 hover:bg-blue-700 rounded flex items-center gap-1"><Plus className="w-3 h-3" /> + Add to IOC</button>
+                                  </div>
                                 </div>
-                              </div>
-                              <div className="p-3 bg-gray-900/60 rounded-lg">
-                                <div className="text-gray-400 mb-1 flex items-center gap-1"><Radar className="w-3 h-3" /> ASN & ISP</div>
-                                <div className="font-medium break-words">{apiData.data.as ? `AS${apiData.data.as}` : 'AS?'}{apiData.data.asname ? ` (${apiData.data.asname})` : ''}</div>
-                                <div className="text-gray-500 break-words">{apiData.data.isp || apiData.data.org || 'N/A'}</div>
-                              </div>
-                              <div className="p-3 bg-gray-900/60 rounded-lg">
-                                <div className="text-gray-400 mb-1 flex items-center gap-1"><MapPin className="w-3 h-3" /> Geolocation</div>
-                                <div className="font-medium">{getFlagEmoji(apiData.data.countryCode)} {apiData.data.country || 'N/A'}{apiData.data.city ? ` (${apiData.data.city})` : ''}</div>
-                                <div className="text-gray-500">{apiData.data.regionName || ''}</div>
-                              </div>
-                              <div className="p-3 bg-gray-900/60 rounded-lg">
-                                <div className="text-gray-400 mb-1 flex items-center gap-1"><Clock className="w-3 h-3" /> Last Seen</div>
-                                <div className="font-medium">{lastDate ? timeAgo(lastDate) : 'No recent malicious activity'}</div>
-                                <div className="text-gray-500">{lastDate ? `via URLhaus (${lastDate.slice(0, 10)})` : 'Not seen on public feeds'}</div>
-                              </div>
-                              <div className="p-3 bg-gray-900/60 rounded-lg">
-                                <div className="text-gray-400 mb-1 flex items-center gap-1"><Terminal className="w-3 h-3" /> Open Ports / Services</div>
-                                {open.length === 0 ? (
-                                  <div className="font-medium text-green-400">None open (20-port probe)</div>
-                                ) : (
-                                  <div className="flex flex-wrap gap-1">
-                                    {open.map((p: any) => (
-                                      <span key={p.port} className="px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 border border-red-500/30 font-mono text-[10px]">{p.port} {p.service}</span>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                              <div className="p-3 bg-gray-900/60 rounded-lg">
-                                <div className="text-gray-400 mb-1 flex items-center gap-1"><Skull className="w-3 h-3" /> Malware / C2</div>
-                                {malware ? (
-                                  <div className="font-medium text-red-300 break-words">{malware}</div>
-                                ) : (
-                                  <div className="font-medium text-green-400">No known association</div>
-                                )}
-                                <div className="text-gray-500">{apiData.reputation?.urlhaus?.urlCount > 0 ? `${apiData.reputation.urlhaus.urlCount} malicious URL(s)` : 'URLhaus: clean'}</div>
-                              </div>
-                            </div>
+                              )}
+                            </>
                           );
                         })()}
                       </div>
