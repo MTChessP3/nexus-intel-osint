@@ -207,6 +207,103 @@ function buildQueueEntry(apiData: any): IpQueueEntry {
   };
 }
 
+// ==================== FORENSIC ARTIFACTS ====================
+interface ForensicArtifact {
+  id: string;
+  title: string;
+  purpose: string;
+  sources: string[];
+  fields: string[];
+  queries: { label: string; query: string }[];
+}
+
+const FORENSIC_ARTIFACTS: ForensicArtifact[] = [
+  {
+    id: 'timestamps',
+    title: 'Timestamps / Timezones',
+    purpose: 'Build an exact connection timeline to correlate events across systems and reconstruct the attack path.',
+    sources: ['Firewall / NAT logs', 'Proxy / WAF logs', 'RADIUS / VPN logs', 'Web server access logs'],
+    fields: ['timestamp', 'timezone / tz_offset', 'request_time', 'log_source'],
+    queries: [
+      { label: 'Splunk SPL', query: 'index=* src_ip="<IP>" earliest=-24h | eval norm=_time | stats count by norm' },
+      { label: 'Elastic KQL', query: '@timestamp:[now-24h TO now] AND source.ip:"<IP>"' },
+      { label: 'grep', query: 'grep -E "<IP>" /var/log/*access*.log | cut -d" " -f1-4' },
+    ],
+  },
+  {
+    id: 'src-port',
+    title: 'Ephemeral Source Port',
+    purpose: 'Identifies the unique client session behind NAT/CGNAT in ISP records, even when many hosts share one public IP.',
+    sources: ['Firewall / NetFlow / sFlow', 'Load balancer logs', 'ISP AAA / RADIUS'],
+    fields: ['src_ip', 'src_port', 'dst_ip', 'dst_port', 'protocol'],
+    queries: [
+      { label: 'Splunk SPL', query: 'index=firewall src_ip="<IP>" | stats values(src_port) by dst_ip' },
+      { label: 'Elastic KQL', query: 'source.ip:"<IP>" | dstat by source.port, destination.port' },
+      { label: 'tshark', query: 'tshark -r capture.pcap -Y "ip.src==<IP>" -T fields -e tcp.srcport -e tcp.dstport | sort -u' },
+    ],
+  },
+  {
+    id: 'http-headers',
+    title: 'HTTP Headers / User-Agent',
+    purpose: 'Profiles the browser, client OS, locale and referer to fingerprint the actor and tie together multiple attacks.',
+    sources: ['Forward proxy logs', 'Web server access logs', 'WAF / CDN logs', 'Email gateway headers'],
+    fields: ['user_agent', 'referer', 'accept_language', 'x_forwarded_for', 'x_requested_with'],
+    queries: [
+      { label: 'Splunk SPL', query: 'index=http src_ip="<IP>" | table _time uri user_agent referer x_forwarded_for' },
+      { label: 'Elastic KQL', query: 'source.ip:"<IP>" AND user_agent:*' },
+      { label: 'awk', query: 'grep "<IP>" /var/log/nginx/access.log | awk \'{print $1, $6, $9, $11, $12}\'' },
+    ],
+  },
+  {
+    id: 'session',
+    title: 'Session Correlation',
+    purpose: 'Ties multiple accounts, cookies and sessions to the same IP within a time window to reveal lateral movement.',
+    sources: ['SIEM correlation rules', 'EDR / endpoint telemetry', 'Auth (AD / IdP) logs'],
+    fields: ['session_id', 'cookie', 'account / user', 'source_ip', 'correlation_id'],
+    queries: [
+      { label: 'Splunk SPL', query: 'index=* src_ip="<IP>" | stats values(account) by session_id' },
+      { label: 'Elastic KQL', query: 'source.ip:"<IP>" OR session_id:"<known-session>"' },
+      { label: 'grep', query: 'grep -E "session_id|<IP>" /var/log/app/*.log' },
+    ],
+  },
+  {
+    id: 'dns',
+    title: 'DNS Queries Made',
+    purpose: 'The domains resolved by the IP reveal C2, phishing or data-exfil infrastructure and enable pivoting.',
+    sources: ['DNS server query logs', 'DHCP lease logs', 'Passive DNS (pDNS) feeds'],
+    fields: ['src_ip', 'qname', 'qtype', 'answer', 'timestamp'],
+    queries: [
+      { label: 'Splunk SPL', query: 'index=dns src_ip="<IP>" | stats count by query' },
+      { label: 'Elastic KQL', query: 'source.ip:"<IP>" AND dns.question.name:*' },
+      { label: 'BIND query.log', query: 'grep -E "client <IP>#" /var/log/named/query.log' },
+    ],
+  },
+  {
+    id: 'tls',
+    title: 'TLS SNI / JA3 Fingerprint',
+    purpose: 'Fingerprint the client TLS stack without decrypting traffic; SNI reveals the hostname actually requested.',
+    sources: ['TLS interception / SSL logging', 'Proxy logs', 'Full packet capture (PCAP)'],
+    fields: ['ssl_server_name', 'ja3 / ja4', 'tls_version', 'cipher_suite'],
+    queries: [
+      { label: 'Splunk SPL', query: 'index=proxy src_ip="<IP>" ssl_server_name=* | stats values(ssl_server_name) by ja3' },
+      { label: 'Elastic KQL', query: 'source.ip:"<IP>" AND tls.sni:*' },
+      { label: 'tshark', query: 'tshark -r capture.pcap -Y "ip.src==<IP> and tls.handshake.extensions_server_name" -T fields -e tls.handshake.extensions_server_name' },
+    ],
+  },
+  {
+    id: 'pcap',
+    title: 'Full Packet Capture (PCAP)',
+    purpose: 'Preserve raw evidence of every packet to/from the IP for offline deep analysis and legal hold.',
+    sources: ['Network taps / SPAN ports', 'Sensor or host capture', 'Cloud VPC traffic mirroring'],
+    fields: ['frame_number', 'ip.src', 'ip.dst', 'tcp.flags', 'payload'],
+    queries: [
+      { label: 'tcpdump (live)', query: 'tcpdump -i eth0 -C 100 -w evidence-<IP>.pcap host <IP>' },
+      { label: 'tshark (filter)', query: 'tshark -r evidence.pcap -Y "ip.addr==<IP>" -c 1000' },
+      { label: 'Splunk (suricata)', query: 'index=suricata alert.src_ip="<IP>" | table _time signature' },
+    ],
+  },
+];
+
 // Known-vulnerable services exposed by the active scan.
 // Rendered only for OPEN ports; each entry documents the attack vector and
 // standard verification/exploitation steps for defensive validation.
@@ -598,6 +695,7 @@ export default function OSINTPlatform() {
   const [selectedQueue, setSelectedQueue] = useState<Set<string>>(new Set());
   const [showDnsblDetail, setShowDnsblDetail] = useState(false);
   const [showEnrichment, setShowEnrichment] = useState(true);
+  const [openArtifact, setOpenArtifact] = useState<string | null>('timestamps');
   
   // Input State
   const [inputValue, setInputValue] = useState('');
@@ -1133,6 +1231,50 @@ export default function OSINTPlatform() {
       triggerDownload([headers.join(','), ...rows].join('\n'), 'text/csv', 'csv');
     }
     showFeedback(`Exported ${ipQueue.length} IP(s) (${format.toUpperCase()})`, 'success');
+  };
+
+  // ==================== FORENSIC ARTIFACT TOOLS ====================
+  const copyText = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      showFeedback(`Copied ${label} to clipboard`, 'success');
+    } catch {
+      showFeedback('Clipboard unavailable in this browser', 'error');
+    }
+  };
+
+  const copyAllArtifactQueries = async () => {
+    const all = FORENSIC_ARTIFACTS.map((a) => `${a.title}\n${a.queries.map((q) => `  [${q.label}] ${q.query}`).join('\n')}`).join('\n\n');
+    await copyText(all, 'all forensic queries');
+  };
+
+  const downloadForensicChecklist = () => {
+    const headers = ['artifact', 'purpose', 'sources', 'fields', 'queries'];
+    const esc = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const rows = FORENSIC_ARTIFACTS.map((a) =>
+      [a.title, a.purpose, a.sources.join(' | '), a.fields.join(' | '), a.queries.map((q) => `[${q.label}] ${q.query}`).join(' | ')].map(esc).join(',')
+    );
+    const blob = new Blob([[headers.join(','), ...rows].join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `forensic-artifact-checklist-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showFeedback('Forensic checklist downloaded (CSV)', 'success');
+  };
+
+  const downloadTimelineTemplate = () => {
+    const headers = ['event_time', 'src_ip', 'src_port', 'dst_ip', 'dst_port', 'user_agent', 'session_id', 'dns_query', 'tls_sni', 'notes'];
+    const row = ['', '<IP>', '', '', '', 'Mozilla/5.0 ...', '', 'example.com', 'example.com', 'observation'];
+    const blob = new Blob([[headers.join(','), row.join(',')].join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `timeline-template-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showFeedback('Timeline template downloaded (CSV)', 'success');
   };
 
   const handleUpdateIOC = async () => {
@@ -1791,17 +1933,22 @@ export default function OSINTPlatform() {
                             </div>
                           )}
                           {ipQueue.map((e) => (
-                            <div key={e.id} className={`flex flex-wrap items-center gap-2 text-xs px-2 py-1.5 rounded border ${selectedQueue.has(e.id) ? 'bg-cyan-500/10 border-cyan-500/40' : 'bg-gray-800/50 border-gray-700'}`}>
-                              <input type="checkbox" checked={selectedQueue.has(e.id)} onChange={() => toggleQueueSelect(e.id)} className="accent-cyan-500" />
-                              <span className="font-mono font-medium w-28 truncate" title={e.ip}>{e.ip}</span>
-                              <span className={`px-1.5 py-0.5 rounded border text-[10px] font-medium uppercase ${sevClass(e.severity)}`}>{e.severity}</span>
-                              <span className="text-gray-400">{e.flag} {e.country}</span>
-                              <span className="text-gray-400 hidden md:inline">{e.category}</span>
-                              <span className="text-gray-400">{e.abuseScore}% abuse</span>
-                              <span className="text-gray-400">{e.blacklistCount} listed</span>
-                              {e.openPorts.length > 0 && <span className="font-mono text-red-300 truncate max-w-[180px]" title={e.openPorts.join(', ')}>Ports: {e.openPorts.join(', ')}</span>}
-                              {e.malware && <span className="text-red-300 truncate max-w-[140px]" title={e.malware}>{e.malware}</span>}
-                              <span className="text-gray-500 ml-auto shrink-0">{timeAgo(e.addedAt)}</span>
+                            <div key={e.id} className={`px-2.5 py-2 rounded border ${selectedQueue.has(e.id) ? 'bg-cyan-500/10 border-cyan-500/40' : 'bg-gray-800/50 border-gray-700'}`}>
+                              <div className="flex flex-wrap items-center gap-2 text-xs">
+                                <input type="checkbox" checked={selectedQueue.has(e.id)} onChange={() => toggleQueueSelect(e.id)} className="accent-cyan-500" />
+                                <span className="font-mono font-bold">{e.ip}</span>
+                                <span className={`px-1.5 py-0.5 rounded border text-[10px] font-medium uppercase ${sevClass(e.severity)}`}>{e.severity}</span>
+                                <span className="text-gray-400">{e.flag} {e.country}</span>
+                                <span className="text-gray-500 ml-auto shrink-0">{timeAgo(e.addedAt)}</span>
+                              </div>
+                              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-400 pl-6">
+                                <span><span className="text-gray-200 font-medium">{e.abuseScore}%</span> abuse</span>
+                                <span>{e.blacklistCount} listed</span>
+                                <span>{e.category}</span>
+                                <span>URLhaus: {e.urlhausCount}</span>
+                                {e.openPorts.length > 0 && <span className="font-mono text-red-300">Ports: {e.openPorts.join(', ')}</span>}
+                                {e.malware && <span className="text-red-300">{e.malware}</span>}
+                              </div>
                             </div>
                           ))}
                         </>
@@ -2126,16 +2273,69 @@ export default function OSINTPlatform() {
                       </div>
                     )}
 
-                    {/* Forensic artifacts guidance */}
+                    {/* Forensic artifacts guidance — interactive */}
                     <div className="mt-4 p-4 bg-gray-800/50 rounded-lg border border-gray-700">
-                      <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
-                        <Fingerprint className="w-4 h-4 text-green-400" /> Forensic Artifacts to Extract from Logs
-                      </h4>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-gray-300">
-                        <div><span className="text-green-400 font-medium">Timestamps / Timezones:</span> build an exact connection timeline to correlate events across systems</div>
-                        <div><span className="text-green-400 font-medium">Ephemeral Source Port:</span> identifies the unique client session behind NAT/CGNAT in ISP records</div>
-                        <div><span className="text-green-400 font-medium">HTTP Headers / User-Agent:</span> browser, client OS, system locale and Referer origin</div>
-                        <div><span className="text-green-400 font-medium">Session Correlation:</span> multiple accounts/cookies tied to the same IP within a time window</div>
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                        <h4 className="text-sm font-medium flex items-center gap-2">
+                          <Fingerprint className="w-4 h-4 text-green-400" /> Forensic Artifacts to Extract from Logs
+                        </h4>
+                        <div className="flex flex-wrap gap-2 text-xs">
+                          <button onClick={copyAllArtifactQueries} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded flex items-center gap-1"><Copy className="w-3 h-3" /> Copy all queries</button>
+                          <button onClick={downloadForensicChecklist} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded flex items-center gap-1"><DownloadCloud className="w-3 h-3" /> Checklist CSV</button>
+                          <button onClick={downloadTimelineTemplate} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded flex items-center gap-1"><FileText className="w-3 h-3" /> Timeline template</button>
+                        </div>
+                      </div>
+                      <p className="text-xs text-gray-400 mb-3">
+                        Click any artifact to expand where to extract it, the fields to collect and ready-to-copy SIEM / CLI queries for{' '}
+                        <span className="font-mono text-green-300">{apiData.data.query || apiData.data.ip || '<IP>'}</span>.
+                      </p>
+                      <div className="space-y-2">
+                        {FORENSIC_ARTIFACTS.map((a) => {
+                          const active = openArtifact === a.id;
+                          return (
+                            <div key={a.id} className={`rounded-lg border overflow-hidden ${active ? 'border-green-500/40 bg-gray-900/60' : 'border-gray-700 bg-gray-800/40'}`}>
+                              <button onClick={() => setOpenArtifact(active ? null : a.id)} className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm">
+                                <span className={`flex-1 font-medium ${active ? 'text-green-300' : 'text-gray-200'}`}>{a.title}</span>
+                                <span className="text-xs text-gray-500 hidden sm:inline truncate max-w-[40%]">{a.purpose}</span>
+                                <ChevronDown className={`w-4 h-4 shrink-0 text-gray-500 transition-transform ${active ? 'rotate-180' : ''}`} />
+                              </button>
+                              {active && (
+                                <div className="px-3 pb-3 space-y-3 text-xs">
+                                  <div>
+                                    <p className="text-gray-400 font-medium mb-1">Purpose</p>
+                                    <p className="text-gray-300">{a.purpose}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-gray-400 font-medium mb-1">Where to extract it</p>
+                                    <div className="flex flex-wrap gap-1">
+                                      {a.sources.map((s) => <span key={s} className="px-1.5 py-0.5 rounded bg-gray-800 text-gray-300 border border-gray-700">{s}</span>)}
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <p className="text-gray-400 font-medium mb-1">Fields to collect</p>
+                                    <div className="flex flex-wrap gap-1">
+                                      {a.fields.map((f) => <code key={f} className="px-1.5 py-0.5 rounded bg-gray-900 text-cyan-300 font-mono">{f}</code>)}
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <p className="text-gray-400 font-medium mb-1">Ready-to-copy queries</p>
+                                    <div className="space-y-1.5">
+                                      {a.queries.map((q) => (
+                                        <div key={q.label} className="flex items-start gap-2">
+                                          <span className="w-24 shrink-0 text-gray-500 pt-1">{q.label}</span>
+                                          <code className="flex-1 px-2 py-1 rounded bg-gray-900 text-gray-300 font-mono text-[11px] break-all">{q.query}</code>
+                                          <button onClick={() => copyText(q.query, `${q.label} query`)} className="p-1 hover:bg-gray-700 rounded text-gray-400" title="Copy query">
+                                            <Copy className="w-3 h-3" />
+                                          </button>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
 
