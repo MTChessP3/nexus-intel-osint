@@ -1,177 +1,98 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { lookupDomain } from '@/lib/intel';
-import { upsertIOC } from '@/lib/store';
+import { scanUrl } from '@/lib/intel/scanner';
+import { upsertIOC, createAlert, generateId } from '@/lib/store';
+import { kvPushList, kvGetList } from '@/lib/kv';
 
-// URL Analysis — heuristics engine + real DNS/IP enrichment
+export const maxDuration = 60;
+
+const JOBS_KEY = 'nexus:url:jobs';
+
+interface ScanJob {
+  id: string;
+  url: string;
+  status: 'COMPLETED';
+  verdict: string;
+  score: number;
+  startedAt: string;
+}
+
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
-  const url = searchParams.get('url');
+  const action = searchParams.get('action');
 
+  if (action === 'jobs') {
+    const jobs = await kvGetList<ScanJob>(JOBS_KEY);
+    return NextResponse.json({ success: true, data: jobs.slice(0, 20), message: `${jobs.length} scan job(s)` });
+  }
+
+  const url = searchParams.get('url');
   if (!url) {
     return NextResponse.json(
-      {
-        success: false,
-        error: 'URL is required',
-        suggestion: 'Enter a valid URL (e.g., https://example.com/page)',
-      },
+      { success: false, error: 'URL is required', suggestion: 'Enter a valid URL (e.g., https://example.com/page)' },
       { status: 400 }
     );
   }
 
   try {
-    let domain: string;
-    try {
-      domain = new URL(url).hostname;
-    } catch {
-      domain = url.replace(/^https?:\/\//, '').split('/')[0];
-    }
+    const result = await scanUrl(url);
 
-    const domainIntel = await lookupDomain(domain);
-    const dnsResult = domainIntel.dns?.A || null;
-    const ipData = dnsResult?.Answer?.[0]?.data || null;
-
-    const riskAssessment = assessURLRisk(url, domainIntel, ipData);
-
-    const resultData = {
-      url,
-      domain,
-      timestamp: new Date().toISOString(),
-      source: domainIntel.live ? 'Multi-Source-Analysis' : 'cached-data',
-      fetchedLive: domainIntel.live,
-      dns: domainIntel.dns,
-      securityChecks: {
-        usesHTTPS: url.startsWith('https'),
-        hasPath: url.includes('/'),
-        hasQuery: url.includes('?'),
-        hasSuspiciousChars: /[@%]/.test(url),
-        isIPAddress: /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(domain),
-        isShortened: /bit\.ly|tinyurl|t\.co|goo\.gl|short\.link/i.test(domain),
-      },
-      riskAssessment,
-      recommendations: generateRecommendations(riskAssessment),
+    const job: ScanJob = {
+      id: generateId(),
+      url: result.url,
+      status: 'COMPLETED',
+      verdict: result.verdict.level,
+      score: result.verdict.score,
+      startedAt: result.timestamp,
     };
+    await kvPushList(JOBS_KEY, job, 50).catch(() => {});
 
     try {
       await upsertIOC({
         type: 'URL',
-        value: url,
-        description: `URL Analysis: ${domain} — ${riskAssessment.level} risk`,
-        severity: riskAssessment.level,
-        confidence: riskAssessment.confidence,
-        status: riskAssessment.status,
+        value: result.url,
+        description: `URL Scanner: ${result.verdict.level} (${result.verdict.score}/100) — ${result.verdict.reasons.slice(0, 3).join('; ')}`,
+        severity: result.verdict.level === 'MALICIOUS' ? 'HIGH' : result.verdict.level === 'SUSPICIOUS' ? 'MEDIUM' : 'LOW',
+        confidence: 80,
+        status: result.verdict.level === 'MALICIOUS' ? 'MALICIOUS' : result.verdict.level === 'SUSPICIOUS' ? 'SUSPICIOUS' : 'UNKNOWN',
         source: 'URL-Scanner',
-        rawResponse: JSON.stringify(resultData).substring(0, 3000),
-        tags: ['url', 'scanned', riskAssessment.level.toLowerCase()],
+        rawResponse: JSON.stringify(result).substring(0, 8000),
+        tags: ['url-scanner', result.verdict.level.toLowerCase(), ...result.kit.matches.map((m) => m.family.toLowerCase().replace(/\s+/g, '-'))],
       });
-    } catch (storeError) {
-      console.error('Store save error (non-critical):', storeError);
+      if (result.verdict.level === 'MALICIOUS') {
+        await createAlert({
+          iocId: job.id,
+          title: `Malicious URL scanned: ${result.url}`,
+          description: `Attack-surface score ${result.verdict.score}/100. ${result.verdict.reasons.slice(0, 4).join('; ')}`,
+          severity: 'HIGH',
+          type: 'URL_SCAN',
+        });
+      }
+    } catch (e) {
+      console.error('Scanner store error (non-critical):', e);
     }
 
     return NextResponse.json({
       success: true,
-      ...resultData,
-      data: resultData,
-      message: `URL analysis complete. Risk Level: ${riskAssessment.level}`,
+      source: result.source,
+      timestamp: result.timestamp,
+      fetchedLive: true,
+      url: result.url,
+      domain: result.host,
+      riskAssessment: {
+        level: result.verdict.level,
+        score: result.verdict.score,
+        status: result.verdict.level === 'MALICIOUS' ? 'MALICIOUS' : result.verdict.level === 'SUSPICIOUS' ? 'SUSPICIOUS' : 'BENIGN',
+        findings: result.verdict.reasons,
+        safeBrowsing: 'Attack-surface scan (real)',
+      },
+      data: result,
+      message: `URL scan complete: ${result.verdict.level} (${result.verdict.score}/100)`,
     });
   } catch (error) {
-    console.error('URL Analysis Error:', error);
-    const fallback = {
-      level: 'MEDIUM',
-      confidence: 50,
-      status: 'UNKNOWN',
-      score: 50,
-      category: 'Unclassified',
-      safeBrowsing: 'Not checked',
-      indicators: [] as string[],
-      findings: ['Could not complete full analysis — showing partial results'],
-    };
-    return NextResponse.json({
-      success: true,
-      source: 'emergency-fallback',
-      timestamp: new Date().toISOString(),
-      fetchedLive: false,
-      url,
-      domain: url.replace(/^https?:\/\//, '').split('/')[0],
-      securityChecks: { usesHTTPS: url.startsWith('https'), hasPath: true, hasQuery: url.includes('?') },
-      riskAssessment: fallback,
-      data: { riskAssessment: fallback },
-      message: 'Partial analysis completed',
-    });
+    console.error('URL Scanner Error:', error);
+    return NextResponse.json(
+      { success: false, error: error instanceof Error ? error.message : 'URL scan failed' },
+      { status: 500 }
+    );
   }
-}
-
-function assessURLRisk(url: string, domainIntel: any, ipData: string | null): any {
-  let score = 30;
-  const findings: string[] = [];
-
-  if (!url.startsWith('https')) {
-    score += 20;
-    findings.push('WARNING: URL does not use HTTPS encryption');
-  } else {
-    findings.push('URL uses HTTPS encryption');
-  }
-
-  if (url.includes('@')) {
-    score += 25;
-    findings.push('SUSPICIOUS: URL contains @ symbol (possible phishing attempt)');
-  }
-  if (url.match(/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/)) {
-    score += 15;
-    findings.push('NOTE: URL contains direct IP address instead of domain');
-  }
-  if (/bit\.ly|tinyurl|t\.co|goo\.gl|short\.link/i.test(url)) {
-    score += 10;
-    findings.push('NOTE: URL is a shortened link — actual destination hidden');
-  }
-
-  if (ipData) {
-    findings.push(`DNS resolves to ${ipData}`);
-  } else if (domainIntel.dns?.A?.Status === 3) {
-    score += 25;
-    findings.push('WARNING: Domain does not exist (NXDOMAIN)');
-  }
-
-  if (domainIntel.security?.hasSPF) {
-    findings.push('Domain has SPF configured');
-  } else if (domainIntel.live) {
-    score += 5;
-    findings.push('Domain missing SPF record');
-  }
-
-  const level = score >= 70 ? 'HIGH' : score >= 50 ? 'MEDIUM' : 'LOW';
-  const status = score >= 70 ? 'SUSPICIOUS' : score >= 50 ? 'UNKNOWN' : 'BENIGN';
-
-  return {
-    level,
-    confidence: Math.max(20, 100 - score),
-    status,
-    score,
-    category: score >= 70 ? 'High Risk' : score >= 50 ? 'Caution' : 'Low Risk',
-    safeBrowsing: 'Not checked (add SAFE_BROWSING_API_KEY)',
-    indicators: [],
-    findings,
-  };
-}
-
-function generateRecommendations(riskAssessment: any): string[] {
-  if (riskAssessment.score >= 70) {
-    return [
-      'DO NOT visit this URL without proper sandboxing',
-      'Report this URL to phishing reporting services',
-      'Block at network perimeter if possible',
-      'Alert security team for investigation',
-    ];
-  }
-  if (riskAssessment.score >= 50) {
-    return [
-      'Exercise caution when accessing this URL',
-      'Verify the legitimacy of the site before entering credentials',
-      'Consider accessing via isolated environment first',
-    ];
-  }
-  return [
-    'Standard precautions apply',
-    'Verify HTTPS certificate validity',
-    'Monitor for any suspicious behavior',
-  ];
 }

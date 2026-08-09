@@ -36,7 +36,7 @@ export function staticFlags(url: string): StaticFlag[] {
 
 // Lookalike detection: brand followed by anything other than an exact match
 // or a known subdomain of the real brand domain.
-function detectBrandImpersonation(host: string): StaticFlag | null {
+export function detectBrandImpersonation(host: string): StaticFlag | null {
   const h = host.toLowerCase().split('.')[0];
   const registered = host.toLowerCase().split('.').slice(-2).join('.');
   for (const brand of BRANDS) {

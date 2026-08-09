@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import DomainIntelPanel from '@/components/domain/DomainIntelPanel';
 import UrlSandboxPanel from '@/components/sandbox/UrlSandboxPanel';
+import UrlScannerPanel from '@/components/url/UrlScannerPanel';
 import { 
   Search, Globe, Shield, Bug, FileText, Download, Upload, 
   Trash2, Edit3, Plus, Eye, AlertTriangle, CheckCircle, XCircle,
@@ -958,13 +959,14 @@ export default function OSINTPlatform() {
   };
 
   // URL Scanner Handler
-  const handleURLAnalysis = async () => {
-    if (!inputValue) {
+  const handleURLAnalysis = async (url?: string) => {
+    const target = url || inputValue;
+    if (!target) {
       showFeedback('Enter a URL', 'error');
       return;
     }
-    showFeedback(`Scanning URL: ${inputValue}...`, 'info');
-    await callAPI(`/api/osint/url?url=${encodeURIComponent(inputValue)}`);
+    showFeedback(`Scanning URL: ${target}...`, 'info');
+    await callAPI(`/api/osint/url?url=${encodeURIComponent(target)}`);
   };
 
   // Hash Lookup Handler
@@ -2839,61 +2841,16 @@ export default function OSINTPlatform() {
             <div className="space-y-6">
               <h2 className="text-2xl font-bold flex items-center gap-3">
                 <ExternalLink className="w-7 h-7 text-yellow-400" /> URL Scanner
+                <span className="text-sm font-normal text-gray-400">attack-surface · kit fingerprint · attribution</span>
               </h2>
-              
-              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-                <div className="flex gap-4">
-                  <div className="flex-1">
-                    <input
-                      type="text"
-                      placeholder="Enter URL to scan (e.g., https://example.com/page)"
-                      value={inputValue}
-                      onChange={(e) => setInputValue(e.target.value)}
-                      onKeyPress={(e) => e.key === 'Enter' && handleURLAnalysis()}
-                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-yellow-500 focus:outline-none"
-                    />
-                  </div>
-                  <button
-                    onClick={handleURLAnalysis}
-                    disabled={loading || !inputValue}
-                    className="px-6 py-3 bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
-                  >
-                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-                    Scan URL
-                  </button>
-                </div>
-              </div>
-
-              {apiData?.riskAssessment && (
-                <div className="bg-gradient-to-r from-yellow-500/10 to-orange-500/10 border border-yellow-500/30 rounded-xl p-5">
-                  <h3 className="font-semibold mb-3">Risk Assessment</h3>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <InfoCard label="Risk Score" value={`${apiData.data.riskAssessment.score}/10`} icon={<AlertTriangle className="w-4 h-4" />} alert={apiData.data.riskAssessment.score > 5} />
-                    <InfoCard label="Risk Level" value={apiData.data.riskAssessment.level} icon={<Shield className="w-4 h-4" />} />
-                    <InfoCard label="Category" value={apiData.data.riskAssessment.category || 'Unknown'} icon={<Tag className="w-4 h-4" />} />
-                    <InfoCard label="Safe Browsing" value={apiData.data.riskAssessment.safeBrowsing || 'Not checked'} icon={<CheckCircle className="w-4 h-4" />} />
-                  </div>
-                  
-                  {apiData.data.riskAssessment.indicators && (
-                    <div className="mt-4">
-                      <h4 className="text-sm font-medium mb-2">Indicators:</h4>
-                      <div className="flex flex-wrap gap-2">
-                        {apiData.data.riskAssessment.indicators.map((ind: string, idx: number) => (
-                          <span key={idx} className="px-2 py-1 bg-gray-800 rounded text-xs">{ind}</span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {!apiData && !loading && (
-                <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
-                  <ExternalLink className="w-16 h-16 mx-auto mb-4 text-gray-600" />
-                  <h3 className="text-lg font-semibold mb-2">URL Scanner Ready</h3>
-                  <p className="text-gray-400">Enter a URL to analyze for security risks, malicious content, and reputation.</p>
-                </div>
-              )}
+              <UrlScannerPanel
+                data={apiData?.data || null}
+                loading={loading}
+                inputValue={inputValue}
+                setInputValue={setInputValue}
+                onScan={handleURLAnalysis}
+                onCopy={copyToClipboard}
+              />
             </div>
           )}
 
