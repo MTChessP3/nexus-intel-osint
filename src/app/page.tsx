@@ -1269,15 +1269,22 @@ export default function OSINTPlatform() {
                         </h4>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div>
-                            <p className="text-xs text-gray-400 mb-1">DNS Blacklists (DNSBL)</p>
+                            <p className="text-xs text-gray-400 mb-1">
+                              DNS Blacklists (DNSBL) — {apiData.reputation.dnsbl.filter((d: any) => d.listed).length} of {apiData.reputation.dnsbl.length} listed
+                            </p>
                             {apiData.reputation.dnsbl.length === 0 ? (
                               <p className="text-xs text-gray-500">Not applicable (IPv6 / unavailable)</p>
                             ) : (
-                              <ul className="space-y-1">
+                              <ul className="space-y-1 max-h-48 overflow-y-auto pr-1">
                                 {apiData.reputation.dnsbl.map((d: any) => (
-                                  <li key={d.zone} className={`flex items-center justify-between text-xs px-2 py-1 rounded ${d.listed ? 'bg-red-500/20 text-red-400' : 'bg-green-500/10 text-green-400'}`}>
-                                    <span>{d.name}</span>
-                                    <span>{d.listed ? `LISTED ${d.records.join(',')}` : 'clean'}</span>
+                                  <li key={d.zone} className={`flex flex-col text-xs px-2 py-1 rounded ${d.listed ? 'bg-red-500/20 text-red-400' : d.blocked ? 'bg-yellow-500/10 text-yellow-400' : 'bg-green-500/10 text-green-400'}`}>
+                                    <span className="flex items-center justify-between">
+                                      <span>{d.name}</span>
+                                      <span>{d.listed ? `LISTED ${d.records.join(',')}` : d.blocked ? 'blocked (resolver)' : 'clean'}</span>
+                                    </span>
+                                    {d.listed && d.message && (
+                                      <span className="text-[10px] text-gray-400 break-all mt-0.5">{d.message}</span>
+                                    )}
                                   </li>
                                 ))}
                               </ul>

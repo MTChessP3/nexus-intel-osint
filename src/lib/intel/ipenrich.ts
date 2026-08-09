@@ -1,6 +1,6 @@
 // IP enrichment engine — passive OSINT + active fingerprinting.
 // All sources are free and require no API key:
-//   - DNSBL reputation (Spamhaus ZEN, SpamCop, Barracuda)
+//   - DNSBL reputation (Spamhaus ZEN, SpamCop, Barracuda, SORBS, Abusix, DroneBL, ...)
 //   - Tor exit node detection (tor.dan.me.uk DNSBL)
 //   - Malicious URL history (URLhaus / abuse.ch)
 //   - Certificate / pivoting search (crt.sh Certificate Transparency)
@@ -14,7 +14,9 @@ export interface DnsblResult {
   name: string;
   zone: string;
   listed: boolean;
+  blocked: boolean;
   records: string[];
+  message?: string;
 }
 
 export interface UrlhausResult {
@@ -59,6 +61,22 @@ const DNSBL_ZONES = [
   { name: 'SpamCop', zone: 'bl.spamcop.net' },
   { name: 'Barracuda', zone: 'b.barracudacentral.org' },
   { name: 'SORBS', zone: 'dnsbl.sorbs.net' },
+  { name: 'Abusix Combined', zone: 'combined.mail.abusix.zone' },
+  { name: 'Abusix Black', zone: 'black.mail.abusix.zone' },
+  { name: 'blocklist.de', zone: 'bl.blocklist.de' },
+  { name: 'DroneBL', zone: 'dnsbl.dronebl.org' },
+  { name: 'S5H', zone: 'all.s5h.net' },
+  { name: 'UCEPROTECT L1', zone: 'dnsbl-1.uceprotect.net' },
+  { name: 'UCEPROTECT L2', zone: 'dnsbl-2.uceprotect.net' },
+  { name: 'PSBL', zone: 'psbl.surriel.com' },
+  { name: 'Spamrats Dyna', zone: 'dyna.spamrats.com' },
+  { name: 'Spamrats Spam', zone: 'spam.spamrats.com' },
+  { name: 'Hostkarma', zone: 'hostkarma.junkemailfilter.com' },
+  { name: 'Mailspike', zone: 'bl.mailspike.net' },
+  { name: 'abuse.ch DNSBL', zone: 'dnsbl.abuse.ch' },
+  { name: 'DShield', zone: 'dnsbl.dshield.org' },
+  { name: 'Backscatterer', zone: 'ips.backscatterer.org' },
+  { name: 'SPFBL', zone: 'dnsbl.spfbl.net' },
 ];
 
 const TOR_DNSBL_ZONE = 'tor.dan.me.uk';
@@ -106,15 +124,39 @@ async function resolveWithTimeout(hostname: string, timeoutMs: number): Promise<
   });
 }
 
+async function resolveTxtWithTimeout(hostname: string, timeoutMs: number): Promise<string[]> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve([]), timeoutMs);
+    dns
+      .resolveTxt(hostname)
+      .then((chunks) => {
+        clearTimeout(timer);
+        resolve(chunks.map((c) => c.join('')));
+      })
+      .catch(() => {
+        clearTimeout(timer);
+        resolve([]);
+      });
+  });
+}
+
 async function queryDnsbl(ip: string): Promise<DnsblResult[]> {
   if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) return [];
   const reversed = reverseOctets(ip);
   const results = await Promise.all(
     DNSBL_ZONES.map(async (entry) => {
-      const records = (await resolveWithTimeout(`${reversed}.${entry.zone}`, 4000)).filter((r) =>
-        r.startsWith('127.0.0.')
-      );
-      return { name: entry.name, zone: entry.zone, listed: records.length > 0, records };
+      const all = await resolveWithTimeout(`${reversed}.${entry.zone}`, 4000);
+      // A listing is signaled by a 127.0.0.x return code.
+      // 127.255.255.x is an ERROR code (e.g. "query via public/open resolver") — not a listing.
+      const records = all.filter((r) => /^127\.0\.0\.\d+$/.test(r));
+      const blocked = records.length === 0 && all.some((r) => /^127\.255\.255\.\d+$/.test(r));
+      const listed = records.length > 0;
+      let message: string | undefined;
+      if (listed) {
+        const txt = await resolveTxtWithTimeout(`${reversed}.${entry.zone}`, 3000);
+        message = txt.filter(Boolean).join(' | ') || undefined;
+      }
+      return { name: entry.name, zone: entry.zone, listed, blocked, records, message };
     })
   );
   return results;
