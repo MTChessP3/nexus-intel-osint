@@ -1544,7 +1544,7 @@ export default function OSINTPlatform() {
                       {!apiData.data.proxy && !apiData.data.hosting && <span className="px-2 py-1 rounded border text-xs font-medium bg-green-500/20 text-green-400 border-green-500/40">Residential / Business</span>}
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-2 gap-3">
                       {(apiData.data.query || apiData.data.ip) && (
                         <>
                           <InfoCard label="IP Address" value={apiData.data.query || apiData.data.ip} icon={<Globe className="w-4 h-4" />} />
@@ -4059,9 +4059,9 @@ export default function OSINTPlatform() {
 // ==================== SUB-COMPONENTS ====================
 function InfoCard({ label, value, icon, alert }: { label: string; value: string | React.ReactNode; icon: React.ReactNode; alert?: boolean }) {
   return (
-    <div className={`p-3 bg-gray-800/50 rounded-lg ${alert ? 'border border-red-500/30' : ''}`}>
+    <div className={`p-3 bg-gray-800/50 rounded-lg min-w-0 ${alert ? 'border border-red-500/30' : ''}`}>
       <div className="flex items-center gap-2 text-gray-400 text-xs mb-1">{icon}{label}</div>
-      <div className={`font-medium text-sm ${alert ? 'text-red-400' : ''}`}>{value}</div>
+      <div className={`font-medium text-sm break-words ${alert ? 'text-red-400' : ''}`}>{value}</div>
     </div>
   );
 }
