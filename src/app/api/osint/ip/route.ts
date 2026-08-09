@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { lookupIP } from '@/lib/intel';
+import { enrichIP } from '@/lib/intel/ipenrich';
 import { upsertIOC, createAnalysis, createAlert } from '@/lib/store';
 
-// IP Intelligence — real ip-api.com lookup with persistent store
+// IP Intelligence — real ip-api.com lookup + free OSINT enrichment + active fingerprinting
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const ip = searchParams.get('ip');
+  const scan = searchParams.get('scan') !== '0';
 
   if (!ip) {
     return NextResponse.json(
@@ -20,8 +22,6 @@ export async function GET(request: NextRequest) {
 
   try {
     const { live, source, data } = await lookupIP(ip);
-
-    const threatLevel = data.proxy || data.hosting ? 'ELEVATED' : 'NORMAL';
 
     let rdap: any = null;
     try {
@@ -40,6 +40,15 @@ export async function GET(request: NextRequest) {
           const org = vcard.find((line: any) => line[0] === 'org')?.[3];
           return [fn || org].filter(Boolean);
         });
+        const abuseContacts = (rd.entities || [])
+          .filter((e: any) => (e.roles || []).includes('abuse'))
+          .flatMap((e: any) => {
+            const vcard = e.vcardArray?.[1] || [];
+            return vcard
+              .filter((line: any) => line[0] === 'email')
+              .map((line: any) => line[3])
+              .filter(Boolean);
+          });
         rdap = {
           handle: rd.handle,
           name: rd.name,
@@ -49,12 +58,15 @@ export async function GET(request: NextRequest) {
           country: rd.country,
           parent: rd.parent,
           entities: [...new Set(entities)],
+          abuseContacts: [...new Set(abuseContacts)],
           status: rd.status,
         };
       }
     } catch (rdapError) {
       console.log('[INTEL] RDAP lookup failed:', rdapError instanceof Error ? rdapError.message : rdapError);
     }
+
+    const enrichment = await enrichIP(ip, { scan });
 
     try {
       const ioc = await upsertIOC({
@@ -91,28 +103,32 @@ export async function GET(request: NextRequest) {
       console.error('Store save error (non-critical):', storeError);
     }
 
+    const dnsblHits = enrichment.reputation.dnsbl.filter((d) => d.listed);
+    const malicious = data.proxy || data.hosting || enrichment.reputation.torExit || dnsblHits.length > 0 || enrichment.reputation.urlhaus.urlCount > 0;
+    const threatLevel = malicious ? 'ELEVATED' : 'NORMAL';
+
+    const recommendations: string[] = [];
+    if (enrichment.reputation.torExit) recommendations.push('IP is a known Tor exit node — highly anonymized, treat with extreme caution');
+    if (dnsblHits.length > 0) recommendations.push(`Listed on ${dnsblHits.length} DNS blacklist(s): ${dnsblHits.map((d) => d.name).join(', ')}`);
+    if (enrichment.reputation.urlhaus.urlCount > 0) recommendations.push(`Associated with ${enrichment.reputation.urlhaus.urlCount} malicious URL(s) on URLhaus`);
+    if (data.proxy) recommendations.push('Known proxy/VPN — additional verification recommended');
+    if (data.hosting) recommendations.push('Hosting provider network — could be server/shared hosting, monitor activity');
+    const openPorts = enrichment.scan.ports.filter((p) => p.state === 'open');
+    if (openPorts.length > 0) recommendations.push(`Exposed services: ${openPorts.map((p) => `${p.port}/${p.service}`).join(', ')}`);
+    if (recommendations.length === 0) recommendations.push('Standard residential/business IP — no immediate threats detected');
+
     return NextResponse.json({
       success: true,
       source,
       timestamp: new Date().toISOString(),
       fetchedLive: live,
       data: { ...data, rdap },
+      reputation: enrichment.reputation,
+      pivot: enrichment.pivot,
+      scan: enrichment.scan,
       analysis: {
         threatLevel,
-        recommendations:
-          data.proxy ? [
-            'This IP is a known proxy/VPN — additional verification recommended',
-            'Check for multiple accounts from this IP',
-            'Consider blocking if not required for business',
-          ] : data.hosting ? [
-            'This IP is from a hosting provider — could be server/shared hosting',
-            'Higher risk of being compromised or misused',
-            'Monitor for suspicious activity',
-          ] : [
-            'Standard residential/business IP',
-            'No immediate threats detected',
-            'Continue normal monitoring',
-          ],
+        recommendations,
       },
     });
   } catch (error) {

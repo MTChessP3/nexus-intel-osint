@@ -1174,6 +1174,8 @@ export default function OSINTPlatform() {
                         </span>
                       )}
                       {apiData.data.proxy && <span className="px-2 py-1 rounded border text-xs font-medium bg-orange-500/20 text-orange-400 border-orange-500/40">Proxy / VPN</span>}
+                      {apiData.reputation?.torExit && <span className="px-2 py-1 rounded border text-xs font-medium bg-red-600/30 text-red-300 border-red-500/50">Tor Exit Node</span>}
+                      {(apiData.reputation?.dnsbl?.filter((d: any) => d.listed)?.length || 0) > 0 && <span className="px-2 py-1 rounded border text-xs font-medium bg-red-500/20 text-red-400 border-red-500/40">Blacklisted ({apiData.reputation.dnsbl.filter((d: any) => d.listed).length} lists)</span>}
                       {apiData.data.hosting && <span className="px-2 py-1 rounded border text-xs font-medium bg-red-500/20 text-red-400 border-red-500/40">Hosting / Cloud</span>}
                       {apiData.data.mobile && <span className="px-2 py-1 rounded border text-xs font-medium bg-purple-500/20 text-purple-400 border-purple-500/40">Mobile Network</span>}
                       {!apiData.data.proxy && !apiData.data.hosting && <span className="px-2 py-1 rounded border text-xs font-medium bg-green-500/20 text-green-400 border-green-500/40">Residential / Business</span>}
@@ -1233,9 +1235,104 @@ export default function OSINTPlatform() {
                           {apiData.data.rdap.entities?.length > 0 && <div><span className="text-gray-400">Registrant:</span> <span>{apiData.data.rdap.entities.join(', ')}</span></div>}
                           {apiData.data.rdap.country && <div><span className="text-gray-400">Registry Country:</span> <span>{apiData.data.rdap.country}</span></div>}
                           {apiData.data.rdap.status?.length > 0 && <div><span className="text-gray-400">Status:</span> <span>{apiData.data.rdap.status.join(', ')}</span></div>}
+                          {apiData.data.rdap.abuseContacts?.length > 0 && <div><span className="text-gray-400">Abuse Contact:</span> <a href={`mailto:${apiData.data.rdap.abuseContacts[0]}`} className="text-red-400 underline break-all">{apiData.data.rdap.abuseContacts.join(', ')}</a></div>}
                         </div>
                       </div>
                     )}
+
+                    {/* Reputation & Threat Intelligence */}
+                    {apiData.reputation && (
+                      <div className="mt-4 p-4 bg-gray-800/50 rounded-lg border border-gray-700">
+                        <h4 className="text-sm font-medium mb-3 flex items-center gap-2">
+                          <ShieldAlert className="w-4 h-4 text-red-400" /> Reputation & Threat Intelligence
+                        </h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <p className="text-xs text-gray-400 mb-1">DNS Blacklists (DNSBL)</p>
+                            {apiData.reputation.dnsbl.length === 0 ? (
+                              <p className="text-xs text-gray-500">Not applicable (IPv6 / unavailable)</p>
+                            ) : (
+                              <ul className="space-y-1">
+                                {apiData.reputation.dnsbl.map((d: any) => (
+                                  <li key={d.zone} className={`flex items-center justify-between text-xs px-2 py-1 rounded ${d.listed ? 'bg-red-500/20 text-red-400' : 'bg-green-500/10 text-green-400'}`}>
+                                    <span>{d.name}</span>
+                                    <span>{d.listed ? `LISTED ${d.records.join(',')}` : 'clean'}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                          <div>
+                            <p className="text-xs text-gray-400 mb-1">Malicious URL History (URLhaus)</p>
+                            {apiData.reputation.urlhaus?.urlCount > 0 ? (
+                              <>
+                                <p className="text-sm text-red-400 font-medium mb-2">{apiData.reputation.urlhaus.urlCount} malicious URL(s) associated</p>
+                                <ul className="space-y-1 max-h-32 overflow-y-auto">
+                                  {apiData.reputation.urlhaus.urls.slice(0, 10).map((u: any, i: number) => (
+                                    <li key={i} className="text-xs font-mono text-red-300 bg-gray-900 rounded px-2 py-1 break-all">
+                                      {u.url} <span className="text-gray-500">[{u.threat} · {u.dateAdded}]</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </>
+                            ) : (
+                              <p className="text-xs text-green-400">No malicious URLs found on URLhaus</p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Certificates / pivoting */}
+                    {apiData.pivot?.certificates?.length > 0 && (
+                      <div className="mt-4 p-4 bg-gray-800/50 rounded-lg border border-gray-700">
+                        <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                          <Lock className="w-4 h-4 text-blue-400" /> SSL/TLS Certificates & Linked Domains (crt.sh)
+                        </h4>
+                        <ul className="space-y-1 max-h-48 overflow-y-auto">
+                          {apiData.pivot.certificates.slice(0, 25).map((c: any, i: number) => (
+                            <li key={i} className="text-xs px-2 py-1 bg-gray-900 rounded">
+                              <span className="font-mono text-blue-300">{c.nameValue}</span>
+                              {c.issuerName && <span className="text-gray-500"> · {c.issuerName}</span>}
+                              {c.notBefore && <span className="text-gray-600"> · valid from {c.notBefore.slice(0, 10)}</span>}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* Active scan */}
+                    {apiData.scan?.ports?.length > 0 && (
+                      <div className="mt-4 p-4 bg-gray-800/50 rounded-lg border border-gray-700">
+                        <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                          <Terminal className="w-4 h-4 text-purple-400" /> Active Scan — Exposed Services
+                        </h4>
+                        <p className="text-xs text-gray-400 mb-2">Estimated OS: <span className="text-purple-300 font-medium">{apiData.scan.os}</span></p>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                          {apiData.scan.ports.map((p: any) => (
+                            <div key={p.port} className={`flex items-center gap-2 text-xs px-2 py-1 rounded ${p.state === 'open' ? 'bg-red-500/20 text-red-300' : p.state === 'filtered' ? 'bg-gray-900 text-gray-500' : 'bg-gray-900 text-gray-600'}`}>
+                              <span className="font-mono w-14">{p.port}</span>
+                              <span className="w-20">{p.service}</span>
+                              <span className="w-16 font-medium">{p.state === 'open' ? 'OPEN' : p.state.toUpperCase()}</span>
+                              {p.banner && <span className="text-gray-400 truncate flex-1" title={p.banner}>{p.banner}</span>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Forensic artifacts guidance */}
+                    <div className="mt-4 p-4 bg-gray-800/50 rounded-lg border border-gray-700">
+                      <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                        <Fingerprint className="w-4 h-4 text-green-400" /> Forensic Artifacts to Extract from Logs
+                      </h4>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-gray-300">
+                        <div><span className="text-green-400 font-medium">Timestamps / Timezones:</span> build an exact connection timeline to correlate events across systems</div>
+                        <div><span className="text-green-400 font-medium">Ephemeral Source Port:</span> identifies the unique client session behind NAT/CGNAT in ISP records</div>
+                        <div><span className="text-green-400 font-medium">HTTP Headers / User-Agent:</span> browser, client OS, system locale and Referer origin</div>
+                        <div><span className="text-green-400 font-medium">Session Correlation:</span> multiple accounts/cookies tied to the same IP within a time window</div>
+                      </div>
+                    </div>
 
                     {/* Action Buttons on Result */}
                     <div className="mt-4 flex flex-wrap gap-2">
