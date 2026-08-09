@@ -19,12 +19,12 @@ interface SandboxJob {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { url } = body;
+    const { url, external } = body;
     if (!url) {
       return NextResponse.json({ success: false, error: 'URL is required' }, { status: 400 });
     }
 
-    const result = await runSandbox(url);
+    const result = await runSandbox(url, { external: Boolean(external) });
 
     const job: SandboxJob = {
       id: generateId(),
@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
       await upsertIOC({
         type: 'URL',
         value: result.url,
-        description: `Sandbox (real): ${result.verdict.level} (${result.verdict.score}/100) — ${result.verdict.reasons.slice(0, 3).join('; ')}`,
+        description: `Sandbox (${result.external ? 'hybrid' : 'real'}): ${result.verdict.level} (${result.verdict.score}/100) — ${result.verdict.reasons.slice(0, 3).join('; ')}`,
         severity: result.verdict.level === 'MALICIOUS' ? 'HIGH' : result.verdict.level === 'SUSPICIOUS' ? 'MEDIUM' : 'LOW',
         confidence: 85,
         status: result.verdict.level === 'MALICIOUS' ? 'MALICIOUS' : result.verdict.level === 'SUSPICIOUS' ? 'SUSPICIOUS' : 'UNKNOWN',
@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
         await createAlert({
           iocId: job.id,
           title: `Malicious URL detonated: ${result.url}`,
-          description: `Real sandbox score ${result.verdict.score}/100. ${result.verdict.reasons.slice(0, 4).join('; ')}`,
+          description: `Sandbox score ${result.verdict.score}/100. ${result.verdict.reasons.slice(0, 4).join('; ')}`,
           severity: 'HIGH',
           type: 'SANDBOX_DETONATION',
         });
@@ -98,9 +98,10 @@ export async function GET(request: NextRequest) {
         'DNSBL / Tor / URLhaus reputation (via IP enrichment)',
         'RDAP WHOIS age & expiry',
         'Real screenshot (WordPress mshots)',
+        'External dynamic detonation: Hybrid Analysis, Joe Sandbox, ANY.RUN (optional, API keys required)',
       ],
-      engines: ['NEXUS Real Sandbox v1.0'],
-      note: 'Runs from the API runtime — no external API key required',
+      engines: ['NEXUS Real Sandbox v1.0', 'Hybrid Analysis', 'Joe Sandbox', 'ANY.RUN'],
+      note: 'Runs from the API runtime — no external API key required for base engine',
     },
   });
 }
