@@ -8,7 +8,7 @@ import type {
   ContentIndicator, DomainReputation, SandboxResult, SandboxVerdict, StaticFlag,
 } from './types';
 import { captureHttp, captureTls, analyzeContent, probeResources } from './engine';
-import { runExternalSandboxes, type ExternalSandboxResult } from './hybrid';
+import { submitExternal, pollExternal, configuredExternalSources, type ExternalJob } from './hybrid';
 import { enrichIP } from '@/lib/intel/ipenrich';
 import { lookupIP } from '@/lib/intel';
 import { lookupWhois, daysSince } from '@/lib/intel/domain/whois';
@@ -112,7 +112,7 @@ function scoreVerdict(params: {
   return { score: Math.min(score, 100), level, verdict, reasons };
 }
 
-export async function runSandbox(url: string, opts?: { external?: boolean }): Promise<SandboxResult & { external?: ExternalSandboxResult[] }> {
+export async function runSandbox(url: string, opts?: { external?: boolean }): Promise<SandboxResult & { external?: ExternalJob[] }> {
   let clean = url.trim();
   if (!/^https?:\/\//i.test(clean)) clean = `https://${clean}`;
 
@@ -219,47 +219,68 @@ export async function runSandbox(url: string, opts?: { external?: boolean }): Pr
     screenshotUrl,
   };
 
-  // External dynamic detonation (Hybrid Analysis, Joe Sandbox, ANY.RUN)
+  // External dynamic detonation — phase 1 (submit). Detonation takes minutes,
+  // so we only submit and return job IDs. The client polls the results via
+  // GET /api/osint/sandbox?action=poll.
+  let external: ExternalJob[] | undefined;
   if (opts?.external) {
     try {
-      const external = await runExternalSandboxes(clean);
-      if (external.length > 0) {
-        // Merge: take highest severity verdict, combine indicators, staticFlags
-        let maxScore = verdict.score;
-        let maxLevel = verdict.level;
-        const allReasons = [...verdict.reasons];
-        const allIndicators = [...(content?.indicators || [])];
-        const allStaticFlags = [...flags];
-
-        for (const ext of external) {
-          if (ext.result.verdict.score > maxScore) maxScore = ext.result.verdict.score;
-          if (['MALICIOUS', 'SUSPICIOUS', 'BENIGN'].indexOf(ext.result.verdict.level) >
-              ['MALICIOUS', 'SUSPICIOUS', 'BENIGN'].indexOf(maxLevel)) {
-            maxLevel = ext.result.verdict.level;
-          }
-          allReasons.push(...ext.result.verdict.reasons.map((r) => `[${ext.source}] ${r}`));
-          if (ext.result.content) allIndicators.push(...ext.result.content.indicators);
-          allStaticFlags.push(...ext.result.staticFlags);
-        }
-
-        const mergedVerdict: SandboxVerdict = {
-          score: Math.min(maxScore, 100),
-          level: maxLevel,
-          verdict:
-            maxScore >= 30
-              ? 'Strong malicious signals (including external detonation).'
-              : maxScore >= 12
-                ? 'Suspicious signals (including external detonation).'
-                : 'No significant malicious signals.',
-          reasons: allReasons,
-        };
-
-        return { ...baseResult, verdict: mergedVerdict, content: { ...content!, indicators: allIndicators }, staticFlags: allStaticFlags, external };
+      const sources = configuredExternalSources();
+      if (sources.length > 0) {
+        const submitted = await Promise.allSettled(submitExternal(clean));
+        external = submitted
+          .map((s, i) => (s.status === 'fulfilled' && s.value ? s.value : { source: sources[i], jobId: '', status: 'error' as const, error: 'Submit failed' }))
+          .filter((j) => j.status !== 'error');
       }
     } catch {
       /* external sandbox errors are non-fatal */
     }
   }
 
-  return baseResult;
+  return external && external.length > 0 ? { ...baseResult, external } : baseResult;
+}
+
+// Merges completed external results into a base result, producing a combined
+// verdict (highest score + severity, deduped reasons/indicators).
+export function mergeExternalResults(base: SandboxResult, jobs: ExternalJob[]): SandboxResult {
+  const completed = jobs.filter((j) => j.status === 'completed' && j.result);
+  if (completed.length === 0) return base;
+
+  let maxScore = base.verdict.score;
+  let maxLevel = base.verdict.level;
+  const levelOrder = ['BENIGN', 'SUSPICIOUS', 'MALICIOUS'];
+  const allReasons = [...base.verdict.reasons];
+  const allIndicators = [...(base.content?.indicators || [])];
+  const allStaticFlags = [...base.staticFlags];
+
+  for (const job of completed) {
+    const r = job.result!;
+    if (r.verdict.score > maxScore) maxScore = r.verdict.score;
+    if (levelOrder.indexOf(r.verdict.level) > levelOrder.indexOf(maxLevel)) maxLevel = r.verdict.level;
+    allReasons.push(...r.verdict.reasons.map((reason) => `[${job.source}] ${reason}`));
+    if (r.content) allIndicators.push(...r.content.indicators);
+    allStaticFlags.push(...r.staticFlags);
+  }
+
+  return {
+    ...base,
+    content: base.content ? { ...base.content, indicators: allIndicators } : base.content,
+    staticFlags: allStaticFlags,
+    verdict: {
+      score: Math.min(maxScore, 100),
+      level: maxLevel,
+      verdict:
+        maxScore >= 30
+          ? 'Strong malicious signals (including external detonation).'
+          : maxScore >= 12
+            ? 'Suspicious signals (including external detonation).'
+            : 'No significant malicious signals.',
+      reasons: allReasons,
+    },
+  };
+}
+
+// Polls a single external job (phase 2).
+export function pollSandboxJob(url: string, host: string, job: ExternalJob): Promise<ExternalJob> {
+  return pollExternal(job, url, host);
 }

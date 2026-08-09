@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { runSandbox } from '@/lib/intel/sandbox';
+import { runSandbox, mergeExternalResults, pollSandboxJob } from '@/lib/intel/sandbox';
+import type { ExternalJob } from '@/lib/intel/sandbox/hybrid';
 import { upsertIOC, createAlert, generateId } from '@/lib/store';
 import { kvPushList, kvGetList } from '@/lib/kv';
 
 export const maxDuration = 60;
 
 const JOBS_KEY = 'nexus:sandbox:jobs';
+const EXT_JOBS_KEY = 'nexus:sandbox:extjobs';
 
 interface SandboxJob {
   id: string;
@@ -61,13 +63,23 @@ export async function POST(request: NextRequest) {
       console.error('Sandbox store error (non-critical):', e);
     }
 
+    // If external jobs were submitted, return them alongside the base result
+    // so the client can poll each one.
+    if (result.external && result.external.length > 0) {
+      await kvPushList(EXT_JOBS_KEY, { url: result.url, host: result.host, jobs: result.external, at: Date.now() }, 100).catch(() => {});
+    }
+
+    const message = result.external && result.external.length > 0
+      ? `Base analysis complete (${result.verdict.level} ${result.verdict.score}/100). External detonations submitted — poll ?action=poll to collect.`
+      : `Sandbox analysis complete: ${result.verdict.level} (${result.verdict.score}/100)`;
+
     return NextResponse.json({
       success: true,
       source: result.source,
       timestamp: result.timestamp,
       fetchedLive: true,
       data: result,
-      message: `Sandbox analysis complete: ${result.verdict.level} (${result.verdict.score}/100)`,
+      message,
     });
   } catch (error) {
     console.error('Sandbox error:', error);
@@ -81,10 +93,37 @@ export async function POST(request: NextRequest) {
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const action = searchParams.get('action');
+
   if (action === 'jobs') {
     const jobs = await kvGetList<SandboxJob>(JOBS_KEY);
     return NextResponse.json({ success: true, data: jobs.slice(0, 20), message: `${jobs.length} sandbox job(s)` });
   }
+
+  // Poll a specific external sandbox job (phase 2).
+  if (action === 'poll') {
+    const url = searchParams.get('url');
+    const source = searchParams.get('source');
+    const jobId = searchParams.get('jobId');
+    if (!url || !source || !jobId) {
+      return NextResponse.json({ success: false, error: 'url, source and jobId are required' }, { status: 400 });
+    }
+    let host: string;
+    try {
+      host = new URL(url).hostname;
+    } catch {
+      host = url;
+    }
+    const job: ExternalJob = { source: source as ExternalJob['source'], jobId, status: 'submitted' };
+    const updated = await pollSandboxJob(url, host, job);
+    if (updated.status === 'completed' && updated.result) {
+      // Re-run the base analysis to merge the completed external result.
+      const base = await runSandbox(url, { external: false });
+      const merged = mergeExternalResults(base, [updated]);
+      return NextResponse.json({ success: true, data: { job: updated, result: merged }, message: `${source} analysis complete: ${updated.result.verdict.level} (${updated.result.verdict.score}/100)` });
+    }
+    return NextResponse.json({ success: true, data: { job: updated }, message: `${source} analysis in progress` });
+  }
+
   return NextResponse.json({
     success: true,
     source: 'NEXUS URL Sandbox',
