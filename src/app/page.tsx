@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import DomainIntelPanel from '@/components/domain/DomainIntelPanel';
+import UrlSandboxPanel from '@/components/sandbox/UrlSandboxPanel';
 import { 
   Search, Globe, Shield, Bug, FileText, Download, Upload, 
   Trash2, Edit3, Plus, Eye, AlertTriangle, CheckCircle, XCircle,
@@ -1103,10 +1104,11 @@ export default function OSINTPlatform() {
   };
 
   // ==================== URL SANDBOX ====================
-  const handleSandbox = async () => {
-    if (!inputValue) { showFeedback('Enter a URL to detonate', 'error'); return; }
-    showFeedback(`Detonating ${inputValue} in sandbox...`, 'info');
-    await callAPI('/api/osint/sandbox', { method: 'POST', body: JSON.stringify({ url: inputValue }) });
+  const handleSandbox = async (url?: string) => {
+    const target = url || inputValue;
+    if (!target) { showFeedback('Enter a URL to detonate', 'error'); return; }
+    showFeedback(`Detonating ${target} in sandbox...`, 'info');
+    await callAPI('/api/osint/sandbox', { method: 'POST', body: JSON.stringify({ url: target }) });
   };
 
   // ==================== DNS DUMP ====================
@@ -4144,90 +4146,16 @@ export default function OSINTPlatform() {
             <div className="space-y-6">
               <h2 className="text-2xl font-bold flex items-center gap-3">
                 <Zap className="w-7 h-7 text-lime-400" /> URL Sandbox
-                <span className="text-sm font-normal text-gray-400">(tria.ge / Hybrid-Analysis style)</span>
+                <span className="text-sm font-normal text-gray-400">real detonation · HTTP/TLS · content · reputation</span>
               </h2>
-              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-                <div className="flex gap-4">
-                  <div className="flex-1">
-                    <input type="text" placeholder="URL to detonate (e.g., http://evil-site.top/verify.php)"
-                      value={inputValue} onChange={(e) => setInputValue(e.target.value)}
-                      onKeyPress={(e) => e.key === 'Enter' && handleSandbox()}
-                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-lime-500 focus:outline-none" />
-                  </div>
-                  <button onClick={handleSandbox} disabled={loading} className="px-6 py-3 bg-lime-600 hover:bg-lime-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2">
-                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />} Detonate
-                  </button>
-                </div>
-              </div>
-
-              {apiData?.data?.verdict && (
-                <div className="space-y-4">
-                  <div className={`rounded-xl p-5 border ${
-                    apiData.data.verdict === 'MALICIOUS' ? 'bg-red-500/10 border-red-500/50' :
-                    apiData.data.verdict === 'SUSPICIOUS' ? 'bg-yellow-500/10 border-yellow-500/50' : 'bg-green-500/10 border-green-500/50'
-                  }`}>
-                    <div className="flex items-center justify-between">
-                      <div><h3 className="font-semibold">Sandbox Verdict</h3><p className="text-sm text-gray-400 mt-1 font-mono">{apiData.data.url}</p></div>
-                      <div className="text-right"><div className="text-3xl font-bold">{apiData.data.score}/100</div><div className="text-sm font-bold">{apiData.data.verdict}</div></div>
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {(apiData.data.staticAnalysis?.flags || []).map((f: any, i: number) => (
-                        <span key={i} className="px-2 py-1 bg-gray-800 rounded text-xs">{f.label}</span>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                      <h3 className="font-semibold mb-3 flex items-center gap-2"><Terminal className="w-5 h-5 text-lime-400" /> Behavioral Detonation</h3>
-                      <div className="space-y-2">
-                        {(apiData.data.behavioral?.processes || []).map((p: any, i: number) => (
-                          <div key={i} className="flex items-center gap-3 p-2 bg-gray-800/60 rounded-lg text-xs font-mono">
-                            <span className={p.severity === 'HIGH' ? 'text-red-400' : 'text-gray-400'}>{p.name}</span>
-                            <span className="text-gray-500">{p.action}</span>
-                            <span className="ml-auto truncate text-gray-400">{p.target}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                      <h3 className="font-semibold mb-3 flex items-center gap-2"><Bug className="w-5 h-5 text-red-400" /> AV Signatures</h3>
-                      <div className="space-y-2">
-                        {(apiData.data.behavioral?.signatures || []).map((s: any, i: number) => (
-                          <div key={i} className={`p-2 rounded-lg text-xs ${s.severity === 'HIGH' ? 'bg-red-500/10 text-red-300' : s.severity === 'MEDIUM' ? 'bg-yellow-500/10 text-yellow-300' : 'bg-gray-800 text-gray-400'}`}>
-                            <strong>{s.name}</strong> <span className="text-gray-500">— {s.category}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-
-                  {apiData.data.behavioral?.network && (
-                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                      <h3 className="font-semibold mb-3 flex items-center gap-2"><Network className="w-5 h-5 text-cyan-400" /> Network Connections</h3>
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead><tr className="border-b border-gray-800 text-left text-gray-400"><th className="py-2 px-2">Target</th><th className="py-2 px-2">Port</th><th className="py-2 px-2">Proto</th><th className="py-2 px-2">State</th></tr></thead>
-                          <tbody>
-                            {(apiData.data.behavioral.network.connections || []).map((c: any, i: number) => (
-                              <tr key={i} className="border-b border-gray-800">
-                                <td className="py-2 px-2 font-mono text-xs">{c.target}</td><td className="py-2 px-2">{c.port}</td><td className="py-2 px-2">{c.protocol}</td><td className="py-2 px-2">{c.state}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-              {!apiData && !loading && (
-                <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
-                  <Zap className="w-16 h-16 mx-auto mb-4 text-gray-600" />
-                  <h3 className="text-lg font-semibold mb-2">URL Sandbox Ready</h3>
-                  <p className="text-gray-400">Detonate suspicious URLs to reveal phishing kits, payload delivery and malicious indicators.</p>
-                </div>
-              )}
+              <UrlSandboxPanel
+                data={apiData?.data || null}
+                loading={loading}
+                inputValue={inputValue}
+                setInputValue={setInputValue}
+                onDetonate={handleSandbox}
+                onCopy={copyToClipboard}
+              />
             </div>
           )}
 
