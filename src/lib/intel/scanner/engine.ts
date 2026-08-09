@@ -128,6 +128,33 @@ export async function fuzzPaths(baseUrl: string): Promise<FuzzPathResult[]> {
   return results;
 }
 
+export interface CatchAllBaseline {
+  status: number | null;
+  size: number | null;
+  contentType: string | null;
+  catchAll: boolean;
+}
+
+// Probes a random non-existent path. When the server returns the same 2xx
+// status+size for it as for a real path, the site is a catch-all (SPA) and
+// "exposed" findings must not trust bare 2xx alone.
+export async function probeBaseline(baseUrl: string): Promise<CatchAllBaseline> {
+  const nonce = `__nexus_${Date.now()}_${Math.floor(Math.random() * 1e6)}__`;
+  const res = await probePath(baseUrl, { path: `/${nonce}`, sensitive: false, note: 'Catch-all baseline probe' });
+  const catchAll = res.status !== null && res.status >= 200 && res.status < 300;
+  return { status: res.status, size: res.size, contentType: res.contentType, catchAll };
+}
+
+export function looksLikeBaseline(f: FuzzPathResult, baseline: CatchAllBaseline): boolean {
+  if (!baseline.catchAll) return false;
+  if (f.status !== baseline.status) return false;
+  // Same status + same declared size → almost certainly the catch-all page.
+  if (f.size !== null && baseline.size !== null && f.size === baseline.size) return true;
+  // Same status + same content type but unknown size → treat as likely catch-all.
+  if (f.contentType && baseline.contentType && f.contentType === baseline.contentType && f.status === baseline.status) return true;
+  return false;
+}
+
 // ---------------- kit download + fingerprinting ----------------
 
 export function sha256hex(buf: Buffer): string {
@@ -281,6 +308,9 @@ const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 const TELEGRAM_BOT_RE = /\b(\d{8,10}):[A-Za-z0-9_-]{35}\b/g;
 const IP_RE = /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g;
 
+// Placeholder / template addresses that appear in legit sites and are noise.
+const PLACEHOLDER_EMAIL_RE = /(example\.|domain\.com|you@|your@|yourname|your-?email|user@|test@|foo@|bar@|someone@|email@|@example|mail\.com$|@microsoft|@apple\.com|@paypal)/i;
+
 function originOf(baseUrl: string): string {
   try {
     return new URL(baseUrl).origin;
@@ -307,6 +337,7 @@ export function collectExfil(content: ContentAnalysis | null, baseUrl: string): 
     }
   }
   for (const email of content?.emails || []) {
+    if (PLACEHOLDER_EMAIL_RE.test(email)) continue;
     out.push({ url: `mailto:${email}`, kind: 'email', detail: 'Email address in page' });
   }
 
@@ -347,7 +378,10 @@ export function collectArtifacts(params: {
   }
 
   // content emails + tokens
-  for (const email of content?.emails || []) push('email', email, 'page content', 'MEDIUM');
+  for (const email of content?.emails || []) {
+    if (PLACEHOLDER_EMAIL_RE.test(email)) continue;
+    push('email', email, 'page content', 'MEDIUM');
+  }
   for (const token of content?.telegramTokens || []) push('telegram', token, 'page content', 'CRITICAL');
 
   // external resource hosts

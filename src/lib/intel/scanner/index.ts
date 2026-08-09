@@ -12,7 +12,7 @@ import type {
 import type { ContentIndicator, DomainReputation, StaticFlag } from '@/lib/intel/sandbox/types';
 import { captureHttp, captureTls, analyzeContent, probeResources } from '@/lib/intel/sandbox/engine';
 import { staticFlags, detectBrandImpersonation } from '@/lib/intel/sandbox/index';
-import { fuzzPaths, downloadKitFiles, fingerprintKitFiles, collectExfil, collectArtifacts } from './engine';
+import { fuzzPaths, probeBaseline, looksLikeBaseline, downloadKitFiles, fingerprintKitFiles, collectExfil, collectArtifacts } from './engine';
 import { enrichIP } from '@/lib/intel/ipenrich';
 import { lookupIP } from '@/lib/intel';
 import { lookupWhois, daysSince } from '@/lib/intel/domain/whois';
@@ -120,9 +120,12 @@ export async function scanUrl(url: string): Promise<UrlScannerResult> {
   const resources = http?.html ? await probeResources(http.html, http.finalUrl) : [];
 
   // Attack surface — fuzz from origin root
-  const fuzz = await fuzzPaths(origin + '/');
-  // Only 2xx counts as truly exposed (3xx redirects are common on legit panels).
-  const exposedSensitive = fuzz.filter((f) => f.sensitive && f.status !== null && f.status >= 200 && f.status < 300).length;
+  const [fuzz, baseline] = await Promise.all([fuzzPaths(origin + '/'), probeBaseline(origin + '/')]);
+  // Only 2xx counts as truly exposed (3xx redirects are common on legit panels),
+  // and responses identical to the catch-all baseline (SPA) are discounted.
+  const exposedSensitive = fuzz.filter(
+    (f) => f.sensitive && f.status !== null && f.status >= 200 && f.status < 300 && !looksLikeBaseline(f, baseline)
+  ).length;
 
   // Attribution + artifacts
   const exfil = collectExfil(content, http?.finalUrl || clean);
@@ -194,7 +197,7 @@ export async function scanUrl(url: string): Promise<UrlScannerResult> {
     exposedSensitive,
     kitDetected,
     kitConfidence,
-    exfilCount: exfil.length,
+    exfilCount: exfil.filter((e) => e.kind !== 'email').length,
     youngDomainDays: rep.domainAgeDays,
   });
 
