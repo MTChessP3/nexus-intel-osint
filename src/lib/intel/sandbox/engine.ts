@@ -269,6 +269,11 @@ export function analyzeContent(html: string, finalHost: string): ContentAnalysis
   const telegramTokens = Array.from(new Set(html.match(TELEGRAM_BOT_RE) || [])).slice(0, 10);
   const telegramChatIds = Array.from(new Set((html.match(TELEGRAM_CHAT_RE) || []).map((m) => m.match(/(-?\d{6,15})/)?.[1] || m))).slice(0, 10);
 
+  const openDirListing = /<title[^>]*>\s*Index of [^<]*<\/title>/i.test(html) && /<h1>\s*Index of \//i.test(html);
+  if (openDirListing) {
+    indicators.push({ label: 'Open directory listing', category: 'exposure', severity: 'HIGH', detail: 'Server exposes an "Index of /" listing — often hosts leaked files or phishing kits' });
+  }
+
   if (telegramTokens.length > 0) {
     indicators.push({ label: 'Telegram bot token', category: 'attribution', severity: 'CRITICAL', detail: `${telegramTokens.length} Telegram bot token(s) found — C2/exfil channel` });
   }
