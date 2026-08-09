@@ -92,7 +92,7 @@ function normalizeUrl(base: string, href: string): string | null {
 // ---------------- path fuzzing ----------------
 
 async function probePath(baseUrl: string, entry: { path: string; sensitive: boolean; note: string }): Promise<FuzzPathResult> {
-  const url = baseUrl + entry.path;
+  const url = baseUrl + entry.path.replace(/^\//, '');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FUZZ_TIMEOUT_MS);
   try {
@@ -133,19 +133,43 @@ export interface CatchAllBaseline {
   size: number | null;
   contentType: string | null;
   catchAll: boolean;
+  rootContentType: string | null;
+  rootSize: number | null;
 }
 
-// Probes a random non-existent path. When the server returns the same 2xx
-// status+size for it as for a real path, the site is a catch-all (SPA) and
-// "exposed" findings must not trust bare 2xx alone.
+// Probes the root page and a random non-existent path. When the server serves
+// the same generic content type for both, sensitive-path findings must not
+// trust bare 2xx alone (SPA / catch-all shells).
 export async function probeBaseline(baseUrl: string): Promise<CatchAllBaseline> {
   const nonce = `__nexus_${Date.now()}_${Math.floor(Math.random() * 1e6)}__`;
+  const root = await probePath(baseUrl, { path: '/', sensitive: false, note: 'Root page' });
   const res = await probePath(baseUrl, { path: `/${nonce}`, sensitive: false, note: 'Catch-all baseline probe' });
   const catchAll = res.status !== null && res.status >= 200 && res.status < 300;
-  return { status: res.status, size: res.size, contentType: res.contentType, catchAll };
+  return {
+    status: res.status,
+    size: res.size,
+    contentType: res.contentType,
+    catchAll,
+    rootContentType: root.contentType,
+    rootSize: root.size,
+  };
 }
 
 export function looksLikeBaseline(f: FuzzPathResult, baseline: CatchAllBaseline): boolean {
+  // Core SPA signal: the sensitive path returns 2xx with the SAME generic
+  // content type as the root page (the app shell). Real exposed files (env,
+  // config, archives, SQL dumps) are served with a distinct content type, so
+  // same-type-as-root on a 2xx is the strongest indicator of a catch-all.
+  if (
+    f.status !== null &&
+    f.status >= 200 &&
+    f.status < 300 &&
+    baseline.rootContentType &&
+    f.contentType &&
+    baseline.rootContentType === f.contentType
+  ) {
+    return true;
+  }
   if (!baseline.catchAll) return false;
   if (f.status !== baseline.status) return false;
   // A different content type strongly implies real content, not the catch-all.
