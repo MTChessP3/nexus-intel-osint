@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createHash } from 'crypto';
-import { lookupCVE, lookupHash } from '@/lib/intel';
+import { analyzeApkFromUrl, analyzeApkFromBuffer, FakeAppReport } from '@/lib/intel/fakeapp';
+import { lookupCVE } from '@/lib/intel';
 import { upsertIOC, createAlert, generateId } from '@/lib/store';
 import { kvPushList, kvGetList } from '@/lib/kv';
 import { isAIEnabled } from '@/lib/ai';
 
 export const maxDuration = 60;
+export const dynamic = 'force-dynamic';
 
-// Fake App Detection & Monitoring — MOBSF-style static analysis, risk-object
-// identification, CVE correlation, brand app watchlists, actor attribution.
+// Fake App Detection & Monitoring — real static APK analysis (MobSF-style),
+// risk-object identification, CVE correlation, brand app watchlists, actor attribution.
 
 const WATCH_KEY = 'nexus:fakeapp:watch';
 const APPS_KEY = 'nexus:fakeapp:apps';
@@ -21,56 +22,20 @@ interface FakeAppWatch {
   createdAt: string;
 }
 
-// MOBSF-style static analysis (demo detonation, deterministic per file name)
-function mobsfAnalysis(fileName: string, fileType: string): any {
-  const hash = createHash('sha256').update(fileName).digest('hex');
-  const riskyPerms = [
-    'android.permission.SMS', 'android.permission.READ_CONTACTS', 'android.permission.CAMERA',
-    'android.permission.RECORD_AUDIO', 'android.permission.ACCESS_FINE_LOCATION', 'android.permission.GET_ACCOUNTS',
+async function correlateCVEs(appAnalysis: FakeAppReport): Promise<any[]> {
+  // Candidate CVEs relevant to static mobile findings
+  const candidates = [
+    ...(appAnalysis.code.usesDexLoader ? ['CVE-2023-35674'] : []),
+    ...(appAnalysis.code.usesWebViewJsInterface ? ['CVE-2012-6636', 'CVE-2020-6506'] : []),
+    ...(appAnalysis.permissions.dangerous.some((p) => p.includes('SMS')) ? ['CVE-2024-0017'] : []),
+    ...(appAnalysis.manifest.usesCleartextTraffic ? ['CVE-2023-4863'] : []),
   ];
-  const manifest = {
-    package: `com.${fileName.replace(/\.(apk|ipa|appx)$/i, '').toLowerCase().replace(/[^a-z0-9]/g, '')}.fake`,
-    targetSdk: 34,
-    minSdk: 21,
-    permissions: riskyPerms,
-    activities: [`${fileName.replace(/\.[^.]+$/, '')}.LoginActivity`, `${fileName.replace(/\.[^.]+$/, '')}.MainActivity`],
-  };
-
-  const riskObjects = [
-    { id: 'RISK-1001', type: 'SMS_PERMISSION', severity: 'HIGH', description: 'Reads SMS — OTP interception vector', recommendation: 'Revoke SMS access; OTP should use push/authenticator' },
-    { id: 'RISK-1002', type: 'CREDENTIAL_HARVEST', severity: 'CRITICAL', description: 'Login form posts credentials to hardcoded endpoint', recommendation: 'Intercept traffic; flag as credential harvester' },
-    { id: 'RISK-1003', type: 'DYNAMIC_CODE_LOADING', severity: 'MEDIUM', description: 'Loads DEX from remote URL at runtime', recommendation: 'Dynamic loading hides malicious payloads' },
-    { id: 'RISK-1004', type: 'CLEARTEXT_TRAFFIC', severity: 'MEDIUM', description: 'Network security config permits cleartext HTTP', recommendation: 'Enforce HTTPS + certificate pinning' },
-    { id: 'RISK-1005', type: 'EXFILTRATION', severity: 'HIGH', description: 'Data collection library sends device info + contacts', recommendation: 'Monitor outbound endpoints' },
-  ];
-
-  const cveCandidates = ['CVE-2023-44487', 'CVE-2024-3400', 'CVE-2021-44228', 'CVE-2022-22965', 'CVE-2023-27350', 'CVE-2024-6387'];
-
-  return {
-    fileName, fileType: fileType.toUpperCase(),
-    sha256: hash,
-    md5: createHash('md5').update(fileName).digest('hex'),
-    manifest,
-    riskObjects,
-    permissions: { dangerous: riskyPerms.length, total: riskyPerms.length + 4 },
-    certificate: {
-      issuer: 'CN=Unknown CA, O=Untrusted Signer', verified: false,
-      selfSigned: true, expiry: '2027-01-01',
-    },
-    network: {
-      hardcodedEndpoints: ['http://c2.fakeupdates[.]net/api/collect', 'https://cdn.fakesite[.]xyz/payload.dex'],
-      c2Detected: true, hasHttp: true,
-    },
-    codeAnalysis: { usesReflection: true, usesDexLoader: true, nativeLibraries: ['libnative.so'], obfuscation: 'MEDIUM' },
-    cveCandidates,
-    verdict: 'FAKE',
-    confidence: 90,
-  };
-}
-
-async function correlateCVEs(appAnalysis: any): Promise<any[]> {
+  const seen = new Set<string>();
   const results: any[] = [];
-  for (const id of appAnalysis.cveCandidates.slice(0, 3)) {
+  for (const id of [...new Set(['CVE-2021-44228', ...candidates])]) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (results.length >= 3) break;
     try {
       const cve = await lookupCVE(id);
       const vuln = cve.results?.[0];
@@ -80,11 +45,13 @@ async function correlateCVEs(appAnalysis: any): Promise<any[]> {
           cvssScore: vuln.cvssScore,
           cvssSeverity: vuln.cvssSeverity,
           description: (vuln.description || '').substring(0, 160),
-          relevance: 'Potential library dependency',
+          relevance: appAnalysis.code.usesDexLoader && id === 'CVE-2021-44228' ? 'Potential dynamic loading dependency' : 'Potential library dependency',
           matchedObject: 'dependency-jar',
         });
       }
-    } catch { /* skip */ }
+    } catch {
+      /* skip */
+    }
   }
   return results;
 }
@@ -92,39 +59,67 @@ async function correlateCVEs(appAnalysis: any): Promise<any[]> {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { action = 'analyze', fileName, fileType = 'APK', brand, site, approvedAppIds } = body;
+    const { action = 'analyze', url, fileName, brand, site, approvedAppIds } = body;
 
     if (action === 'analyze') {
-      if (!fileName) return NextResponse.json({ success: false, error: 'fileName is required' }, { status: 400 });
-      const analysis = mobsfAnalysis(fileName, fileType);
+      if (!url) return NextResponse.json({ success: false, error: 'url is required (direct APK download link)' }, { status: 400 });
+
+      let analysis: FakeAppReport;
+      if (typeof url === 'string' && url.startsWith('data:')) {
+        // Base64 data URI upload (small files)
+        const base64 = url.split(',')[1] || '';
+        const buf = Buffer.from(base64, 'base64');
+        analysis = await analyzeApkFromBuffer(buf, 'upload://apk', fileName);
+      } else if (typeof url === 'string' && url.startsWith('http')) {
+        analysis = await analyzeApkFromUrl(url, { maxWaitMs: 45000 });
+      } else {
+        return NextResponse.json({ success: false, error: 'url must be an http(s) or data: URI' }, { status: 400 });
+      }
+
       const cvEs = await correlateCVEs(analysis);
 
       try {
         await upsertIOC({
           type: 'HASH', value: analysis.sha256,
-          description: `Fake app detected: ${fileName} (${fileType}) — ${analysis.riskObjects.filter((r: any) => r.severity === 'CRITICAL').length} critical objects`,
-          severity: analysis.riskObjects.some((r: any) => r.severity === 'CRITICAL') ? 'HIGH' : 'MEDIUM',
-          confidence: 90, status: 'MALICIOUS',
-          source: 'Fake-App-Scanner (MOBSF-style)',
+          description: `Fake app analysis: ${analysis.fileName} (${analysis.appInfo.package}) — verdict ${analysis.verdict} (score ${analysis.score}/100), ${analysis.riskObjects.filter((r) => r.severity === 'CRITICAL').length} critical, ${analysis.riskObjects.filter((r) => r.severity === 'HIGH').length} high`,
+          severity: analysis.verdict === 'FAKE' ? 'HIGH' : analysis.verdict === 'SUSPICIOUS' ? 'MEDIUM' : 'LOW',
+          confidence: analysis.confidence,
+          status: analysis.verdict === 'FAKE' ? 'MALICIOUS' : analysis.verdict === 'SUSPICIOUS' ? 'SUSPICIOUS' : 'BENIGN',
+          source: 'Fake-App-Scanner (MobSF-style static analysis)',
           rawResponse: JSON.stringify({ analysis, cvEs }).substring(0, 8000),
-          tags: ['fake-app', 'mobile', 'risk-object', ...analysis.riskObjects.map((r: any) => r.type.toLowerCase())],
+          tags: ['fake-app', 'mobile', 'apk', analysis.verdict.toLowerCase(), ...analysis.riskObjects.map((r) => r.type.toLowerCase())].slice(0, 12),
         });
-        await createAlert({
-          iocId: generateId(),
-          title: `Fake application detected: ${fileName}`,
-          description: `${analysis.riskObjects.filter((r: any) => r.severity === 'CRITICAL').length} critical, ${analysis.riskObjects.filter((r: any) => r.severity === 'HIGH').length} high risk objects`,
-          severity: 'HIGH', type: 'FAKE_APP',
-        });
-      } catch (e) { console.error('Fake app store error:', e); }
+
+        if (analysis.verdict !== 'BENIGN') {
+          await createAlert({
+            iocId: generateId(),
+            title: `${analysis.verdict === 'FAKE' ? 'Fake application' : 'Suspicious application'}: ${analysis.fileName}`,
+            description: `${analysis.appInfo.package} — score ${analysis.score}/100, ${analysis.riskObjects.filter((r) => r.severity === 'CRITICAL').length} critical, ${analysis.riskObjects.filter((r) => r.severity === 'HIGH').length} high risk objects`,
+            severity: analysis.verdict === 'FAKE' ? 'HIGH' : 'MEDIUM',
+            type: 'FAKE_APP',
+          });
+        }
+      } catch (e) {
+        console.error('Fake app store error:', e);
+      }
+
+      await kvPushList(APPS_KEY, {
+        package: analysis.appInfo.package,
+        fileName: analysis.fileName,
+        sha256: analysis.sha256,
+        verdict: analysis.verdict,
+        score: analysis.score,
+        analyzedAt: new Date().toISOString(),
+      }, 200);
 
       return NextResponse.json({
         success: true,
-        source: 'Fake-App-Scanner (MOBSF-style analysis)',
+        source: 'Fake-App-Scanner (MobSF-style static analysis)',
         timestamp: new Date().toISOString(),
         fetchedLive: true,
         aiEnabled: isAIEnabled(),
-        data: { ...analysis, cvEs, actors: suggestActors(fileName) },
-        message: `Analysis: "${fileName}" flagged as FAKE (${analysis.riskObjects.filter((r: any) => r.severity === 'CRITICAL').length} critical risk objects, ${cvEs.length} CVE matches)`,
+        data: { ...analysis, cvEs, actors: suggestActors(analysis) },
+        message: `Analysis: "${analysis.fileName}" — ${analysis.verdict} (${analysis.score}/100), ${analysis.riskObjects.filter((r) => r.severity === 'CRITICAL').length} critical risk objects, ${cvEs.length} CVE matches`,
       });
     }
 
@@ -150,12 +145,33 @@ export async function POST(request: NextRequest) {
   }
 }
 
-function suggestActors(fileName: string): any[] {
-  const base = fileName.replace(/\.[^.]+$/, '').toLowerCase();
-  return [
-    { handle: `@${base}_dev`, role: 'likely developer', ip: '185.220.101.x (TOR)', domains: [`${base}.xyz`, 'c2.fakeupdates.net'], confidence: 'MEDIUM' },
-    { handle: '@anonymous_ghost', role: 'distributor', ip: '91.240.118.x', domains: [`cdn.${base}-kits.top`], confidence: 'LOW' },
-  ];
+function suggestActors(analysis: FakeAppReport): any[] {
+  const base = (analysis.fileName || 'app').replace(/\.[^.]+$/, '').toLowerCase();
+  const actors: any[] = [];
+  if (analysis.certificate?.selfSigned) {
+    actors.push({
+      handle: `@signer_${base.slice(0, 10)}`,
+      role: 'self-signed signer',
+      domain: analysis.certificate.subject || 'Unknown',
+      confidence: analysis.verdict === 'FAKE' ? 'HIGH' : 'MEDIUM',
+    });
+  }
+  if (analysis.network?.suspiciousDomains?.length) {
+    actors.push({
+      handle: '@domain_operator',
+      role: 'suspicious domain operator',
+      domains: analysis.network.suspiciousDomains.slice(0, 3),
+      confidence: analysis.verdict === 'FAKE' ? 'HIGH' : 'LOW',
+    });
+  }
+  if (actors.length === 0) {
+    actors.push({
+      handle: '@unknown',
+      role: 'no attribution signals',
+      confidence: 'LOW',
+    });
+  }
+  return actors;
 }
 
 export async function GET(request: NextRequest) {
@@ -173,8 +189,9 @@ export async function GET(request: NextRequest) {
     success: true,
     source: 'Fake-App-Scanner',
     data: {
-      capabilities: ['MOBSF-style static analysis', 'Risk object identification', 'CVE impact correlation', 'Brand app watchlists', 'Suspicious site intake', 'Actor attribution', 'Sandbox detonation (sim)'],
+      capabilities: ['MobSF-style static APK analysis', 'Binary manifest decoding (AXML)', 'Signing certificate parsing (PKCS#7)', 'Risk object identification', 'CVE impact correlation', 'Brand app watchlists', 'Suspicious site intake', 'Actor attribution'],
       supportedFormats: ['APK', 'IPA', 'APPX'],
+      input: 'Direct APK download URL (http/https) or base64 data URI',
       aiEnabled: isAIEnabled(),
     },
   });

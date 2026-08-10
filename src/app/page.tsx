@@ -1144,10 +1144,9 @@ export default function OSINTPlatform() {
 
   // ==================== FAKE APP ====================
   const handleFakeApp = async () => {
-    if (!inputValue) { showFeedback('Enter an APK/IPA filename to analyze', 'error'); return; }
-    const fileType = inputValue.endsWith('.ipa') ? 'IPA' : inputValue.endsWith('.appx') ? 'APPX' : 'APK';
-    showFeedback(`Analyzing ${inputValue} for fake-app indicators...`, 'info');
-    await callAPI('/api/osint/fakeapp', { method: 'POST', body: JSON.stringify({ fileName: inputValue, fileType }) });
+    if (!inputValue) { showFeedback('Enter a direct APK download URL to analyze', 'error'); return; }
+    showFeedback(`Downloading and statically analyzing APK...`, 'info');
+    await callAPI('/api/osint/fakeapp', { method: 'POST', body: JSON.stringify({ url: inputValue }) });
   };
 
   // IOC CRUD Handlers
@@ -4365,7 +4364,7 @@ export default function OSINTPlatform() {
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
                 <div className="flex gap-4">
                   <div className="flex-1">
-                    <input type="text" placeholder="APK/IPA filename (e.g., bankapp.apk)"
+                    <input type="text" placeholder="Direct APK download URL (e.g., https://cdn.example.com/bankapp.apk)"
                       value={inputValue} onChange={(e) => setInputValue(e.target.value)}
                       onKeyPress={(e) => e.key === 'Enter' && handleFakeApp()}
                       className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-fuchsia-500 focus:outline-none" />
@@ -4374,22 +4373,70 @@ export default function OSINTPlatform() {
                     {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Smartphone className="w-4 h-4" />} Analyze
                   </button>
                 </div>
+                <p className="text-xs text-gray-500 mt-2">Downloads and statically analyzes a real APK — manifest (AXML), signing certificate, permissions, dex secrets &amp; URLs. Like MobSF.</p>
               </div>
 
               {apiData?.data?.verdict && (
                 <div className="space-y-4">
-                  <div className="rounded-xl p-5 border bg-red-500/10 border-red-500/50">
+                  <div className={`rounded-xl p-5 border ${apiData.data.verdict === 'FAKE' ? 'bg-red-500/10 border-red-500/50' : apiData.data.verdict === 'SUSPICIOUS' ? 'bg-orange-500/10 border-orange-500/50' : 'bg-emerald-500/10 border-emerald-500/50'}`}>
                     <div className="flex items-center justify-between">
-                      <div><h3 className="font-semibold">Verdict: {apiData.data.verdict}</h3><p className="text-sm text-gray-400 mt-1 font-mono">{apiData.data.fileName} · {apiData.data.sha256?.substring(0, 20)}...</p></div>
-                      <div className="text-right"><div className="text-2xl font-bold">{apiData.data.confidence}%</div><div className="text-sm font-bold text-red-400">confidence</div></div>
+                      <div>
+                        <h3 className="font-semibold">Verdict: <span className={apiData.data.verdict === 'FAKE' ? 'text-red-400' : apiData.data.verdict === 'SUSPICIOUS' ? 'text-orange-400' : 'text-emerald-400'}>{apiData.data.verdict}</span></h3>
+                        <p className="text-sm text-gray-400 mt-1 font-mono break-all">{apiData.data.fileName}</p>
+                        <p className="text-xs text-gray-500 mt-1 font-mono break-all">{apiData.data.appInfo?.package} · v{apiData.data.appInfo?.versionName || '?'} · {apiData.data.sha256?.substring(0, 20)}...</p>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-3xl font-bold">{apiData.data.score || 0}<span className="text-sm text-gray-500">/100</span></div>
+                        <div className="text-sm font-bold text-gray-400">risk score</div>
+                        <div className="text-xs mt-1"><span className={`px-2 py-0.5 rounded font-bold ${apiData.data.confidence >= 75 ? 'bg-red-500/20 text-red-400' : apiData.data.confidence >= 50 ? 'bg-orange-500/20 text-orange-400' : 'bg-gray-700'}`}>{apiData.data.confidence}% conf</span></div>
+                      </div>
+                    </div>
+                    <div className="mt-3 h-2 bg-gray-800 rounded-full overflow-hidden">
+                      <div className={`h-full ${apiData.data.score >= 60 ? 'bg-red-500' : apiData.data.score >= 30 ? 'bg-orange-500' : 'bg-emerald-500'}`} style={{ width: `${Math.min(100, apiData.data.score || 0)}%` }} />
                     </div>
                   </div>
 
+                  {(apiData.data.appInfo?.package || apiData.data.permissions) && (
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                      <h3 className="font-semibold mb-3 flex items-center gap-2"><Info className="w-5 h-5 text-sky-400" /> App Info</h3>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                        <div><span className="text-gray-500 block">Package</span><span className="font-mono break-all">{apiData.data.appInfo?.package}</span></div>
+                        <div><span className="text-gray-500 block">Version</span><span>{apiData.data.appInfo?.versionName} ({apiData.data.appInfo?.versionCode})</span></div>
+                        <div><span className="text-gray-500 block">SDK</span><span>min {apiData.data.appInfo?.minSdk || '?'} / target {apiData.data.appInfo?.targetSdk || '?'}</span></div>
+                        <div><span className="text-gray-500 block">Size</span><span>{(apiData.data.sizeBytes / 1048576).toFixed(1)} MB · {apiData.data.fileType}</span></div>
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
+                        <div className="bg-gray-800/60 rounded-lg p-2"><span className="text-gray-500 block">Activities</span><span className="font-bold">{apiData.data.components?.activities?.length ?? 0}</span></div>
+                        <div className="bg-gray-800/60 rounded-lg p-2"><span className="text-gray-500 block">Services</span><span className="font-bold">{apiData.data.components?.services?.length ?? 0}</span></div>
+                        <div className="bg-gray-800/60 rounded-lg p-2"><span className="text-gray-500 block">Receivers</span><span className="font-bold">{apiData.data.components?.receivers?.length ?? 0}</span></div>
+                        <div className="bg-gray-800/60 rounded-lg p-2"><span className="text-gray-500 block">Providers</span><span className="font-bold">{apiData.data.components?.providers?.length ?? 0}</span></div>
+                        <div className="bg-gray-800/60 rounded-lg p-2"><span className="text-gray-500 block">Exported</span><span className={`font-bold ${apiData.data.manifest?.exportedCount > 0 ? 'text-orange-400' : 'text-emerald-400'}`}>{apiData.data.manifest?.exportedCount ?? 0}</span></div>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                        <span className={`px-2 py-1 rounded ${apiData.data.manifest?.allowBackup ? 'bg-orange-500/20 text-orange-400' : 'bg-gray-800 text-gray-400'}`}>allowBackup: {String(apiData.data.manifest?.allowBackup)}</span>
+                        <span className={`px-2 py-1 rounded ${apiData.data.manifest?.debuggable ? 'bg-red-500/20 text-red-400' : 'bg-gray-800 text-gray-400'}`}>debuggable: {String(apiData.data.manifest?.debuggable)}</span>
+                        <span className={`px-2 py-1 rounded ${apiData.data.manifest?.usesCleartextTraffic ? 'bg-red-500/20 text-red-400' : 'bg-gray-800 text-gray-400'}`}>cleartext: {String(apiData.data.manifest?.usesCleartextTraffic)}</span>
+                        <span className={`px-2 py-1 rounded ${apiData.data.certificate?.selfSigned ? 'bg-red-500/20 text-red-400' : 'bg-gray-800 text-gray-400'}`}>self-signed: {String(apiData.data.certificate?.selfSigned)}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {apiData.data.permissions?.dangerous?.length > 0 && (
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                      <h3 className="font-semibold mb-3 flex items-center gap-2"><Lock className="w-5 h-5 text-amber-400" /> Dangerous Permissions ({apiData.data.permissions.dangerous.length})</h3>
+                      <div className="flex flex-wrap gap-2">
+                        {apiData.data.permissions.dangerous.map((p: string, i: number) => (
+                          <span key={i} className="px-2 py-1 bg-red-500/10 border border-red-500/30 rounded text-xs font-mono">{p.replace('android.permission.', '')}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                    <h3 className="font-semibold mb-3 flex items-center gap-2"><AlertTriangle className="w-5 h-5 text-red-400" /> Risk Objects</h3>
+                    <h3 className="font-semibold mb-3 flex items-center gap-2"><AlertTriangle className="w-5 h-5 text-red-400" /> Risk Objects ({apiData.data.riskObjects?.length || 0})</h3>
                     <div className="space-y-2">
                       {(apiData.data.riskObjects || []).map((r: any, i: number) => (
-                        <div key={i} className={`p-3 rounded-lg ${r.severity === 'CRITICAL' ? 'bg-red-500/10 border-l-2 border-red-500' : r.severity === 'HIGH' ? 'bg-orange-500/10 border-l-2 border-orange-500' : 'bg-yellow-500/10 border-l-2 border-yellow-500'}`}>
+                        <div key={i} className={`p-3 rounded-lg ${r.severity === 'CRITICAL' ? 'bg-red-500/10 border-l-2 border-red-500' : r.severity === 'HIGH' ? 'bg-orange-500/10 border-l-2 border-orange-500' : r.severity === 'MEDIUM' ? 'bg-yellow-500/10 border-l-2 border-yellow-500' : 'bg-gray-800/60 border-l-2 border-gray-600'}`}>
                           <div className="flex items-center justify-between">
                             <span className="text-sm font-bold">{r.id} · {r.type}</span>
                             <span className="text-xs font-bold text-red-400">{r.severity}</span>
@@ -4400,6 +4447,55 @@ export default function OSINTPlatform() {
                       ))}
                     </div>
                   </div>
+
+                  {apiData.data.certificate && (
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                      <h3 className="font-semibold mb-3 flex items-center gap-2"><Shield className="w-5 h-5 text-emerald-400" /> Signing Certificate</h3>
+                      <div className="grid grid-cols-2 gap-3 text-xs">
+                        <div className="col-span-2"><span className="text-gray-500 block">Subject</span><span className="font-mono break-all">{apiData.data.certificate.subject}</span></div>
+                        <div className="col-span-2"><span className="text-gray-500 block">Issuer</span><span className="font-mono break-all">{apiData.data.certificate.issuer}</span></div>
+                        <div><span className="text-gray-500 block">Valid from</span><span>{apiData.data.certificate.validFrom?.substring(0, 10)}</span></div>
+                        <div><span className="text-gray-500 block">Valid to</span><span className={apiData.data.certificate.expired ? 'text-red-400 font-bold' : ''}>{apiData.data.certificate.validTo?.substring(0, 10)}{apiData.data.certificate.expired ? ' (EXPIRED)' : ''}</span></div>
+                        <div className="col-span-2"><span className="text-gray-500 block">Serial</span><span className="font-mono break-all text-gray-400">{apiData.data.certificate.serialNumber}</span></div>
+                      </div>
+                    </div>
+                  )}
+
+                  {(apiData.data.secrets?.length > 0 || apiData.data.network?.suspiciousDomains?.length > 0) && (
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                      <h3 className="font-semibold mb-3 flex items-center gap-2"><Key className="w-5 h-5 text-orange-400" /> Binary Findings</h3>
+                      {apiData.data.secrets?.length > 0 && (
+                        <div className="mb-3">
+                          <p className="text-xs text-gray-500 mb-2">Hardcoded secrets ({apiData.data.secrets.length})</p>
+                          <div className="flex flex-wrap gap-2">
+                            {apiData.data.secrets.slice(0, 10).map((s: any, i: number) => (
+                              <span key={i} className={`px-2 py-1 rounded text-xs font-mono ${s.severity === 'CRITICAL' ? 'bg-red-500/20 text-red-400' : s.severity === 'HIGH' ? 'bg-orange-500/20 text-orange-400' : 'bg-yellow-500/20 text-yellow-400'}`}>{s.type}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {apiData.data.network?.suspiciousDomains?.length > 0 && (
+                        <div>
+                          <p className="text-xs text-gray-500 mb-2">Suspicious domains</p>
+                          <div className="flex flex-wrap gap-2">
+                            {apiData.data.network.suspiciousDomains.slice(0, 10).map((d: string, i: number) => (
+                              <span key={i} className="px-2 py-1 bg-red-500/10 border border-red-500/30 rounded text-xs font-mono">{d}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {apiData.data.code?.riskyCalls?.length > 0 && (
+                        <div className="mt-3">
+                          <p className="text-xs text-gray-500 mb-2">Risky APIs ({apiData.data.code.riskyCalls.length})</p>
+                          <div className="flex flex-wrap gap-2">
+                            {apiData.data.code.riskyCalls.map((c: string, i: number) => (
+                              <span key={i} className="px-2 py-1 bg-gray-800 rounded text-xs font-mono text-gray-300">{c}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {apiData.data.cvEs?.length > 0 && (
                     <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
