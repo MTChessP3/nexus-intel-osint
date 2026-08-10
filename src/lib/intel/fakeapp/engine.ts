@@ -225,8 +225,8 @@ const SECRET_PATTERNS: Array<{ type: string; regex: RegExp; severity: string }> 
   { type: 'AWS_ACCESS_KEY', regex: /AKIA[0-9A-Z]{16}/g, severity: 'HIGH' },
   { type: 'GOOGLE_API_KEY', regex: /AIza[0-9A-Za-z_\-]{35}/g, severity: 'HIGH' },
   { type: 'PRIVATE_KEY', regex: /-----BEGIN [A-Z ]*PRIVATE KEY-----/g, severity: 'CRITICAL' },
-  { type: 'GENERIC_PASSWORD', regex: /(?:password|passwd|pwd)\s*[=:]\s*['"][^'"]{4,}['"]/gi, severity: 'HIGH' },
-  { type: 'API_TOKEN', regex: /(?:api[_-]?key|api[_-]?token|access[_-]?token|auth[_-]?token|secret)\s*[=:]\s*['"][A-Za-z0-9_\-\.]{8,}['"]/gi, severity: 'HIGH' },
+  { type: 'GENERIC_PASSWORD', regex: /(?:password|passwd|pwd)[=:]["']?[^"'=:\s][^"'=\s]{3,}/gi, severity: 'HIGH' },
+  { type: 'API_TOKEN', regex: /(?:api[_-]?key|api[_-]?token|access[_-]?token|auth[_-]?token|secret)[=:]["']?[^"'=:\s][^"'=\s]{7,}/gi, severity: 'HIGH' },
   { type: 'FIREBASE_URL', regex: /https:\/\/[a-zA-Z0-9-]+\.firebaseio\.com/g, severity: 'MEDIUM' },
   { type: 'GITHUB_TOKEN', regex: /ghp_[A-Za-z0-9]{36}/g, severity: 'HIGH' },
   { type: 'SLACK_TOKEN', regex: /xox[baprs]-[A-Za-z0-9-]{10,}/g, severity: 'HIGH' },
@@ -385,6 +385,8 @@ export function findSecrets(strings: string[]): SecretFinding[] {
   const findings: SecretFinding[] = [];
   const seen = new Set<string>();
   for (const s of strings) {
+    // Only scan short, plausible assignment strings to reduce dex noise
+    if (s.length > 500) continue;
     for (const pattern of SECRET_PATTERNS) {
       for (const m of s.matchAll(pattern.regex)) {
         const key = `${pattern.type}:${m[0]}`;
@@ -478,7 +480,7 @@ export function scoreAnalysis(
   let permScore = 0;
   if (perms.dangerousCount > 0) {
     const highRiskCount = perms.dangerous.filter((p) => HIGH_RISK_PERMS.includes(p)).length;
-    permScore = Math.min(100, highRiskCount * 16 + (perms.dangerousCount - highRiskCount) * 4);
+    permScore = Math.min(100, highRiskCount * 20 + (perms.dangerousCount - highRiskCount) * 4);
     if (perms.dangerous.some((p) => p.includes('SMS') || p.includes('RECORD_AUDIO'))) {
       pushRisk('HIGH_RISK_PERMISSIONS', 'HIGH', 'Sensitive permissions requested (SMS / audio)', 'Review need; OTP interception and ambient recording vectors');
     } else if (highRiskCount >= 3) {
@@ -559,20 +561,20 @@ export function scoreAnalysis(
   // app with only informational findings should land in the BENIGN range.
   const score = Math.round(
     categories.manifest * 0.2 +
-    categories.permissions * 0.25 +
+    categories.permissions * 0.3 +
     categories.certificate * 0.1 +
-    categories.network * 0.2 +
-    categories.secrets * 0.1 +
-    categories.code * 0.15
+    categories.network * 0.15 +
+    categories.secrets * 0.15 +
+    categories.code * 0.1
   );
   const normalized = Math.min(100, score);
 
   let verdict = 'BENIGN';
   let confidence = 55;
-  if (normalized >= 60) {
+  if (normalized >= 45) {
     verdict = 'FAKE';
     confidence = Math.min(95, 60 + normalized * 0.35);
-  } else if (normalized >= 30) {
+  } else if (normalized >= 25) {
     verdict = 'SUSPICIOUS';
     confidence = Math.min(85, 45 + normalized * 0.8);
   } else {
