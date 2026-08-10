@@ -1,6 +1,7 @@
 export {
   analyzeApkFromBuffer,
   analyzeApkFromUrl,
+  analyzeApkBytes,
   downloadApk,
   parseCertificate,
   extractStrings,

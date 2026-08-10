@@ -3,12 +3,12 @@
 // (AXML), parses the META-INF signing certificate (PKCS#7) and scans the dex
 // bytecode for hardcoded secrets, URLs, domains and risky API usage. Produces a
 // structured report with a weighted risk score and a FAKE/SUSPICIOUS/BENIGN verdict.
+// Runtime-agnostic: works in Node (API route) and browser (client-side upload analysis).
 
-import { createHash } from 'crypto';
-import { unzipSync, Unzip } from 'fflate';
+import { md5 } from 'js-md5';
 import * as forge from 'node-forge';
-// @ts-ignore — internal parser reused from adbkit-apkreader
-import ManifestParser from '@devicefarmer/adbkit-apkreader/lib/apkreader/parser/manifest';
+import { unzipSync } from 'fflate';
+import { parseAxml, collapseAttributes } from './axml';
 
 export interface AppComponent {
   name: string;
@@ -232,7 +232,7 @@ const SECRET_PATTERNS: Array<{ type: string; regex: RegExp; severity: string }> 
   { type: 'SLACK_TOKEN', regex: /xox[baprs]-[A-Za-z0-9-]{10,}/g, severity: 'HIGH' },
 ];
 
-export async function downloadApk(url: string): Promise<Buffer> {
+export async function downloadApk(url: string): Promise<Uint8Array> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT);
   try {
@@ -246,17 +246,33 @@ export async function downloadApk(url: string): Promise<Buffer> {
     if (arrayBuffer.byteLength > MAX_APK_SIZE) {
       throw new Error('APK exceeds 200 MB safety cap');
     }
-    return Buffer.from(arrayBuffer);
+    return new Uint8Array(arrayBuffer);
   } finally {
     clearTimeout(timer);
   }
 }
 
-function getHashes(buf: Buffer): { sha256: string; md5: string; sha1: string } {
+function toHex(bytes: Uint8Array): string {
+  let out = '';
+  for (let i = 0; i < bytes.length; i++) out += bytes[i].toString(16).padStart(2, '0');
+  return out;
+}
+
+async function sha256(buf: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', buf as unknown as ArrayBuffer);
+  return toHex(new Uint8Array(digest));
+}
+
+async function sha1(buf: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-1', buf as unknown as ArrayBuffer);
+  return toHex(new Uint8Array(digest));
+}
+
+async function getHashes(buf: Uint8Array): Promise<{ sha256: string; md5: string; sha1: string }> {
   return {
-    sha256: createHash('sha256').update(buf).digest('hex'),
-    md5: createHash('md5').update(buf).digest('hex'),
-    sha1: createHash('sha1').update(buf).digest('hex'),
+    sha256: await sha256(buf),
+    md5: md5(buf as unknown as Uint8Array),
+    sha1: await sha1(buf),
   };
 }
 
@@ -264,9 +280,18 @@ function isCertFile(name: string): boolean {
   return /^META-INF\/[^/]+\.(RSA|DSA|EC)$/i.test(name);
 }
 
-export function parseCertificate(certBuf: Buffer): CertInfo | null {
+function toBinaryString(bytes: Uint8Array): string {
+  let out = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    out += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK) as unknown as number[]);
+  }
+  return out;
+}
+
+export function parseCertificate(certBuf: Uint8Array): CertInfo | null {
   try {
-    const asn1 = forge.asn1.fromDer(certBuf.toString('binary'));
+    const asn1 = forge.asn1.fromDer(toBinaryString(certBuf));
     let p7: any;
     try {
       p7 = forge.pkcs7.messageFromAsn1(asn1);
@@ -592,24 +617,124 @@ export interface AnalyzeOptions {
   maxWaitMs?: number;
 }
 
-export async function analyzeApkFromBuffer(apkBuffer: Buffer, apkUrl: string, fileName?: string): Promise<FakeAppReport> {
-  const hashes = getHashes(apkBuffer);
+// Recursively locate an AndroidManifest.xml in a container (APK, AAB, XAPK, APKS, ZIP)
+function findManifestEntry(unzipped: Record<string, Uint8Array>): { path: string; data: Uint8Array } | null {
+  const candidates = [
+    'AndroidManifest.xml',
+    'base/manifest/AndroidManifest.xml', // AAB
+    'base/AndroidManifest.xml',
+  ];
+  for (const c of candidates) {
+    if (unzipped[c]) return { path: c, data: unzipped[c] };
+  }
+  // Fallback: search any AndroidManifest.xml anywhere in the tree
+  const found = Object.keys(unzipped).find((n) => n.endsWith('AndroidManifest.xml'));
+  if (found) return { path: found, data: unzipped[found] };
+  return null;
+}
 
-  const unzipped: Record<string, Uint8Array> = unzipSync(new Uint8Array(apkBuffer));
+// Parse the binary AXML manifest into the same object shape the engine expects.
+function parseManifestAxml(manifestEntry: Uint8Array): any {
+  const doc = parseAxml(manifestEntry);
+  const collapse = (el: any): any => {
+    const out: Record<string, any> = {};
+    for (const attr of el.attributes || []) out[attr.name] = attr.value;
+    return out;
+  };
 
-  const manifestEntry = unzipped['AndroidManifest.xml'];
-  if (!manifestEntry) throw new Error('Invalid APK: no AndroidManifest.xml found');
+  const manifest: any = {
+    usesPermissions: [],
+    permissions: [],
+    usesSdk: null,
+    application: { activities: [], services: [], receivers: [], providers: [], launcherActivities: [], activityAliases: [] },
+  };
+  Object.assign(manifest, collapse(doc));
+
+  const collectComponent = (el: any, list: any[], launcherList: any[], isActivity: boolean) => {
+    const comp = collapse(el);
+    comp.intentFilters = [];
+    for (const child of el.childNodes || []) {
+      if (child.nodeName === 'intent-filter') {
+        const filter: any = { actions: [], categories: [] };
+        Object.assign(filter, collapse(child));
+        for (const fc of child.childNodes || []) {
+          if (fc.nodeName === 'action') filter.actions.push(collapse(fc));
+          else if (fc.nodeName === 'category') filter.categories.push(collapse(fc));
+          else if (fc.nodeName === 'data') (filter.data = filter.data || []).push(collapse(fc));
+        }
+        comp.intentFilters.push(filter);
+      }
+    }
+    list.push(comp);
+    if (isActivity) {
+      const isLauncher = comp.intentFilters.some(
+        (f: any) =>
+          f.actions.some((a: any) => a.name === 'android.intent.action.MAIN') &&
+          (f.categories.some((c: any) => c.name === 'android.intent.category.LAUNCHER') || f.categories.some((c: any) => c.name === 'android.intent.category.LEANBACK_LAUNCHER'))
+      );
+      if (isLauncher) launcherList.push(comp);
+    }
+  };
+
+  for (const child of doc.childNodes || []) {
+    switch (child.nodeName) {
+      case 'uses-permission':
+        manifest.usesPermissions.push(collapse(child));
+        break;
+      case 'uses-sdk':
+        manifest.usesSdk = collapse(child);
+        break;
+      case 'application':
+        Object.assign(manifest.application, collapse(child));
+        for (const appChild of child.childNodes || []) {
+          switch (appChild.nodeName) {
+            case 'activity':
+              collectComponent(appChild, manifest.application.activities, manifest.application.launcherActivities, true);
+              break;
+            case 'activity-alias':
+              collectComponent(appChild, manifest.application.activityAliases, manifest.application.launcherActivities, true);
+              break;
+            case 'service':
+              collectComponent(appChild, manifest.application.services, [], false);
+              break;
+            case 'receiver':
+              collectComponent(appChild, manifest.application.receivers, [], false);
+              break;
+            case 'provider':
+              collectComponent(appChild, manifest.application.providers, [], false);
+              break;
+          }
+        }
+        break;
+    }
+  }
+
+  return manifest;
+}
+
+export async function analyzeApkBytes(
+  apkBytes: Uint8Array,
+  meta: { apkUrl?: string; fileName?: string; fileType?: string }
+): Promise<FakeAppReport> {
+  const hashes = await getHashes(apkBytes);
+
+  const unzipped: Record<string, Uint8Array> = unzipSync(apkBytes);
+
+  const manifestFound = findManifestEntry(unzipped);
+  if (!manifestFound) {
+    throw new Error('Invalid package: no AndroidManifest.xml found (not an APK/AAB)');
+  }
 
   let manifest: any = null;
   try {
-    manifest = new ManifestParser(Buffer.from(manifestEntry)).parse();
+    manifest = parseManifestAxml(manifestFound.data);
   } catch (e) {
     throw new Error(`Failed to decode AndroidManifest.xml: ${e instanceof Error ? e.message : e}`);
   }
 
-  // Certificate
+  // Certificate (APK META-INF; AAB META-INF too)
   const certFileName = Object.keys(unzipped).find(isCertFile);
-  const cert = certFileName ? parseCertificate(Buffer.from(unzipped[certFileName])) : null;
+  const cert = certFileName ? parseCertificate(unzipped[certFileName]) : null;
 
   // Permissions
   const usesPermissions: any[] = manifest.usesPermissions || [];
@@ -650,13 +775,18 @@ export async function analyzeApkFromBuffer(apkBuffer: Buffer, apkUrl: string, fi
     .filter((n) => n.startsWith('lib/') && /\.so$/.test(n))
     .map((n) => n.split('/').pop() || n);
 
-  // Dex + strings
+  // Dex + strings (APK: classes*.dex; AAB: base/dex/*.dex)
   const dexBuffers = Object.keys(unzipped)
-    .filter((n) => /^classes\d*\.dex$/i.test(n))
+    .filter((n) => /(^|\/)(classes\d*\.dex)$/i.test(n))
     .map((n) => unzipped[n]);
 
   let allStrings: string[] = [];
-  const scannedEntries = [...dexBuffers, ...Object.keys(unzipped).filter((n) => n.startsWith('assets/') || n === 'resources.arsc').map((n) => unzipped[n])];
+  const scannedEntries = [
+    ...dexBuffers,
+    ...Object.keys(unzipped)
+      .filter((n) => n.startsWith('assets/') || n === 'resources.arsc' || n === 'base/assets/')
+      .map((n) => unzipped[n]),
+  ];
   const MAX_STRINGS = 2_000_000;
   for (const buf of scannedEntries) {
     const strs = extractStrings(buf, 4);
@@ -697,16 +827,17 @@ export async function analyzeApkFromBuffer(apkBuffer: Buffer, apkUrl: string, fi
     components
   );
 
-  const fileType = fileName ? (fileName.endsWith('.ipa') ? 'IPA' : fileName.endsWith('.appx') ? 'APPX' : 'APK') : 'APK';
+  const fileType = meta.fileType || 'APK';
+  const fileName = meta.fileName || (meta.apkUrl ? new URL(meta.apkUrl).pathname.split('/').pop() : undefined) || 'unknown.apk';
 
   return {
-    fileName: fileName || new URL(apkUrl).pathname.split('/').pop() || 'unknown.apk',
+    fileName,
     fileType,
     sha256: hashes.sha256,
     md5: hashes.md5,
     sha1: hashes.sha1,
-    sizeBytes: apkBuffer.length,
-    apkUrl,
+    sizeBytes: apkBytes.length,
+    apkUrl: meta.apkUrl || '',
     appInfo: {
       package: manifest.package || 'unknown',
       versionName: manifest.versionName || '',
@@ -731,9 +862,11 @@ export async function analyzeApkFromBuffer(apkBuffer: Buffer, apkUrl: string, fi
   };
 }
 
-export async function analyzeApkFromUrl(url: string, opts?: AnalyzeOptions): Promise<FakeAppReport> {
-  const apkBuffer = await downloadApk(url);
-  return analyzeApkFromBuffer(apkBuffer, url);
+export async function analyzeApkFromBuffer(apkBuffer: Uint8Array, apkUrl: string, fileName?: string): Promise<FakeAppReport> {
+  return analyzeApkBytes(apkBuffer, { apkUrl, fileName });
 }
 
-export { unzipSync, Unzip };
+export async function analyzeApkFromUrl(url: string, opts?: AnalyzeOptions): Promise<FakeAppReport> {
+  const apkBytes = await downloadApk(url);
+  return analyzeApkBytes(apkBytes, { apkUrl: url });
+}

@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import DomainIntelPanel from '@/components/domain/DomainIntelPanel';
 import UrlSandboxPanel from '@/components/sandbox/UrlSandboxPanel';
 import UrlScannerPanel from '@/components/url/UrlScannerPanel';
+import { analyzeApkBytes } from '@/lib/intel/fakeapp';
 import { 
   Search, Globe, Shield, Bug, FileText, Download, Upload, 
   Trash2, Edit3, Plus, Eye, AlertTriangle, CheckCircle, XCircle,
@@ -1147,6 +1148,38 @@ export default function OSINTPlatform() {
     if (!inputValue) { showFeedback('Enter a direct APK download URL to analyze', 'error'); return; }
     showFeedback(`Downloading and statically analyzing APK...`, 'info');
     await callAPI('/api/osint/fakeapp', { method: 'POST', body: JSON.stringify({ url: inputValue }) });
+  };
+
+  const fakeAppFileRef = useRef<HTMLInputElement>(null);
+  const [fakeAppFileName, setFakeAppFileName] = useState('');
+  const [fakeAppAnalyzing, setFakeAppAnalyzing] = useState(false);
+
+  const handleFakeAppFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFakeAppFileName(file.name);
+    if (fakeAppFileRef.current) fakeAppFileRef.current.value = '';
+  };
+
+  const handleFakeAppUpload = async () => {
+    const file = fakeAppFileRef.current?.files?.[0];
+    if (!file) { showFeedback('Select a file to upload (APK / XAPK / AAB / APKS / IPA / APPX / ZIP)', 'error'); return; }
+    setFakeAppAnalyzing(true);
+    setError(null);
+    showFeedback(`Analyzing "${file.name}" locally in your browser (${(file.size / 1048576).toFixed(1)} MB)...`, 'info');
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const analysis = await analyzeApkBytes(bytes, { apkUrl: 'upload://' + file.name, fileName: file.name });
+      setApiData({ success: true, source: 'Fake-App-Scanner (client-side static analysis)', data: analysis as any, message: `Client-side analysis done — ${analysis.verdict} (${analysis.score}/100). Syncing with CVE correlation...` });
+      showFeedback(`Client-side analysis complete: ${analysis.verdict} (${analysis.score}/100). Syncing report...`, 'success');
+      await callAPI('/api/osint/fakeapp', { method: 'POST', body: JSON.stringify({ action: 'analyze-upload', report: analysis }) });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Upload analysis failed';
+      setError(msg);
+      showFeedback(`Error: ${msg}`, 'error');
+    } finally {
+      setFakeAppAnalyzing(false);
+    }
   };
 
   // IOC CRUD Handlers
@@ -4361,19 +4394,37 @@ export default function OSINTPlatform() {
                 <Smartphone className="w-7 h-7 text-fuchsia-400" /> Fake App Scanner
                 <span className="text-sm font-normal text-gray-400">(MOBSF-style + CVE matching)</span>
               </h2>
-              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-                <div className="flex gap-4">
-                  <div className="flex-1">
-                    <input type="text" placeholder="Direct APK download URL (e.g., https://cdn.example.com/bankapp.apk)"
-                      value={inputValue} onChange={(e) => setInputValue(e.target.value)}
-                      onKeyPress={(e) => e.key === 'Enter' && handleFakeApp()}
-                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-fuchsia-500 focus:outline-none" />
+              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-4">
+                <div>
+                  <p className="text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wide flex items-center gap-2"><UploadCloud className="w-4 h-4 text-fuchsia-400" /> Upload file (analyzed in your browser)</p>
+                  <div className="flex gap-4">
+                    <div className="flex-1">
+                      <input ref={fakeAppFileRef} type="file" accept=".apk,.xapk,.aab,.apks,.ipa,.appx,.zip,application/vnd.android.package-archive" onChange={handleFakeAppFile}
+                        className="w-full text-sm text-gray-400 file:mr-4 file:px-4 file:py-2.5 file:rounded-lg file:border-0 file:bg-fuchsia-600 file:text-white file:font-medium file:cursor-pointer hover:file:bg-fuchsia-700" />
+                    </div>
+                    <button onClick={handleFakeAppUpload} disabled={fakeAppAnalyzing || loading}
+                      className="px-6 py-3 bg-fuchsia-600 hover:bg-fuchsia-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2 shrink-0">
+                      {fakeAppAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />} {fakeAppAnalyzing ? 'Analyzing...' : 'Upload & Analyze'}
+                    </button>
                   </div>
-                  <button onClick={handleFakeApp} disabled={loading} className="px-6 py-3 bg-fuchsia-600 hover:bg-fuchsia-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2">
-                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Smartphone className="w-4 h-4" />} Analyze
-                  </button>
+                  {fakeAppFileName && <p className="text-xs text-fuchsia-300 mt-2 font-mono">Selected: {fakeAppFileName}</p>}
+                  <p className="text-xs text-gray-500 mt-1">APK / XAPK / AAB / APKS / APPX / ZIP are scanned fully client-side — nothing but the report leaves your browser. IPA support: zip container (Info.plist manifest).</p>
                 </div>
-                <p className="text-xs text-gray-500 mt-2">Downloads and statically analyzes a real APK — manifest (AXML), signing certificate, permissions, dex secrets &amp; URLs. Like MobSF.</p>
+                <div className="border-t border-gray-800 pt-4">
+                  <p className="text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wide flex items-center gap-2"><Globe className="w-4 h-4 text-fuchsia-400" /> ...or analyze a download URL</p>
+                  <div className="flex gap-4">
+                    <div className="flex-1">
+                      <input type="text" placeholder="Direct APK download URL (e.g., https://cdn.example.com/bankapp.apk)"
+                        value={inputValue} onChange={(e) => setInputValue(e.target.value)}
+                        onKeyPress={(e) => e.key === 'Enter' && handleFakeApp()}
+                        className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:border-fuchsia-500 focus:outline-none" />
+                    </div>
+                    <button onClick={handleFakeApp} disabled={loading} className="px-6 py-3 bg-fuchsia-600 hover:bg-fuchsia-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2">
+                      {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Smartphone className="w-4 h-4" />} Analyze
+                    </button>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-500">Statically analyzes the app — manifest (AXML), signing certificate, permissions, dex secrets &amp; URLs. Like MobSF.</p>
               </div>
 
               {apiData?.data?.verdict && (

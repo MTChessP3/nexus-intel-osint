@@ -59,21 +59,30 @@ async function correlateCVEs(appAnalysis: FakeAppReport): Promise<any[]> {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { action = 'analyze', url, fileName, brand, site, approvedAppIds } = body;
+    const { action = 'analyze', url, fileName, brand, site, approvedAppIds, report } = body;
 
-    if (action === 'analyze') {
-      if (!url) return NextResponse.json({ success: false, error: 'url is required (direct APK download link)' }, { status: 400 });
-
+    if (action === 'analyze' || action === 'analyze-upload') {
       let analysis: FakeAppReport;
-      if (typeof url === 'string' && url.startsWith('data:')) {
-        // Base64 data URI upload (small files)
-        const base64 = url.split(',')[1] || '';
-        const buf = Buffer.from(base64, 'base64');
-        analysis = await analyzeApkFromBuffer(buf, 'upload://apk', fileName);
-      } else if (typeof url === 'string' && url.startsWith('http')) {
-        analysis = await analyzeApkFromUrl(url, { maxWaitMs: 45000 });
+
+      if (action === 'analyze-upload') {
+        // Client-side analyzed report (browser uploads are too large for the
+        // platform request body, so the browser runs the static analysis and
+        // posts the JSON report for CVE correlation + persistence).
+        if (!report || !report.sha256) return NextResponse.json({ success: false, error: 'report is required (client-side analysis result)' }, { status: 400 });
+        analysis = report as FakeAppReport;
       } else {
-        return NextResponse.json({ success: false, error: 'url must be an http(s) or data: URI' }, { status: 400 });
+        if (!url) return NextResponse.json({ success: false, error: 'url is required (direct APK download link)' }, { status: 400 });
+
+        if (typeof url === 'string' && url.startsWith('data:')) {
+          // Base64 data URI upload (small files)
+          const base64 = url.split(',')[1] || '';
+          const buf = Buffer.from(base64, 'base64');
+          analysis = await analyzeApkFromBuffer(buf, 'upload://apk', fileName);
+        } else if (typeof url === 'string' && url.startsWith('http')) {
+          analysis = await analyzeApkFromUrl(url, { maxWaitMs: 45000 });
+        } else {
+          return NextResponse.json({ success: false, error: 'url must be an http(s) or data: URI' }, { status: 400 });
+        }
       }
 
       const cvEs = await correlateCVEs(analysis);
