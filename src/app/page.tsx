@@ -848,6 +848,8 @@ export default function OSINTPlatform() {
   const [selectedForensics, setSelectedForensics] = useState<any>(null);
   const [attributionExpanded, setAttributionExpanded] = useState(false);
   const [fuzzingExpanded, setFuzzingExpanded] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
+  const [loadConfirm, setLoadConfirm] = useState<{ id: string; name: string } | null>(null);
 
   // Generated Reports History
   const [reports, setReports] = useState<any[]>([]);
@@ -2699,15 +2701,16 @@ export default function OSINTPlatform() {
                           <th className="py-2 pr-3">Risk</th>
                           <th className="py-2 pr-3">Kits</th>
                           <th className="py-2 pr-3">DBs</th>
-                          <th className="py-2 pr-3"></th>
+                          <th className="py-2 pr-3">Actions</th>
                         </tr>
                       </thead>
                       <tbody>
                         {forensicsHistory.slice(0, 10).map((analysis: any, idx: number) => {
                           const isCurrentlyLoaded = selectedForensics?.id === analysis.id || selectedForensics?.name === analysis.name;
+                          const displayName = analysis.domain || analysis.name?.split('_')[1] || '—';
                           return (
                             <tr key={idx} className={`border-b border-gray-800/50 ${isCurrentlyLoaded ? 'bg-blue-500/10' : 'hover:bg-gray-800/40'}`}>
-                              <td className="py-2 pr-3 font-mono text-red-300">{analysis.domain || analysis.name?.split('_')[1] || '—'}</td>
+                              <td className="py-2 pr-3 font-mono text-red-300">{displayName}</td>
                               <td className="py-2 pr-3 font-mono text-xs text-gray-400">{analysis.ip || '—'}</td>
                               <td className="py-2 pr-3 text-xs text-gray-400">{new Date(analysis.created).toLocaleString()}</td>
                               <td className="py-2 pr-3">
@@ -2724,30 +2727,88 @@ export default function OSINTPlatform() {
                                 {analysis.databases > 0 ? <span className="px-1.5 py-0.5 bg-orange-500/20 text-orange-400 rounded text-[10px] font-bold">{analysis.databases}</span> : <span className="text-gray-600">0</span>}
                               </td>
                               <td className="py-2 pr-3 text-right">
-                                {isCurrentlyLoaded ? (
-                                  <span className="text-xs px-2 py-1 bg-blue-600/20 text-blue-400 rounded flex items-center gap-1">
-                                    <CheckCircle className="w-3 h-3" /> Loaded
-                                  </span>
-                                ) : (
+                                <div className="flex items-center justify-end gap-1">
+                                  {isCurrentlyLoaded ? (
+                                    <span className="text-xs px-2 py-1 bg-blue-600/20 text-blue-400 rounded flex items-center gap-1">
+                                      <CheckCircle className="w-3 h-3" /> Loaded
+                                    </span>
+                                  ) : (
+                                    <button
+                                      onClick={() => setLoadConfirm({ id: analysis.id, name: displayName })}
+                                      className="text-xs px-2 py-1 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded"
+                                    >Open</button>
+                                  )}
                                   <button
-                                    onClick={async () => {
-                                      const confirmReload = window.confirm(`Load analysis for ${analysis.domain || analysis.name}?`);
-                                      if (!confirmReload) return;
-                                      showFeedback('Loading forensic resource...', 'info');
-                                      const res = await fetch(`/api/osint/forensics?action=get&id=${analysis.id}`);
-                                      const data = await res.json();
-                                      if (data.success) { setApiData({ success: true, data: data.data }); setSelectedForensics(data.data); }
-                                      else showFeedback(`Error: ${data.error || 'not found'}`, 'error');
-                                    }}
-                                    className="text-xs px-2 py-1 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded"
-                                  >Open</button>
-                                )}
+                                    onClick={() => setDeleteConfirm({ id: analysis.id, name: displayName })}
+                                    className="text-xs px-2 py-1 bg-gray-600/20 hover:bg-gray-600/40 text-gray-400 rounded"
+                                    title="Delete this analysis"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                </div>
                               </td>
                             </tr>
                           );
                         })}
                       </tbody>
                     </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Load Confirmation Modal */}
+              {loadConfirm && (
+                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setLoadConfirm(null)}>
+                  <div className="bg-gray-900 border border-gray-700 rounded-xl max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
+                    <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><FolderOpen className="w-5 h-5 text-yellow-400" /> Load Analysis</h3>
+                    <p className="text-gray-300 mb-4">Load forensic analysis for <span className="font-mono text-red-300">{loadConfirm.name}</span>?</p>
+                    <p className="text-xs text-gray-500 mb-6">This will replace the current view with the stored results.</p>
+                    <div className="flex justify-end gap-2">
+                      <button onClick={() => setLoadConfirm(null)} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg">Cancel</button>
+                      <button
+                        onClick={async () => {
+                          const id = loadConfirm.id;
+                          setLoadConfirm(null);
+                          showFeedback('Loading forensic resource...', 'info');
+                          const res = await fetch(`/api/osint/forensics?action=get&id=${id}`);
+                          const data = await res.json();
+                          if (data.success) { setApiData({ success: true, data: data.data }); setSelectedForensics(data.data); }
+                          else showFeedback(`Error: ${data.error || 'not found'}`, 'error');
+                        }}
+                        className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg"
+                      >Load</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Delete Confirmation Modal */}
+              {deleteConfirm && (
+                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setDeleteConfirm(null)}>
+                  <div className="bg-gray-900 border border-gray-700 rounded-xl max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
+                    <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><Trash2 className="w-5 h-5 text-red-400" /> Delete Analysis</h3>
+                    <p className="text-gray-300 mb-4">Delete forensic analysis for <span className="font-mono text-red-300">{deleteConfirm.name}</span>?</p>
+                    <p className="text-xs text-gray-500 mb-6">This action cannot be undone. The resource will be removed from history.</p>
+                    <div className="flex justify-end gap-2">
+                      <button onClick={() => setDeleteConfirm(null)} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg">Cancel</button>
+                      <button
+                        onClick={async () => {
+                          const id = deleteConfirm.id;
+                          setDeleteConfirm(null);
+                          showFeedback('Deleting forensic resource...', 'info');
+                          const res = await fetch(`/api/osint/forensics?action=delete&id=${id}`, { method: 'DELETE' });
+                          const data = await res.json();
+                          if (data.success) {
+                            showFeedback('Analysis deleted', 'success');
+                            loadForensicsHistory();
+                            if (selectedForensics?.id === id) { setApiData(null); setSelectedForensics(null); }
+                          } else {
+                            showFeedback(`Error: ${data.error || 'failed'}`, 'error');
+                          }
+                        }}
+                        className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg"
+                      >Delete</button>
+                    </div>
                   </div>
                 </div>
               )}
