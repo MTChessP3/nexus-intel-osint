@@ -725,6 +725,58 @@ const generateTimelineData = (): TimelineEvent[] => {
   return events.sort((a, b) => new Date(`2000/01/01 ${b.time}`).getTime() - new Date(`2000/01/01 ${a.time}`).getTime());
 };
 
+// ==================== NAVIGATION STRUCTURE ====================
+interface NavItem { id: TabType; label: string; icon: React.ComponentType<{ className?: string }>; color: string; badge?: string; }
+interface NavCategory { name: string; emoji: string; items: NavItem[]; }
+
+const NAV_CATEGORIES: NavCategory[] = [
+  {
+    name: 'Infrastructure & Network', emoji: '🌐',
+    items: [
+      { id: 'ip', label: 'IP Intel', icon: Globe, color: 'text-green-400' },
+      { id: 'domain', label: 'Domain Intel', icon: Server, color: 'text-purple-400' },
+      { id: 'forensics', label: 'Domain Forensics', icon: Camera, color: 'text-red-400', badge: 'NEW' },
+      { id: 'dnsdump', label: 'DNS Dump', icon: Network, color: 'text-teal-400', badge: 'NEW' },
+      { id: 'url', label: 'URL Scanner', icon: ExternalLink, color: 'text-yellow-400' },
+      { id: 'sandbox', label: 'URL Sandbox', icon: Zap, color: 'text-lime-400', badge: 'NEW' },
+    ],
+  },
+  {
+    name: 'OSINT & Surface Monitoring', emoji: '🕵️',
+    items: [
+      { id: 'darkweb', label: 'Deep & Dark Web', icon: Skull, color: 'text-red-500', badge: 'NEW' },
+      { id: 'social', label: 'Telegram & Discord Monitor', icon: MessageSquare, color: 'text-blue-400', badge: 'NEW' },
+      { id: 'exec', label: 'Executive OSINT', icon: ShieldUser, color: 'text-amber-400', badge: 'NEW' },
+      { id: 'brand', label: 'Brand Protection', icon: ShieldAlert, color: 'text-rose-400', badge: 'NEW' },
+      { id: 'fakeapp', label: 'Fake App Scanner', icon: Smartphone, color: 'text-fuchsia-400', badge: 'NEW' },
+    ],
+  },
+  {
+    name: 'Technical Analysis & Vulnerabilities', emoji: '🔬',
+    items: [
+      { id: 'hash', label: 'Hash Lookup', icon: Fingerprint, color: 'text-cyan-400' },
+      { id: 'cve', label: 'CVE Database', icon: Shield, color: 'text-orange-400' },
+      { id: 'mobile', label: 'Mobile Security', icon: Smartphone, color: 'text-indigo-400', badge: 'NEW' },
+    ],
+  },
+  {
+    name: 'Threat Intelligence & AI', emoji: '⚡',
+    items: [
+      { id: 'threats', label: 'Threat Feeds', icon: AlertTriangle, color: 'text-amber-400' },
+      { id: 'iocs', label: 'IOC Manager', icon: Database, color: 'text-emerald-400' },
+      { id: 'sources', label: 'Intelligence Sources', icon: Wifi, color: 'text-sky-400' },
+      { id: 'ai', label: 'AI Analyst', icon: Cpu, color: 'text-pink-400' },
+    ],
+  },
+  {
+    name: 'Reporting & Exports', emoji: '📊',
+    items: [
+      { id: 'reports', label: 'Reports', icon: FileText, color: 'text-violet-400' },
+      { id: 'export', label: 'Export Data', icon: Download, color: 'text-teal-400' },
+    ],
+  },
+];
+
 // ==================== MAIN COMPONENT ====================
 export default function OSINTPlatform() {
   // Core State
@@ -759,6 +811,15 @@ export default function OSINTPlatform() {
   const [timelineData, setTimelineData] = useState<TimelineEvent[]>(generateTimelineData());
   const [timelineRunning, setTimelineRunning] = useState(true);
   const timelineInterval = useRef<NodeJS.Timeout | null>(null);
+
+  // Sidebar Category State (collapsed by default except the active category)
+  const [collapsedCats, setCollapsedCats] = useState<Record<string, boolean>>({});
+
+  const isCatCollapsed = (cat: NavCategory) =>
+    cat.items.some((i) => i.id === activeTab) ? false : collapsedCats[cat.name] ?? true;
+
+  const toggleCat = (cat: NavCategory) =>
+    setCollapsedCats((prev) => ({ ...prev, [cat.name]: !isCatCollapsed(cat) }));
   
   // Report Config State
   const [reportConfig, setReportConfig] = useState({
@@ -1152,17 +1213,17 @@ export default function OSINTPlatform() {
 
   const fakeAppFileRef = useRef<HTMLInputElement>(null);
   const [fakeAppFileName, setFakeAppFileName] = useState('');
+  const [fakeAppFile, setFakeAppFile] = useState<File | null>(null);
   const [fakeAppAnalyzing, setFakeAppAnalyzing] = useState(false);
 
   const handleFakeAppFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setFakeAppFileName(file.name);
-    if (fakeAppFileRef.current) fakeAppFileRef.current.value = '';
+    const file = e.target.files?.[0] || null;
+    setFakeAppFile(file);
+    setFakeAppFileName(file ? file.name : '');
   };
 
   const handleFakeAppUpload = async () => {
-    const file = fakeAppFileRef.current?.files?.[0];
+    const file = fakeAppFile;
     if (!file) { showFeedback('Select a file to upload (APK / XAPK / AAB / APKS / IPA / APPX / ZIP)', 'error'); return; }
     setFakeAppAnalyzing(true);
     setError(null);
@@ -1628,47 +1689,56 @@ export default function OSINTPlatform() {
         {/* Sidebar Navigation */}
         <nav className="w-64 min-h-screen bg-gray-900 border-r border-gray-800 p-4 sticky top-[65px] h-[calc(100vh-65px)] overflow-y-auto">
           <div className="space-y-1">
-            {[
-              { id: 'dashboard', icon: BarChart3, label: 'Dashboard', color: 'text-blue-400' },
-              { id: 'ip', icon: Globe, label: 'IP Intel', color: 'text-green-400' },
-              { id: 'domain', icon: Server, label: 'Domain Intel', color: 'text-purple-400' },
-              { id: 'forensics', icon: Camera, label: 'Domain Forensics', color: 'text-red-400', badge: 'NEW' },
-              { id: 'url', icon: ExternalLink, label: 'URL Scanner', color: 'text-yellow-400' },
-              { id: 'hash', icon: Fingerprint, label: 'Hash Lookup', color: 'text-cyan-400' },
-              { id: 'cve', icon: Shield, label: 'CVE Database', color: 'text-orange-400' },
-              { id: 'ai', icon: Cpu, label: 'AI Analyst', color: 'text-pink-400' },
-              { id: 'darkweb', icon: Skull, label: 'Dark Web Intel', color: 'text-red-500', badge: 'NEW' },
-              { id: 'mobile', icon: Smartphone, label: 'Mobile Security', color: 'text-indigo-400', badge: 'NEW' },
-              { id: 'threats', icon: AlertTriangle, label: 'Threat Feeds', color: 'text-amber-400' },
-              { id: 'iocs', icon: Database, label: 'IOC Manager', color: 'text-emerald-400' },
-              { id: 'export', icon: Download, label: 'Export Data', color: 'text-teal-400' },
-              { id: 'sources', icon: Wifi, label: 'Intelligence Sources', color: 'text-sky-400' },
-              { id: 'reports', icon: FileText, label: 'Reports', color: 'text-violet-400' },
-              { id: 'brand', icon: Shield, label: 'Brand Protection', color: 'text-rose-400', badge: 'NEW' },
-              { id: 'sandbox', icon: Zap, label: 'URL Sandbox', color: 'text-lime-400', badge: 'NEW' },
-              { id: 'dnsdump', icon: Network, label: 'DNS Dump', color: 'text-teal-400', badge: 'NEW' },
-              { id: 'social', icon: MessageSquare, label: 'TG/Discord Monitor', color: 'text-blue-400', badge: 'NEW' },
-               { id: 'exec', icon: ShieldUser, label: 'Executive OSINT', color: 'text-amber-400', badge: 'NEW' },
-              { id: 'fakeapp', icon: Smartphone, label: 'Fake App Scanner', color: 'text-fuchsia-400', badge: 'NEW' },
-            ].map(({ id, icon: Icon, label, color, badge }) => (
-              <button
-                key={id}
-                onClick={() => { setActiveTab(id as TabType); showFeedback(`Loaded ${label}`); }}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all relative ${
-                  activeTab === id
-                    ? 'bg-gradient-to-r from-red-600/20 to-orange-600/20 border border-red-500/50 text-white'
-                    : 'text-gray-300 hover:bg-gray-800 hover:text-white'
-                }`}
-              >
-                <Icon className={`w-4 h-4 ${activeTab === id ? '' : color}`} />
-                <span>{label}</span>
-                {badge && (
-                  <span className="ml-auto px-1.5 py-0.5 text-[10px] font-bold bg-red-500 text-white rounded">
-                    {badge}
-                  </span>
-                )}
-              </button>
-            ))}
+            {/* Dashboard — always visible */}
+            <button
+              onClick={() => { setActiveTab('dashboard'); showFeedback('Loaded Dashboard'); }}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all relative ${
+                activeTab === 'dashboard'
+                  ? 'bg-gradient-to-r from-red-600/20 to-orange-600/20 border border-red-500/50 text-white'
+                  : 'text-gray-300 hover:bg-gray-800 hover:text-white'
+              }`}
+            >
+              <BarChart3 className={`w-4 h-4 ${activeTab === 'dashboard' ? '' : 'text-blue-400'}`} />
+              <span>Dashboard</span>
+            </button>
+
+            {/* Category groups (collapsible) */}
+            {NAV_CATEGORIES.map((cat) => {
+              const collapsed = isCatCollapsed(cat);
+              return (
+                <div key={cat.name}>
+                  <button
+                    onClick={() => toggleCat(cat)}
+                    className="w-full flex items-center gap-2 px-3 py-2 mt-2 rounded-lg text-[11px] font-bold uppercase tracking-wider text-gray-500 hover:text-gray-300 hover:bg-gray-800/60 transition-all"
+                  >
+                    <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${collapsed ? '-rotate-90' : ''}`} />
+                    <span>{cat.emoji}</span>
+                    <span>{cat.name}</span>
+                  </button>
+                  <div className={`overflow-hidden transition-all duration-300 ease-in-out ${collapsed ? 'max-h-0 opacity-0' : 'max-h-[600px] opacity-100 mt-1'}`}>
+                    {cat.items.map(({ id, icon: Icon, label, color, badge }) => (
+                      <button
+                        key={id}
+                        onClick={() => { setActiveTab(id); showFeedback(`Loaded ${label}`); }}
+                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all relative ${
+                          activeTab === id
+                            ? 'bg-gradient-to-r from-red-600/20 to-orange-600/20 border border-red-500/50 text-white'
+                            : 'text-gray-300 hover:bg-gray-800 hover:text-white'
+                        }`}
+                      >
+                        <Icon className={`w-4 h-4 ${activeTab === id ? '' : color}`} />
+                        <span>{label}</span>
+                        {badge && (
+                          <span className="ml-auto px-1.5 py-0.5 text-[10px] font-bold bg-red-500 text-white rounded">
+                            {badge}
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
           </div>
 
           {/* Quick Stats */}
@@ -4397,18 +4467,18 @@ export default function OSINTPlatform() {
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-4">
                 <div>
                   <p className="text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wide flex items-center gap-2"><UploadCloud className="w-4 h-4 text-fuchsia-400" /> Upload file (analyzed in your browser)</p>
-                  <div className="flex gap-4">
+                  <div className="flex gap-4 items-center">
                     <div className="flex-1">
                       <input ref={fakeAppFileRef} type="file" accept=".apk,.xapk,.aab,.apks,.ipa,.appx,.zip,application/vnd.android.package-archive" onChange={handleFakeAppFile}
                         className="w-full text-sm text-gray-400 file:mr-4 file:px-4 file:py-2.5 file:rounded-lg file:border-0 file:bg-fuchsia-600 file:text-white file:font-medium file:cursor-pointer hover:file:bg-fuchsia-700" />
                     </div>
-                    <button onClick={handleFakeAppUpload} disabled={fakeAppAnalyzing || loading}
-                      className="px-6 py-3 bg-fuchsia-600 hover:bg-fuchsia-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2 shrink-0">
-                      {fakeAppAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />} {fakeAppAnalyzing ? 'Analyzing...' : 'Upload & Analyze'}
+                    <button onClick={handleFakeAppUpload} disabled={fakeAppAnalyzing || loading || !fakeAppFile}
+                      className="px-6 py-3 bg-fuchsia-600 hover:bg-fuchsia-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg font-medium flex items-center gap-2 shrink-0">
+                      {fakeAppAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />} {fakeAppAnalyzing ? 'Analyzing...' : 'Analizar archivo'}
                     </button>
                   </div>
                   {fakeAppFileName && <p className="text-xs text-fuchsia-300 mt-2 font-mono">Selected: {fakeAppFileName}</p>}
-                  <p className="text-xs text-gray-500 mt-1">APK / XAPK / AAB / APKS / APPX / ZIP are scanned fully client-side — nothing but the report leaves your browser. IPA support: zip container (Info.plist manifest).</p>
+                  <p className="text-xs text-gray-500 mt-1">Choose the file and click <span className="text-fuchsia-400 font-semibold">Analizar archivo</span>. APK / XAPK / AAB / APKS / APPX / ZIP are scanned fully client-side — nothing but the report leaves your browser.</p>
                 </div>
                 <div className="border-t border-gray-800 pt-4">
                   <p className="text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wide flex items-center gap-2"><Globe className="w-4 h-4 text-fuchsia-400" /> ...or analyze a download URL</p>
