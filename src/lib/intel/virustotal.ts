@@ -82,13 +82,28 @@ export async function lookupVirusTotalUrl(url: string): Promise<null | {
 }> {
   if (!vtEnabled()) return null;
   try {
-    const res = await fetch(`${VT_BASE}/urls/${encodeURIComponent(url)}`, {
+    // Try exact URL object id first (URLs are keyed by canonical id), then fall
+    // back to the search endpoint so URLs analyzed under a slightly different
+    // canonical form are still detected as previously analyzed.
+    let data: any = null;
+    const exact = await fetch(`${VT_BASE}/urls/${encodeURIComponent(url)}`, {
       headers: vtAuth({}),
       signal: AbortSignal.timeout(12000),
     });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const attrs = data.data?.attributes;
+    if (exact.ok) {
+      const d = await exact.json();
+      data = d.data;
+    } else {
+      const search = await fetch(`${VT_BASE}/search?query=${encodeURIComponent(`url:${url}`)}&limit=1`, {
+        headers: vtAuth({}),
+        signal: AbortSignal.timeout(12000),
+      });
+      if (search.ok) {
+        const d = await search.json();
+        data = d.data?.[0] || null;
+      }
+    }
+    const attrs = data?.attributes;
     if (!attrs) return null;
     const stats = attrs.last_analysis_stats || EMPTY_STATS;
     const vTtl = stats.malicious + stats.suspicious;
