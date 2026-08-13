@@ -846,6 +846,8 @@ export default function OSINTPlatform() {
   // Forensics Results
   const [forensicsHistory, setForensicsHistory] = useState<any[]>([]);
   const [selectedForensics, setSelectedForensics] = useState<any>(null);
+  const [attributionExpanded, setAttributionExpanded] = useState(false);
+  const [fuzzingExpanded, setFuzzingExpanded] = useState(false);
 
   // Generated Reports History
   const [reports, setReports] = useState<any[]>([]);
@@ -2701,38 +2703,49 @@ export default function OSINTPlatform() {
                         </tr>
                       </thead>
                       <tbody>
-                        {forensicsHistory.slice(0, 10).map((analysis: any, idx: number) => (
-                          <tr key={idx} className="border-b border-gray-800/50 hover:bg-gray-800/40">
-                            <td className="py-2 pr-3 font-mono text-red-300">{analysis.domain || analysis.name?.split('_')[1] || '—'}</td>
-                            <td className="py-2 pr-3 font-mono text-xs text-gray-400">{analysis.ip || '—'}</td>
-                            <td className="py-2 pr-3 text-xs text-gray-400">{new Date(analysis.created).toLocaleString()}</td>
-                            <td className="py-2 pr-3">
-                              <span className={`px-2 py-0.5 rounded text-xs font-bold ${
-                                analysis.riskLevel === 'CRITICAL' ? 'bg-red-500 text-white' :
-                                analysis.riskLevel === 'HIGH' ? 'bg-orange-500 text-black' :
-                                analysis.riskLevel === 'MEDIUM' ? 'bg-yellow-500 text-black' : 'bg-green-500/20 text-green-400'
-                              }`}>{analysis.riskLevel} ({analysis.score})</span>
-                            </td>
-                            <td className="py-2 pr-3 text-xs">
-                              {analysis.kits > 0 ? <span className="px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded text-[10px] font-bold">{analysis.kits}</span> : <span className="text-gray-600">0</span>}
-                            </td>
-                            <td className="py-2 pr-3 text-xs">
-                              {analysis.databases > 0 ? <span className="px-1.5 py-0.5 bg-orange-500/20 text-orange-400 rounded text-[10px] font-bold">{analysis.databases}</span> : <span className="text-gray-600">0</span>}
-                            </td>
-                            <td className="py-2 pr-3 text-right">
-                              <button
-                                onClick={async () => {
-                                  showFeedback('Loading forensic resource...', 'info');
-                                  const res = await fetch(`/api/osint/forensics?action=get&id=${analysis.id}`);
-                                  const data = await res.json();
-                                  if (data.success) { setApiData({ success: true, data: data.data }); setSelectedForensics(data.data); }
-                                  else showFeedback(`Error: ${data.error || 'not found'}`, 'error');
-                                }}
-                                className="text-xs px-2 py-1 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded"
-                              >Open</button>
-                            </td>
-                          </tr>
-                        ))}
+                        {forensicsHistory.slice(0, 10).map((analysis: any, idx: number) => {
+                          const isCurrentlyLoaded = selectedForensics?.id === analysis.id || selectedForensics?.name === analysis.name;
+                          return (
+                            <tr key={idx} className={`border-b border-gray-800/50 ${isCurrentlyLoaded ? 'bg-blue-500/10' : 'hover:bg-gray-800/40'}`}>
+                              <td className="py-2 pr-3 font-mono text-red-300">{analysis.domain || analysis.name?.split('_')[1] || '—'}</td>
+                              <td className="py-2 pr-3 font-mono text-xs text-gray-400">{analysis.ip || '—'}</td>
+                              <td className="py-2 pr-3 text-xs text-gray-400">{new Date(analysis.created).toLocaleString()}</td>
+                              <td className="py-2 pr-3">
+                                <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                                  analysis.riskLevel === 'CRITICAL' ? 'bg-red-500 text-white' :
+                                  analysis.riskLevel === 'HIGH' ? 'bg-orange-500 text-black' :
+                                  analysis.riskLevel === 'MEDIUM' ? 'bg-yellow-500 text-black' : 'bg-green-500/20 text-green-400'
+                                }`}>{analysis.riskLevel} ({analysis.score})</span>
+                              </td>
+                              <td className="py-2 pr-3 text-xs">
+                                {analysis.kits > 0 ? <span className="px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded text-[10px] font-bold">{analysis.kits}</span> : <span className="text-gray-600">0</span>}
+                              </td>
+                              <td className="py-2 pr-3 text-xs">
+                                {analysis.databases > 0 ? <span className="px-1.5 py-0.5 bg-orange-500/20 text-orange-400 rounded text-[10px] font-bold">{analysis.databases}</span> : <span className="text-gray-600">0</span>}
+                              </td>
+                              <td className="py-2 pr-3 text-right">
+                                {isCurrentlyLoaded ? (
+                                  <span className="text-xs px-2 py-1 bg-blue-600/20 text-blue-400 rounded flex items-center gap-1">
+                                    <CheckCircle className="w-3 h-3" /> Loaded
+                                  </span>
+                                ) : (
+                                  <button
+                                    onClick={async () => {
+                                      const confirmReload = window.confirm(`Load analysis for ${analysis.domain || analysis.name}?`);
+                                      if (!confirmReload) return;
+                                      showFeedback('Loading forensic resource...', 'info');
+                                      const res = await fetch(`/api/osint/forensics?action=get&id=${analysis.id}`);
+                                      const data = await res.json();
+                                      if (data.success) { setApiData({ success: true, data: data.data }); setSelectedForensics(data.data); }
+                                      else showFeedback(`Error: ${data.error || 'not found'}`, 'error');
+                                    }}
+                                    className="text-xs px-2 py-1 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded"
+                                  >Open</button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -2860,13 +2873,20 @@ export default function OSINTPlatform() {
                     </div>
                   )}
 
-                  {/* Attribution */}
-                  {apiData.data.attribution && (
-                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                      <h3 className="font-semibold mb-3 flex items-center gap-2">
-                        <Users className="w-5 h-5 text-purple-400" /> Threat Actor Attribution
-                      </h3>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                   {/* Attribution */}
+                   {apiData.data.attribution && (
+                     <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                       <button 
+                         onClick={() => setAttributionExpanded(!attributionExpanded)}
+                         className="w-full flex items-center justify-between gap-2 mb-3"
+                       >
+                         <h3 className="font-semibold flex items-center gap-2">
+                           <Users className="w-5 h-5 text-purple-400" /> Threat Actor Attribution
+                         </h3>
+                         <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${attributionExpanded ? 'rotate-180' : ''}`} />
+                       </button>
+                       {attributionExpanded && (
+                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
                         <div>
                           <p className="text-gray-500 mb-1">Emails</p>
                           <div className="flex flex-wrap gap-1">
@@ -2915,60 +2935,95 @@ export default function OSINTPlatform() {
                             )) : <span className="text-gray-600">none</span>}
                           </div>
                         </div>
-                      </div>
+                        </div>
+                      )}
                     </div>
                   )}
 
-                  {/* Fuzzing Tree (explorable) */}
-                  {apiData.data.fuzzingTree?.length > 0 && (
-                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                      <div className="flex items-center justify-between mb-3">
-                        <h3 className="font-semibold flex items-center gap-2">
-                          <FolderOpen className="w-5 h-5 text-yellow-400" /> Fuzzing Tree ({apiData.data.fuzzingTree.length} paths probed)
-                          <span className="text-xs text-gray-500 font-normal">directory discovery</span>
-                        </h3>
-                      </div>
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="border-b border-gray-800">
-                              <th className="text-left py-2 px-3 text-gray-400">Path</th>
-                              <th className="text-left py-2 px-3 text-gray-400">Status</th>
-                              <th className="text-left py-2 px-3 text-gray-400">Size</th>
-                              <th className="text-left py-2 px-3 text-gray-400">Type</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {apiData.data.fuzzingTree.map((dir: any, idx: number) => (
-                              <tr key={idx} className="border-b border-gray-800/50 hover:bg-gray-800/40">
-                                <td className="py-2 px-3">
-                                  <div className="flex items-center gap-2">
-                                    {dir.status === 200 || dir.status === 403
-                                      ? <FolderOpen className="w-3.5 h-3.5 text-yellow-500 shrink-0" />
-                                      : <ChevronRight className="w-3.5 h-3.5 text-gray-600 shrink-0" />}
-                                    <span className="font-mono text-xs">{dir.path}</span>
-                                    {dir.sensitive && dir.status === 200 && (
-                                      <span className="px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded text-[10px] font-bold">EXPOSED</span>
-                                    )}
-                                  </div>
-                                </td>
-                                <td className="py-2 px-3">
-                                  <span className={`px-2 py-0.5 rounded text-xs ${
-                                    dir.status === 200 ? 'bg-green-500/20 text-green-400' :
-                                    dir.status === 403 ? 'bg-red-500/20 text-red-400' :
-                                    dir.status === 301 || dir.status === 302 ? 'bg-yellow-500/20 text-yellow-400' :
-                                    dir.status === 404 ? 'bg-gray-800 text-gray-500' : 'bg-gray-700 text-gray-400'
-                                  }`}>{dir.status}</span>
-                                </td>
-                                <td className="py-2 px-3 text-xs text-gray-400">{dir.size ? `${(dir.size / 1024).toFixed(1)} KB` : '—'}</td>
-                                <td className="py-2 px-3 text-xs text-gray-400">{dir.type || '—'}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
+                     {/* Fuzzing Tree (summarized, expandable) */}
+                   {apiData.data.fuzzingTree?.length > 0 && (
+                     <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                       <button
+                         onClick={() => setFuzzingExpanded(!fuzzingExpanded)}
+                         className="w-full flex items-center justify-between gap-2 mb-3"
+                       >
+                         <div className="flex items-center gap-2">
+                           <h3 className="font-semibold flex items-center gap-2">
+                             <FolderOpen className="w-5 h-5 text-yellow-400" /> Fuzzing Tree ({apiData.data.fuzzingTree.length} paths probed)
+                             <span className="text-xs text-gray-500 font-normal">directory discovery</span>
+                           </h3>
+                         </div>
+                         <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${fuzzingExpanded ? 'rotate-180' : ''}`} />
+                       </button>
+                       {/* Summary stats */}
+                       <div className="flex flex-wrap gap-4 mb-4 text-xs">
+                         {(() => {
+                           const tree = apiData.data.fuzzingTree;
+                           const counts = {
+                             total: tree.length,
+                             ok: tree.filter((d: any) => d.status === 200).length,
+                             forbidden: tree.filter((d: any) => d.status === 403).length,
+                             redirect: tree.filter((d: any) => d.status === 301 || d.status === 302).length,
+                             notFound: tree.filter((d: any) => d.status === 404).length,
+                             exposed: tree.filter((d: any) => d.sensitive && d.status === 200).length,
+                             other: tree.filter((d: any) => ![200, 403, 301, 302, 404].includes(d.status)).length,
+                           };
+                           return (
+                             <>
+                               <span className="px-2 py-1 bg-gray-800 rounded border border-gray-700"><span className="text-green-400 font-bold">{counts.ok}</span> 200 OK</span>
+                               <span className="px-2 py-1 bg-gray-800 rounded border border-gray-700"><span className="text-red-400 font-bold">{counts.forbidden}</span> 403 Forbidden</span>
+                               <span className="px-2 py-1 bg-gray-800 rounded border border-gray-700"><span className="text-yellow-400 font-bold">{counts.redirect}</span> Redirect</span>
+                               <span className="px-2 py-1 bg-gray-800 rounded border border-gray-700"><span className="text-gray-500 font-bold">{counts.notFound}</span> 404</span>
+                               {counts.exposed > 0 && <span className="px-2 py-1 bg-red-500/20 rounded border border-red-500/40"><span className="text-red-400 font-bold">{counts.exposed}</span> EXPOSED</span>}
+                               {counts.other > 0 && <span className="px-2 py-1 bg-gray-800 rounded border border-gray-700"><span className="text-gray-400 font-bold">{counts.other}</span> Other</span>}
+                             </>
+                           );
+                         })()}
+                       </div>
+                       {/* Detailed table (only when expanded) */}
+                       {fuzzingExpanded && (
+                         <div className="overflow-x-auto">
+                           <table className="w-full text-sm">
+                             <thead>
+                               <tr className="border-b border-gray-800">
+                                 <th className="text-left py-2 px-3 text-gray-400">Path</th>
+                                 <th className="text-left py-2 px-3 text-gray-400">Status</th>
+                                 <th className="text-left py-2 px-3 text-gray-400">Size</th>
+                                 <th className="text-left py-2 px-3 text-gray-400">Type</th>
+                               </tr>
+                             </thead>
+                             <tbody>
+                               {apiData.data.fuzzingTree.map((dir: any, idx: number) => (
+                                 <tr key={idx} className="border-b border-gray-800/50 hover:bg-gray-800/40">
+                                   <td className="py-2 px-3">
+                                     <div className="flex items-center gap-2">
+                                       {dir.status === 200 || dir.status === 403
+                                         ? <FolderOpen className="w-3.5 h-3.5 text-yellow-500 shrink-0" />
+                                         : <ChevronRight className="w-3.5 h-3.5 text-gray-600 shrink-0" />}
+                                       <span className="font-mono text-xs">{dir.path}</span>
+                                       {dir.sensitive && dir.status === 200 && (
+                                         <span className="px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded text-[10px] font-bold">EXPOSED</span>
+                                       )}
+                                     </div>
+                                   </td>
+                                   <td className="py-2 px-3">
+                                     <span className={`px-2 py-0.5 rounded text-xs ${
+                                       dir.status === 200 ? 'bg-green-500/20 text-green-400' :
+                                       dir.status === 403 ? 'bg-red-500/20 text-red-400' :
+                                       dir.status === 301 || dir.status === 302 ? 'bg-yellow-500/20 text-yellow-400' :
+                                       dir.status === 404 ? 'bg-gray-800 text-gray-500' : 'bg-gray-700 text-gray-400'
+                                     }`}>{dir.status}</span>
+                                   </td>
+                                   <td className="py-2 px-3 text-xs text-gray-400">{dir.size ? `${(dir.size / 1024).toFixed(1)} KB` : '—'}</td>
+                                   <td className="py-2 px-3 text-xs text-gray-400">{dir.type || '—'}</td>
+                                 </tr>
+                               ))}
+                             </tbody>
+                           </table>
+                         </div>
+                       )}
+                     </div>
+                   )}
 
                   {/* Infrastructure graph */}
                   {apiData.data.infrastructure && (
