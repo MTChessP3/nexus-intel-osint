@@ -2891,58 +2891,21 @@ export default function OSINTPlatform() {
                      </div>
                    )}
 
-                   {/* Resource Tree (Live Crawl) - Interactive */}
-                   {apiData.data.resourceTree && (
-                     <div className="bg-gray-900 border border-blue-500/30 rounded-xl p-5">
-                       <h3 className="font-semibold mb-3 flex items-center gap-2">
-                         <FileCode className="w-5 h-5 text-blue-400" /> Resource Tree — Live Crawl (gospider-style)
-                         <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded">
-                           {(() => { let c=0; const count=(n:any)=>{c++; n.children?.forEach(count); }; count(apiData.data.resourceTree); return c; })()} nodes
-                         </span>
-                       </h3>
-                       <p className="text-xs text-gray-500 mb-3">Interactive tree of crawled pages, scripts, resources, redirects & fuzz hits. Click to expand.</p>
-                       <div className="max-h-[400px] overflow-auto space-y-1">
-                         {(() => {
-                           const renderNode = (node: any, indent = 0): React.ReactNode => {
-                             const typeIcon = {
-                               page: <Globe2 className="w-3.5 h-3.5 text-blue-400" />,
-                               script: <FileCode className="w-3.5 h-3.5 text-yellow-400" />,
-                               style: <FileCode className="w-3.5 h-3.5 text-pink-400" />,
-                               image: <Camera className="w-3.5 h-3.5 text-green-400" />,
-                               font: <FileCode className="w-3.5 h-3.5 text-purple-400" />,
-                               document: <FileText className="w-3.5 h-3.5 text-orange-400" />,
-                               redirect: <ArrowRight className="w-3.5 h-3.5 text-yellow-400" />,
-                               fuzz: <FolderOpen className="w-3.5 h-3.5 text-red-400" />,
-                               other: <FileText className="w-3.5 h-3.5 text-gray-400" />,
-                             };
-                             const statusColor = node.status === 200 ? 'text-green-400' : node.status === 403 ? 'text-red-400' : node.status >= 300 && node.status < 400 ? 'text-yellow-400' : node.status === 404 ? 'text-gray-500' : 'text-gray-400';
-                             const secrets = node.meta?.secrets?.length || 0;
-                             const hasChildren = node.children && node.children.length > 0;
-                             const [expanded, setExpanded] = React.useState(false);
-                             return (
-                               <div key={node.id} style={{ marginLeft: `${indent * 16}px` }}>
-                                 <div className="flex items-center gap-2 py-1 text-xs" onClick={() => setExpanded(!expanded)}>
-                                   {hasChildren && <ChevronRight className={`w-3.5 h-3.5 text-gray-500 transition-transform ${expanded ? 'rotate-90' : ''}`} />}
-                                   {typeIcon[node.type as keyof typeof typeIcon] || typeIcon.other}
-                                   <span className="font-mono truncate flex-1 min-w-0">{node.name}</span>
-                                   <span className={`font-mono ${statusColor}`}>{node.status || '—'}</span>
-                                   {node.size && <span className="text-gray-500">{(node.size / 1024).toFixed(1)} KB</span>}
-                                   {secrets > 0 && <span className="px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded text-[10px] font-bold">{secrets} secrets</span>}
-                                   {node.meta?.forms > 0 && <span className="px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded text-[10px] font-bold">{node.meta.forms} forms</span>}
-                                 </div>
-                                 {expanded && node.children && (
-                                   <div className="border-l border-gray-800 pl-2 mt-1 space-y-1">
-                                     {node.children.map((child: any) => renderNode(child, indent + 1))}
-                                   </div>
-                                 )}
-                               </div>
-                             );
-                           };
-                           return renderNode(apiData.data.resourceTree);
-                         })()}
-                       </div>
-                     </div>
-                   )}
+                    {/* Resource Tree (Live Crawl) - Interactive */}
+                    {apiData.data.resourceTree && (
+                      <div className="bg-gray-900 border border-blue-500/30 rounded-xl p-5">
+                        <h3 className="font-semibold mb-3 flex items-center gap-2">
+                          <FileCode className="w-5 h-5 text-blue-400" /> Resource Tree — Live Crawl (gospider-style)
+                          <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded">
+                            {(() => { let c=0; const count=(n:any)=>{c++; n.children?.forEach(count); }; count(apiData.data.resourceTree); return c; })()} nodes
+                          </span>
+                        </h3>
+                        <p className="text-xs text-gray-500 mb-3">Interactive tree of crawled pages, scripts, resources, redirects & fuzz hits. Click to expand.</p>
+                        <div className="max-h-[400px] overflow-auto space-y-1">
+                          <TreeNode node={apiData.data.resourceTree} indent={0} />
+                        </div>
+                      </div>
+                    )}
 
                    {/* Evidence Download Section */}
                    {apiData.data.artifacts?.length > 0 && (
@@ -5081,4 +5044,40 @@ function Package({ className }: { className?: string }) {
 
 function ShoppingCart({ className }: { className?: string }) {
   return <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" /></svg>;
+}
+
+function TreeNode({ node, indent = 0 }: { node: any; indent?: number }) {
+  const [expanded, setExpanded] = React.useState(false);
+  const typeIcon = {
+    page: <Globe2 className="w-3.5 h-3.5 text-blue-400" />,
+    script: <FileCode className="w-3.5 h-3.5 text-yellow-400" />,
+    style: <FileCode className="w-3.5 h-3.5 text-pink-400" />,
+    image: <Camera className="w-3.5 h-3.5 text-green-400" />,
+    font: <FileCode className="w-3.5 h-3.5 text-purple-400" />,
+    document: <FileText className="w-3.5 h-3.5 text-orange-400" />,
+    redirect: <ArrowRight className="w-3.5 h-3.5 text-yellow-400" />,
+    fuzz: <FolderOpen className="w-3.5 h-3.5 text-red-400" />,
+    other: <FileText className="w-3.5 h-3.5 text-gray-400" />,
+  };
+  const statusColor = node.status === 200 ? 'text-green-400' : node.status === 403 ? 'text-red-400' : node.status >= 300 && node.status < 400 ? 'text-yellow-400' : node.status === 404 ? 'text-gray-500' : 'text-gray-400';
+  const secrets = node.meta?.secrets?.length || 0;
+  const hasChildren = node.children && node.children.length > 0;
+  return (
+    <div key={node.id} style={{ marginLeft: `${indent * 16}px` }}>
+      <div className="flex items-center gap-2 py-1 text-xs" onClick={() => setExpanded(!expanded)}>
+        {hasChildren && <ChevronRight className={`w-3.5 h-3.5 text-gray-500 transition-transform ${expanded ? 'rotate-90' : ''}`} />}
+        {typeIcon[node.type as keyof typeof typeIcon] || typeIcon.other}
+        <span className="font-mono truncate flex-1 min-w-0">{node.name}</span>
+        <span className={`font-mono ${statusColor}`}>{node.status || '—'}</span>
+        {node.size && <span className="text-gray-500">{(node.size / 1024).toFixed(1)} KB</span>}
+        {secrets > 0 && <span className="px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded text-[10px] font-bold">{secrets} secrets</span>}
+        {node.meta?.forms > 0 && <span className="px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded text-[10px] font-bold">{node.meta.forms} forms</span>}
+      </div>
+      {expanded && node.children && (
+        <div className="border-l border-gray-800 pl-2 mt-1 space-y-1">
+          {node.children.map((child: any) => <TreeNode key={child.id} node={child} indent={indent + 1} />)}
+        </div>
+      )}
+    </div>
+  );
 }
