@@ -2620,6 +2620,7 @@ export default function OSINTPlatform() {
               </h2>
               <DomainIntelPanel
                 intel={apiData?.domainIntel || null}
+                virusTotal={apiData?.virusTotal || null}
                 loading={loading}
                 inputValue={inputValue}
                 setInputValue={setInputValue}
@@ -2947,6 +2948,7 @@ export default function OSINTPlatform() {
               </h2>
               <UrlScannerPanel
                 data={apiData?.data || null}
+                virusTotal={apiData?.virusTotal || null}
                 loading={loading}
                 inputValue={inputValue}
                 setInputValue={setInputValue}

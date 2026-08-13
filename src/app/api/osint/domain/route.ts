@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildDomainIntel } from '@/lib/intel/domain';
 import { upsertIOC } from '@/lib/store';
+import { lookupVirusTotalDomain } from '@/lib/intel/virustotal';
 
 export const maxDuration = 60;
 
@@ -22,19 +23,22 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const intel = await buildDomainIntel(domain);
+    const [intel, vt] = await Promise.all([
+      buildDomainIntel(domain),
+      lookupVirusTotalDomain(domain).catch(() => null),
+    ]);
 
     try {
       await upsertIOC({
         type: 'DOMAIN',
         value: intel.domain,
         description: `Domain: ${intel.domain} — ${intel.summary}`,
-        severity: intel.risk.level,
+        severity: vt?.verdict === 'MALICIOUS' ? 'HIGH' : intel.risk.level,
         confidence: 100 - intel.risk.score,
-        status: intel.risk.level === 'HIGH' || intel.risk.level === 'CRITICAL' ? 'SUSPICIOUS' : 'UNKNOWN',
+        status: vt?.verdict === 'MALICIOUS' ? 'MALICIOUS' : vt?.verdict === 'SUSPICIOUS' ? 'SUSPICIOUS' : intel.risk.level === 'HIGH' || intel.risk.level === 'CRITICAL' ? 'SUSPICIOUS' : 'UNKNOWN',
         source: intel.source,
-        rawResponse: JSON.stringify(intel).substring(0, 3000),
-        tags: ['dns', 'recon', intel.risk.level.toLowerCase()],
+        rawResponse: JSON.stringify({ intel, vt }).substring(0, 3000),
+        tags: ['dns', 'recon', intel.risk.level.toLowerCase(), ...(vt?.verdict ? [`vt:${vt.verdict.toLowerCase()}`] : [])],
       });
     } catch (storeError) {
       console.error('Store save error (non-critical):', storeError);
@@ -46,6 +50,8 @@ export async function GET(request: NextRequest) {
       timestamp: intel.timestamp,
       source: intel.source,
       fetchedLive: intel.live,
+      // VirusTotal current indicators (null when no key or no prior analysis)
+      virusTotal: vt,
       // Backward-compatible keys used by older UI sections:
       dns: intel.records,
       whois: intel.whois,

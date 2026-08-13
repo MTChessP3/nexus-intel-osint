@@ -43,8 +43,25 @@ interface DomainIntelResult {
   summary: string;
 }
 
+interface VirusTotalResult {
+  source: string;
+  analyzed: boolean;
+  url: string;
+  reputation: number;
+  lastAnalysisDate: string | null;
+  lastAnalysisStats: { malicious: number; suspicious: number; undetected: number; harmless: number; timeout: number };
+  totalEngines: number;
+  verdict: 'MALICIOUS' | 'SUSPICIOUS' | 'CLEAN' | 'UNKNOWN';
+  categories: string[];
+  votes: { harmless: number; malicious: number };
+  tags: string[];
+  firstSeen: string | null;
+  lastSeen: string | null;
+}
+
 interface Props {
   intel: DomainIntelResult | null;
+  virusTotal: VirusTotalResult | null;
   loading: boolean;
   inputValue: string;
   setInputValue: (v: string) => void;
@@ -90,7 +107,7 @@ function flagEmoji(code?: string): string {
 }
 
 export default function DomainIntelPanel({
-  intel, loading, inputValue, setInputValue, onAnalyze, onCopy, onGoForensics,
+  intel, virusTotal, loading, inputValue, setInputValue, onAnalyze, onCopy, onGoForensics,
 }: Props) {
   const [openRecord, setOpenRecord] = useState<string | null>('A');
   const [showAllSubdomains, setShowAllSubdomains] = useState(false);
@@ -145,27 +162,15 @@ export default function DomainIntelPanel({
             />
           </div>
           <button
-            onClick={() => onAnalyze()}
-            disabled={loading || !inputValue}
-            className="px-6 py-3 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
-          >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-            Analyze Domain
-          </button>
-        </div>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <span className="text-xs text-gray-500">Try:</span>
-          {['google.com', 'github.com', 'microsoft.com', 'tiktok.com'].map((d) => (
-            <button
-              key={d}
-              onClick={() => { setInputValue(d); onAnalyze(d); }}
-              className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs font-mono"
+              onClick={() => onAnalyze()}
+              disabled={loading || !inputValue}
+              className="px-6 py-3 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
             >
-              {d}
+              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+              Analyze Domain
             </button>
-          ))}
+          </div>
         </div>
-      </div>
 
       {!intel && !loading && (
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
@@ -206,7 +211,7 @@ export default function DomainIntelPanel({
               <div className={`h-full transition-all ${LEVEL_BAR[risk.level]}`} style={{ width: `${risk.score}%` }} />
             </div>
 
-            {/* Signals */}
+            {/* Signal checks */}
             {risk.signals.length > 0 && (
               <div className="mt-4">
                 <p className="text-xs text-gray-400 mb-2">What drives the score</p>
@@ -224,6 +229,78 @@ export default function DomainIntelPanel({
               </div>
             )}
           </div>
+
+          {/* ===== VirusTotal current indicators ===== */}
+          {virusTotal && (
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+              <div className="flex items-center gap-3 mb-3 flex-wrap">
+                <h3 className="font-semibold flex items-center gap-2">
+                  <Shield className="w-5 h-5 text-orange-400" /> VirusTotal Indicators
+                </h3>
+                <span className={`px-2.5 py-1 rounded-lg text-xs font-semibold border ${
+                  virusTotal.verdict === 'MALICIOUS' ? 'bg-red-500/20 text-red-400 border-red-500/40'
+                  : virusTotal.verdict === 'SUSPICIOUS' ? 'bg-orange-500/20 text-orange-400 border-orange-500/40'
+                  : virusTotal.verdict === 'CLEAN' ? 'bg-green-500/20 text-green-400 border-green-500/40'
+                  : 'bg-gray-700 text-gray-300 border-gray-600'
+                }`}>
+                  {virusTotal.verdict}
+                </span>
+                <a href={virusTotal.url} target="_blank" rel="noreferrer" className="text-xs text-orange-400 hover:text-orange-300 flex items-center gap-1 ml-auto">
+                  <ExternalLink className="w-3.5 h-3.5" /> View on VirusTotal
+                </a>
+              </div>
+              <div className="flex flex-wrap items-start gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-red-400">{virusTotal.lastAnalysisStats.malicious}</div>
+                    <div className="text-[10px] text-gray-500">malicious</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-orange-400">{virusTotal.lastAnalysisStats.suspicious}</div>
+                    <div className="text-[10px] text-gray-500">suspicious</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-gray-300">{virusTotal.lastAnalysisStats.harmless}</div>
+                    <div className="text-[10px] text-gray-500">harmless</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-gray-500">{virusTotal.totalEngines}</div>
+                    <div className="text-[10px] text-gray-500">engines</div>
+                  </div>
+                </div>
+                <div className="flex-1 min-w-[200px]">
+                  <div className="h-2 rounded-full bg-gray-800 overflow-hidden flex">
+                    {virusTotal.totalEngines > 0 && (
+                      <>
+                        <div className="h-full bg-red-500" style={{ width: `${(virusTotal.lastAnalysisStats.malicious / virusTotal.totalEngines) * 100}%` }} />
+                        <div className="h-full bg-orange-500" style={{ width: `${(virusTotal.lastAnalysisStats.suspicious / virusTotal.totalEngines) * 100}%` }} />
+                        <div className="h-full bg-green-500" style={{ width: `${(virusTotal.lastAnalysisStats.harmless / virusTotal.totalEngines) * 100}%` }} />
+                      </>
+                    )}
+                  </div>
+                  <div className="mt-2 text-xs text-gray-400 space-y-1">
+                    <div><span className="text-gray-500">Detection:</span> {virusTotal.lastAnalysisStats.malicious}/{virusTotal.totalEngines} engines · <span className="text-gray-500">Reputation:</span> {virusTotal.reputation}</div>
+                    {virusTotal.lastAnalysisDate && <div><span className="text-gray-500">Last analysis:</span> {fmtDate(virusTotal.lastAnalysisDate)}</div>}
+                    {virusTotal.votes && <div><span className="text-gray-500">Community votes:</span> {virusTotal.votes.malicious} malicious · {virusTotal.votes.harmless} harmless</div>}
+                    {virusTotal.categories && virusTotal.categories.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {virusTotal.categories.slice(0, 5).map((c, i) => (
+                          <span key={i} className="px-2 py-0.5 bg-gray-800 rounded text-[10px] font-mono text-gray-400">{c}</span>
+                        ))}
+                      </div>
+                    )}
+                    {virusTotal.tags && virusTotal.tags.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {virusTotal.tags.slice(0, 8).map((t, i) => (
+                          <span key={i} className="px-1.5 py-0.5 bg-gray-800/60 rounded text-[10px] font-mono text-orange-300/70">#{t}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* ===== Quick stats ===== */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
