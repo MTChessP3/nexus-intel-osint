@@ -1092,18 +1092,19 @@ export default function OSINTPlatform() {
   };
 
   // Domain Forensics Handler (Full Lookyloo-style)
-  const handleForensicAnalysis = async () => {
-    if (!inputValue) {
+  const handleForensicAnalysis = async (domainArg?: string) => {
+    const target = (domainArg || inputValue || '').trim();
+    if (!target) {
       showFeedback('Enter a domain for forensic analysis', 'error');
       return;
     }
-    
-    const cleanDomain = inputValue.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-    showFeedback(`Starting forensic analysis of ${cleanDomain}... This may take a moment...`, 'info');
-    
+
+    const cleanDomain = target.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    showFeedback(`Starting advanced forensics of ${cleanDomain}... fuzzing paths, scanning kits/databases, attributing actors`, 'info');
+
     const result = await callAPI('/api/osint/forensics', {
       method: 'POST',
-      body: JSON.stringify({ 
+      body: JSON.stringify({
         domain: cleanDomain,
         options: {
           dns: true,
@@ -1116,7 +1117,7 @@ export default function OSINTPlatform() {
         }
       })
     });
-    
+
     if (result.success) {
       loadForensicsHistory();
     }
@@ -2626,27 +2627,32 @@ export default function OSINTPlatform() {
                 setInputValue={setInputValue}
                 onAnalyze={handleDomainRecon}
                 onCopy={copyToClipboard}
-                onGoForensics={() => setActiveTab('forensics')}
+                onGoForensics={(domain) => {
+                  setActiveTab('forensics');
+                  setInputValue(domain);
+                  showFeedback(`Launching full web forensics for ${domain}...`, 'info');
+                  setTimeout(() => handleForensicAnalysis(domain), 250);
+                }}
               />
             </div>
           )}
 
-          {/* ==================== DOMAIN FORENSICS TAB (Lookyloo-style) ==================== */}
+          {/* ==================== FORENSICS TAB (Advanced Web Forensic Module) ==================== */}
           {activeTab === 'forensics' && (
             <div className="space-y-6">
               <div className="flex items-center justify-between">
                 <h2 className="text-2xl font-bold flex items-center gap-3">
-                  <Camera className="w-7 h-7 text-red-400" /> Domain Forensics Lab
-                  <span className="text-sm font-normal text-gray-400">(Lookyloo-style)</span>
+                  <Camera className="w-7 h-7 text-red-400" /> Web Forensic Analysis
+                  <span className="text-sm font-normal text-gray-400">DNS recon · fuzzing tree · phishing kits · databases · attribution</span>
                 </h2>
               </div>
-              
+
               <div className="bg-gray-900 border border-red-500/30 rounded-xl p-6">
                 <div className="flex gap-4">
                   <div className="flex-1">
                     <input
                       type="text"
-                      placeholder="Enter domain for complete forensic analysis..."
+                      placeholder="Enter URL or domain for advanced forensic analysis..."
                       value={inputValue}
                       onChange={(e) => setInputValue(e.target.value)}
                       onKeyPress={(e) => e.key === 'Enter' && handleForensicAnalysis()}
@@ -2654,7 +2660,7 @@ export default function OSINTPlatform() {
                     />
                   </div>
                   <button
-                    onClick={handleForensicAnalysis}
+                    onClick={() => handleForensicAnalysis()}
                     disabled={loading || !inputValue}
                     className="px-6 py-3 bg-red-600 hover:bg-red-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
                   >
@@ -2662,42 +2668,73 @@ export default function OSINTPlatform() {
                     Start Forensics
                   </button>
                 </div>
-
                 <div className="mt-4 flex flex-wrap gap-2">
                   <span className="text-xs text-gray-500">Includes:</span>
-                  {['DNS Enumeration', 'WHOIS', 'Dirb Scan', 'HTTP Headers', 'SSL Analysis', 'Page Capture', 'Subdomains'].map(item => (
+                  {['DNS Recon', 'Subdomain Enumeration', 'Directory Fuzzing', 'Phishing Kit Detection', 'DB Exposure Scan', 'Source Attribution', 'VirusTotal'].map(item => (
                     <span key={item} className="px-2 py-1 bg-red-500/10 text-red-400 rounded text-xs">{item}</span>
                   ))}
                 </div>
               </div>
 
-              {/* Previous Analyses */}
+              {/* Previous Analyses / Resource History */}
               {forensicsHistory.length > 0 && (
                 <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                  <h3 className="font-semibold mb-3 flex items-center gap-2">
-                    <FolderOpen className="w-5 h-5 text-yellow-400" /> Previous Analyses ({forensicsHistory.length})
-                  </h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                    {forensicsHistory.slice(0, 6).map((analysis, idx) => (
-                      <button
-                        key={idx}
-                        onClick={async () => {
-                          showFeedback('Loading analysis...');
-                          const res = await fetch(`/api/osint/forensics?action=get&name=${analysis.name}`);
-                          const data = await res.json();
-                          if (data.success) {
-                            setApiData(data);
-                            setSelectedForensics(data.data);
-                          }
-                        }}
-                        className="p-3 bg-gray-800 hover:bg-gray-700 rounded-lg text-left transition-colors"
-                      >
-                        <div className="font-mono text-sm text-green-400">{analysis.name.split('_')[0]}</div>
-                        <div className="text-xs text-gray-500 mt-1">
-                          {new Date(analysis.created).toLocaleDateString()}
-                        </div>
-                      </button>
-                    ))}
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="font-semibold flex items-center gap-2">
+                      <FolderOpen className="w-5 h-5 text-yellow-400" /> Analyzed Resources ({forensicsHistory.length})
+                    </h3>
+                    <button onClick={loadForensicsHistory} className="text-xs text-gray-400 hover:text-gray-200 flex items-center gap-1">
+                      <RefreshCw className="w-3 h-3" /> Refresh
+                    </button>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-xs text-gray-500 border-b border-gray-800">
+                          <th className="py-2 pr-3">Site</th>
+                          <th className="py-2 pr-3">IP</th>
+                          <th className="py-2 pr-3">Date</th>
+                          <th className="py-2 pr-3">Risk</th>
+                          <th className="py-2 pr-3">Kits</th>
+                          <th className="py-2 pr-3">DBs</th>
+                          <th className="py-2 pr-3"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {forensicsHistory.slice(0, 10).map((analysis: any, idx: number) => (
+                          <tr key={idx} className="border-b border-gray-800/50 hover:bg-gray-800/40">
+                            <td className="py-2 pr-3 font-mono text-red-300">{analysis.domain || analysis.name?.split('_')[1] || '—'}</td>
+                            <td className="py-2 pr-3 font-mono text-xs text-gray-400">{analysis.ip || '—'}</td>
+                            <td className="py-2 pr-3 text-xs text-gray-400">{new Date(analysis.created).toLocaleString()}</td>
+                            <td className="py-2 pr-3">
+                              <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                                analysis.riskLevel === 'CRITICAL' ? 'bg-red-500 text-white' :
+                                analysis.riskLevel === 'HIGH' ? 'bg-orange-500 text-black' :
+                                analysis.riskLevel === 'MEDIUM' ? 'bg-yellow-500 text-black' : 'bg-green-500/20 text-green-400'
+                              }`}>{analysis.riskLevel} ({analysis.score})</span>
+                            </td>
+                            <td className="py-2 pr-3 text-xs">
+                              {analysis.kits > 0 ? <span className="px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded text-[10px] font-bold">{analysis.kits}</span> : <span className="text-gray-600">0</span>}
+                            </td>
+                            <td className="py-2 pr-3 text-xs">
+                              {analysis.databases > 0 ? <span className="px-1.5 py-0.5 bg-orange-500/20 text-orange-400 rounded text-[10px] font-bold">{analysis.databases}</span> : <span className="text-gray-600">0</span>}
+                            </td>
+                            <td className="py-2 pr-3 text-right">
+                              <button
+                                onClick={async () => {
+                                  showFeedback('Loading forensic resource...', 'info');
+                                  const res = await fetch(`/api/osint/forensics?action=get&id=${analysis.id}`);
+                                  const data = await res.json();
+                                  if (data.success) { setApiData({ success: true, data: data.data }); setSelectedForensics(data.data); }
+                                  else showFeedback(`Error: ${data.error || 'not found'}`, 'error');
+                                }}
+                                className="text-xs px-2 py-1 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded"
+                              >Open</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               )}
@@ -2706,88 +2743,191 @@ export default function OSINTPlatform() {
               {apiData?.data && activeTab === 'forensics' && (
                 <div className="space-y-4">
                   {/* Risk Assessment */}
-                  {apiData.data.riskAssessment && (
+                  {apiData.data.risk && (
                     <div className={`rounded-xl p-5 border ${
-                      apiData.data.riskAssessment.level === 'CRITICAL' ? 'bg-red-500/10 border-red-500/50' :
-                      apiData.data.riskAssessment.level === 'HIGH' ? 'bg-orange-500/10 border-orange-500/50' :
-                      apiData.data.riskAssessment.level === 'MEDIUM' ? 'bg-yellow-500/10 border-yellow-500/50' :
+                      apiData.data.risk.level === 'CRITICAL' ? 'bg-red-500/10 border-red-500/50' :
+                      apiData.data.risk.level === 'HIGH' ? 'bg-orange-500/10 border-orange-500/50' :
+                      apiData.data.risk.level === 'MEDIUM' ? 'bg-yellow-500/10 border-yellow-500/50' :
                       'bg-green-500/10 border-green-500/50'
                     }`}>
-                      <h3 className="font-semibold mb-3 flex items-center gap-2">
-                        <ShieldAlert className="w-5 h-5" /> Risk Assessment
-                        <span className={`px-2 py-0.5 rounded text-xs font-bold ${
-                          apiData.data.riskAssessment.level === 'CRITICAL' ? 'bg-red-500 text-white' :
-                          apiData.data.riskAssessment.level === 'HIGH' ? 'bg-orange-500 text-black' :
-                          'bg-yellow-500 text-black'
-                        }`}>
-                          {apiData.data.riskAssessment.level} ({apiData.data.riskAssessment.score}/10)
-                        </span>
-                      </h3>
-                      
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="flex items-center justify-between flex-wrap gap-3">
                         <div>
-                          <h4 className="text-sm font-medium text-red-400 mb-2">Findings:</h4>
-                          <ul className="space-y-1">
-                            {apiData.data.riskAssessment.findings.map((finding: string, idx: number) => (
-                              <li key={idx} className="text-sm flex items-start gap-2">
-                                <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-                                {finding}
-                              </li>
-                            ))}
-                          </ul>
+                          <h3 className="font-semibold flex items-center gap-2">
+                            <ShieldAlert className="w-5 h-5" /> Forensic Risk Assessment
+                            <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                              apiData.data.risk.level === 'CRITICAL' ? 'bg-red-500 text-white' :
+                              apiData.data.risk.level === 'HIGH' ? 'bg-orange-500 text-black' :
+                              apiData.data.risk.level === 'MEDIUM' ? 'bg-yellow-500 text-black' : 'bg-green-500 text-black'
+                            }`}>
+                              {apiData.data.risk.level} ({apiData.data.risk.score}/100)
+                            </span>
+                          </h3>
+                          <p className="text-sm font-mono text-red-300 mt-1 break-all">{apiData.data.domain}</p>
+                          <p className="text-sm text-gray-400 mt-1">{apiData.data.verdict || 'No critical indicators found'}</p>
                         </div>
-                        <div>
-                          <h4 className="text-sm font-medium text-green-400 mb-2">Recommendations:</h4>
-                          <ul className="space-y-1">
-                            {apiData.data.riskAssessment.recommendations.map((rec: string, idx: number) => (
-                              <li key={idx} className="text-sm flex items-start gap-2">
-                                <CheckCircle className="w-4 h-4 text-green-400 mt-0.5 shrink-0" />
-                                {rec}
-                              </li>
-                            ))}
-                          </ul>
+                        <div className="text-right text-xs text-gray-400">
+                          <div>IP: <span className="font-mono">{apiData.data.ip || '—'}</span></div>
+                          <div className="mt-1">Resource: <span className="font-mono">{apiData.data.name}</span></div>
+                          <div className="mt-1">{new Date(apiData.data.timestamp).toLocaleString()}</div>
                         </div>
+                      </div>
+                      <div className="mt-3 h-2 rounded-full bg-gray-900 overflow-hidden">
+                        <div className={`h-full ${apiData.data.risk.level === 'CRITICAL' ? 'bg-red-500' : apiData.data.risk.level === 'HIGH' ? 'bg-orange-500' : apiData.data.risk.level === 'MEDIUM' ? 'bg-yellow-500' : 'bg-green-500'}`}
+                          style={{ width: `${Math.max(apiData.data.risk.score, 2)}%` }} />
                       </div>
                     </div>
                   )}
 
-                  {/* DNS Records */}
-                  {apiData.data.dns && (
+                  {/* VirusTotal indicators */}
+                  {apiData.data.virusTotal && (
                     <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                      <h3 className="font-semibold mb-3 flex items-center gap-2">
-                        <Server className="w-5 h-5 text-blue-400" /> DNS Enumeration
-                      </h3>
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-                        {Object.entries(apiData.data.dns).map(([type, records]: [string, any]) => (
-                          <div key={type} className="p-3 bg-gray-800 rounded-lg">
-                            <div className="text-xs font-medium text-gray-400 mb-1">{type} Records</div>
-                            {records?.data?.length > 0 ? (
-                              <div className="space-y-1">
-                                {records.data.slice(0, 3).map((r: any, i: number) => (
-                                  <div key={i} className="text-xs font-mono text-green-400 truncate">{r.data || r}</div>
-                                ))}
-                                {records.data.length > 3 && (
-                                  <div className="text-xs text-gray-500">+{records.data.length - 3} more</div>
-                                )}
-                              </div>
-                            ) : (
-                              <div className="text-xs text-gray-500">No records</div>
-                            )}
+                      <div className="flex items-center gap-3 mb-3 flex-wrap">
+                        <h3 className="font-semibold flex items-center gap-2">
+                          <Shield className="w-5 h-5 text-orange-400" /> VirusTotal Indicators
+                        </h3>
+                        <span className={`px-2.5 py-1 rounded-lg text-xs font-semibold border ${
+                          apiData.data.virusTotal.verdict === 'MALICIOUS' ? 'bg-red-500/20 text-red-400 border-red-500/40'
+                          : apiData.data.virusTotal.verdict === 'SUSPICIOUS' ? 'bg-orange-500/20 text-orange-400 border-orange-500/40'
+                          : apiData.data.virusTotal.verdict === 'CLEAN' ? 'bg-green-500/20 text-green-400 border-green-500/40'
+                          : 'bg-gray-700 text-gray-300 border-gray-600'
+                        }`}>{apiData.data.virusTotal.verdict}</span>
+                        <a href={apiData.data.virusTotal.url} target="_blank" rel="noreferrer" className="text-xs text-orange-400 hover:text-orange-300 flex items-center gap-1 ml-auto">
+                          <ExternalLink className="w-3.5 h-3.5" /> View on VirusTotal
+                        </a>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-6">
+                        {[
+                          { label: 'malicious', v: apiData.data.virusTotal.lastAnalysisStats?.malicious || 0, c: 'text-red-400' },
+                          { label: 'suspicious', v: apiData.data.virusTotal.lastAnalysisStats?.suspicious || 0, c: 'text-orange-400' },
+                          { label: 'harmless', v: apiData.data.virusTotal.lastAnalysisStats?.harmless || 0, c: 'text-green-400' },
+                          { label: 'engines', v: apiData.data.virusTotal.totalEngines || 0, c: 'text-gray-300' },
+                        ].map((s) => (
+                          <div key={s.label} className="text-center">
+                            <div className={`text-2xl font-bold ${s.c}`}>{s.v}</div>
+                            <div className="text-[10px] text-gray-500">{s.label}</div>
                           </div>
                         ))}
+                        <div className="text-xs text-gray-400">
+                          <div>Reputation: <span className="font-bold">{apiData.data.virusTotal.reputation}</span></div>
+                          {apiData.data.virusTotal.lastAnalysisDate && <div>Last: {new Date(apiData.data.virusTotal.lastAnalysisDate).toISOString().slice(0, 10)}</div>}
+                        </div>
                       </div>
                     </div>
                   )}
 
-                  {/* Directory Enumeration (Dirb-style) */}
-                  {apiData.data.directories && (
+                  {/* Evidence: Phishing Kits + Databases */}
+                  {(apiData.data.phishingKits?.length > 0 || apiData.data.databases?.length > 0) && (
+                    <div className="bg-gray-900 border border-red-500/30 rounded-xl p-5">
+                      <h3 className="font-semibold mb-3 flex items-center gap-2">
+                        <Download className="w-5 h-5 text-red-400" /> Evidence — Downloadable Artifacts
+                        {apiData.data.phishingKits?.length > 0 && <span className="px-2 py-0.5 bg-red-500/20 text-red-400 rounded text-xs">{apiData.data.phishingKits.length} kit(s)</span>}
+                        {apiData.data.databases?.length > 0 && <span className="px-2 py-0.5 bg-orange-500/20 text-orange-400 rounded text-xs">{apiData.data.databases.length} db(s)</span>}
+                      </h3>
+                      {apiData.data.phishingKits?.length > 0 && (
+                        <div className="mb-4">
+                          <p className="text-xs text-red-400 mb-2">Phishing Kits (.zip/.rar/.tar.gz) — exposed on the target</p>
+                          <div className="space-y-2">
+                            {apiData.data.phishingKits.map((k: any, i: number) => (
+                              <div key={i} className="flex items-center gap-3 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
+                                <FileCode className="w-4 h-4 text-red-400 shrink-0" />
+                                <span className="font-mono text-sm text-red-200 flex-1 truncate">{k.url}</span>
+                                <span className="text-xs text-gray-400">{k.size ? `${(k.size / 1024).toFixed(1)} KB` : ''}</span>
+                                <a href={k.url} target="_blank" rel="noreferrer" className="text-xs px-2 py-1 bg-red-600 hover:bg-red-700 rounded text-white flex items-center gap-1 shrink-0">
+                                  <Download className="w-3 h-3" /> Download
+                                </a>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {apiData.data.databases?.length > 0 && (
+                        <div>
+                          <p className="text-xs text-orange-400 mb-2">Exposed Databases (.sql/.db) — data dump risk</p>
+                          <div className="space-y-2">
+                            {apiData.data.databases.map((d: any, i: number) => (
+                              <div key={i} className="flex items-center gap-3 p-3 bg-orange-500/10 border border-orange-500/30 rounded-lg">
+                                <Database className="w-4 h-4 text-orange-400 shrink-0" />
+                                <span className="font-mono text-sm text-orange-200 flex-1 truncate">{d.url}</span>
+                                <span className="text-xs text-gray-400">{d.size ? `${(d.size / 1024).toFixed(1)} KB` : ''}</span>
+                                <a href={d.url} target="_blank" rel="noreferrer" className="text-xs px-2 py-1 bg-orange-600 hover:bg-orange-700 rounded text-white flex items-center gap-1 shrink-0">
+                                  <Download className="w-3 h-3" /> Download
+                                </a>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Attribution */}
+                  {apiData.data.attribution && (
                     <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                       <h3 className="font-semibold mb-3 flex items-center gap-2">
-                        <FolderOpen className="w-5 h-5 text-yellow-400" /> Directory Enumeration (Dirb-style)
-                        <span className="text-xs bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded">
-                          {apiData.data.directories.length} paths found
-                        </span>
+                        <Users className="w-5 h-5 text-purple-400" /> Threat Actor Attribution
                       </h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                        <div>
+                          <p className="text-gray-500 mb-1">Emails</p>
+                          <div className="flex flex-wrap gap-1">
+                            {apiData.data.attribution.emails?.length > 0 ? apiData.data.attribution.emails.map((e: string, i: number) => (
+                              <span key={i} className="px-2 py-1 bg-gray-800 rounded font-mono text-blue-300">{e}</span>
+                            )) : <span className="text-gray-600">none</span>}
+                          </div>
+                        </div>
+                        <div>
+                          <p className="text-gray-500 mb-1">Telegram IDs</p>
+                          <div className="flex flex-wrap gap-1">
+                            {apiData.data.attribution.telegramIds?.length > 0 ? apiData.data.attribution.telegramIds.map((e: string, i: number) => (
+                              <span key={i} className="px-2 py-1 bg-gray-800 rounded font-mono text-sky-300">{e}</span>
+                            )) : <span className="text-gray-600">none</span>}
+                          </div>
+                        </div>
+                        <div>
+                          <p className="text-gray-500 mb-1">Tracking IDs</p>
+                          <div className="flex flex-wrap gap-1">
+                            {apiData.data.attribution.trackingIds?.length > 0 ? apiData.data.attribution.trackingIds.map((e: string, i: number) => (
+                              <span key={i} className="px-2 py-1 bg-gray-800 rounded font-mono text-yellow-300">{e}</span>
+                            )) : <span className="text-gray-600">none</span>}
+                          </div>
+                        </div>
+                        <div>
+                          <p className="text-gray-500 mb-1">API Keys</p>
+                          <div className="flex flex-wrap gap-1">
+                            {apiData.data.attribution.apiKeys?.length > 0 ? apiData.data.attribution.apiKeys.map((e: string, i: number) => (
+                              <span key={i} className="px-2 py-1 bg-red-500/10 border border-red-500/30 rounded font-mono text-red-300">{e}</span>
+                            )) : <span className="text-gray-600">none</span>}
+                          </div>
+                        </div>
+                        <div>
+                          <p className="text-gray-500 mb-1">Tool / Hosting Signatures</p>
+                          <div className="flex flex-wrap gap-1">
+                            {apiData.data.attribution.toolSignatures?.length > 0 ? apiData.data.attribution.toolSignatures.map((e: string, i: number) => (
+                              <span key={i} className="px-2 py-1 bg-gray-800 rounded font-mono text-gray-300">{e}</span>
+                            )) : <span className="text-gray-600">none</span>}
+                          </div>
+                        </div>
+                        <div>
+                          <p className="text-gray-500 mb-1">HTML Comments</p>
+                          <div className="space-y-1">
+                            {apiData.data.attribution.comments?.length > 0 ? apiData.data.attribution.comments.slice(0, 4).map((e: string, i: number) => (
+                              <div key={i} className="px-2 py-1 bg-gray-800/60 rounded font-mono text-gray-400 truncate">{e.replace(/<!--|-->/g, '').trim()}</div>
+                            )) : <span className="text-gray-600">none</span>}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Fuzzing Tree (explorable) */}
+                  {apiData.data.fuzzingTree?.length > 0 && (
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="font-semibold flex items-center gap-2">
+                          <FolderOpen className="w-5 h-5 text-yellow-400" /> Fuzzing Tree ({apiData.data.fuzzingTree.length} paths probed)
+                          <span className="text-xs text-gray-500 font-normal">directory discovery</span>
+                        </h3>
+                      </div>
                       <div className="overflow-x-auto">
                         <table className="w-full text-sm">
                           <thead>
@@ -2799,19 +2939,29 @@ export default function OSINTPlatform() {
                             </tr>
                           </thead>
                           <tbody>
-                            {apiData.data.directories.map((dir: any, idx: number) => (
-                              <tr key={idx} className="border-b border-gray-800 hover:bg-gray-800">
-                                <td className="py-2 px-3 font-mono text-sm">{dir.path}</td>
+                            {apiData.data.fuzzingTree.map((dir: any, idx: number) => (
+                              <tr key={idx} className="border-b border-gray-800/50 hover:bg-gray-800/40">
+                                <td className="py-2 px-3">
+                                  <div className="flex items-center gap-2">
+                                    {dir.status === 200 || dir.status === 403
+                                      ? <FolderOpen className="w-3.5 h-3.5 text-yellow-500 shrink-0" />
+                                      : <ChevronRight className="w-3.5 h-3.5 text-gray-600 shrink-0" />}
+                                    <span className="font-mono text-xs">{dir.path}</span>
+                                    {dir.sensitive && dir.status === 200 && (
+                                      <span className="px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded text-[10px] font-bold">EXPOSED</span>
+                                    )}
+                                  </div>
+                                </td>
                                 <td className="py-2 px-3">
                                   <span className={`px-2 py-0.5 rounded text-xs ${
                                     dir.status === 200 ? 'bg-green-500/20 text-green-400' :
                                     dir.status === 403 ? 'bg-red-500/20 text-red-400' :
-                                    dir.status === 301 ? 'bg-yellow-500/20 text-yellow-400' :
-                                    'bg-gray-700 text-gray-400'
+                                    dir.status === 301 || dir.status === 302 ? 'bg-yellow-500/20 text-yellow-400' :
+                                    dir.status === 404 ? 'bg-gray-800 text-gray-500' : 'bg-gray-700 text-gray-400'
                                   }`}>{dir.status}</span>
                                 </td>
-                                <td className="py-2 px-3 text-gray-400">{dir.size}</td>
-                                <td className="py-2 px-3 text-gray-400">{dir.type}</td>
+                                <td className="py-2 px-3 text-xs text-gray-400">{dir.size ? `${(dir.size / 1024).toFixed(1)} KB` : '—'}</td>
+                                <td className="py-2 px-3 text-xs text-gray-400">{dir.type || '—'}</td>
                               </tr>
                             ))}
                           </tbody>
@@ -2820,120 +2970,102 @@ export default function OSINTPlatform() {
                     </div>
                   )}
 
-                  {/* HTTP Headers & Security */}
-                  {apiData.data.httpHeaders && (
+                  {/* Infrastructure graph */}
+                  {apiData.data.infrastructure && (
                     <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                       <h3 className="font-semibold mb-3 flex items-center gap-2">
-                        <FileCode className="w-5 h-5 text-cyan-400" /> HTTP Headers & Security Analysis
+                        <Network className="w-5 h-5 text-blue-400" /> Infrastructure Graph
                       </h3>
-                      
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                          <h4 className="text-sm font-medium mb-2">Server Info</h4>
-                          <div className="space-y-1 text-sm">
-                            <div className="flex justify-between"><span className="text-gray-400">Status Code:</span><span>{apiData.data.httpHeaders.statusCode}</span></div>
-                            <div className="flex justify-between"><span className="text-gray-400">Server:</span><span>{apiData.data.httpHeaders.server}</span></div>
-                            <div className="flex justify-between"><span className="text-gray-400">Technologies:</span><span>{apiData.data.httpHeaders.technologies?.join(', ')}</span></div>
+                      <p className="text-xs text-gray-500 mb-2">DNS · MX · nameservers · subdomains · IPs</p>
+                      <div className="flex flex-wrap gap-4">
+                        {apiData.data.infrastructure.nodes.map((n: any, i: number) => (
+                          <div key={i} className="flex items-center gap-2 px-3 py-2 bg-gray-800 rounded-lg border border-gray-700">
+                            <span className={`w-2 h-2 rounded-full ${
+                              n.kind === 'domain' ? 'bg-purple-400' : n.kind === 'ip' ? 'bg-green-400' : n.kind === 'mx' ? 'bg-pink-400' : n.kind === 'ns' ? 'bg-gray-400' : 'bg-blue-400'
+                            }`} />
+                            <span className="font-mono text-xs">{n.label}</span>
+                            <span className="text-[10px] text-gray-500">{n.kind}</span>
                           </div>
-                        </div>
-                        
-                        <div>
-                          <h4 className="text-sm font-medium mb-2">Security Headers ({apiData.data.httpHeaders.securityScore})</h4>
-                          <div className="space-y-1">
-                            {Object.entries(apiData.data.httpHeaders.securityHeaders || {}).map(([header, present]: [string, any]) => (
-                              <div key={header} className="flex items-center gap-2 text-sm">
-                                {present ? <CheckCircle className="w-4 h-4 text-green-400" /> : <XCircle className="w-4 h-4 text-red-400" />}
-                                <span className={present ? '' : 'text-gray-500 line-through'}>{header}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Page Capture */}
-                  {apiData.data.capture && (
-                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                      <h3 className="font-semibold mb-3 flex items-center gap-2">
-                        <Eye className="w-5 h-5 text-purple-400" /> Page Capture Results
-                        {apiData.data.capture.captured && <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded ml-2">Captured</span>}
-                      </h3>
-                      
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        <InfoCard label="Title" value={apiData.data.capture.title} icon={<FileText className="w-4 h-4" />} />
-                        <InfoCard label="HTML Size" value={`${(apiData.data.capture.htmlSize / 1024).toFixed(1)} KB`} icon={<Database className="w-4 h-4" />} />
-                        <InfoCard label="Links Found" value={String(apiData.data.capture.linkCount)} icon={<LinkIcon className="w-4 h-4" />} />
-                        <InfoCard label="Scripts" value={String(apiData.data.capture.scriptCount)} icon={<FileCode className="w-4 h-4" />} />
-                        <InfoCard label="Forms" value={String(apiData.data.capture.formCount)} icon={<Terminal className="w-4 h-4" />} />
-                        <InfoCard label="Login Form" value={apiData.data.capture.hasLoginForm ? 'Yes ⚠️' : 'No'} icon={<Lock className="w-4 h-4" />} alert={apiData.data.capture.hasLoginForm} />
-                        <InfoCard label="Admin Panel" value={apiData.data.capture.hasAdminPanel ? 'Yes ⚠️' : 'No'} icon={<ShieldAlert className="w-4 h-4" />} alert={apiData.data.capture.hasAdminPanel} />
-                      </div>
-
-                      {apiData.data.capture.sensitivePatterns && (
-                        <div className="mt-4 p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
-                          <h4 className="text-sm font-medium text-red-400 mb-2">Sensitive Information Detected</h4>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
-                            {apiData.data.capture.sensitivePatterns.emailAddresses?.length > 0 && (
-                              <div>Emails: {apiData.data.capture.sensitivePatterns.emailAddresses.length} found</div>
-                            )}
-                            {apiData.data.capture.sensitivePatterns.phoneNumbers?.length > 0 && (
-                              <div>Phones: {apiData.data.capture.sensitivePatterns.phoneNumbers.length} found</div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Subdomains */}
-                  {apiData.data.subdomains && apiData.data.subdomains.length > 0 && (
-                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                      <h3 className="font-semibold mb-3 flex items-center gap-2">
-                        <Globe2 className="w-5 h-5 text-indigo-400" /> Discovered Subdomains
-                        <span className="text-xs bg-indigo-500/20 text-indigo-400 px-2 py-0.5 rounded">
-                          {apiData.data.subdomains.length} found
-                        </span>
-                      </h3>
-                      <div className="flex flex-wrap gap-2">
-                        {apiData.data.subdomains.map((sub: string, idx: number) => (
-                          <span key={idx} className="px-3 py-1 bg-gray-800 rounded-lg font-mono text-sm hover:bg-gray-700 cursor-pointer">
-                            {sub}
-                          </span>
                         ))}
                       </div>
                     </div>
                   )}
 
-                  {/* Saved Path */}
-                  {apiData.data.savedPath && (
-                    <div className="bg-green-500/10 border border-green-500/30 rounded-xl p-4 flex items-center gap-3">
-                      <FolderOpen className="w-5 h-5 text-green-400" />
-                      <div>
-                        <div className="text-sm font-medium text-green-400">Results Saved</div>
-                        <div className="text-xs text-gray-400 font-mono">{apiData.data.savedPath}</div>
+                  {/* DNS Records */}
+                  {apiData.data.dns && (
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                      <h3 className="font-semibold mb-3 flex items-center gap-2">
+                        <Server className="w-5 h-5 text-blue-400" /> DNS Enumeration
+                      </h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                        {Object.entries(apiData.data.dns).map(([type, records]: [string, any]) => (
+                          <div key={type} className="p-3 bg-gray-800 rounded-lg">
+                            <div className="text-xs font-medium text-gray-400 mb-1">{type} Records</div>
+                            {records?.Answer?.length > 0 ? (
+                              <div className="space-y-1">
+                                {records.Answer.slice(0, 4).map((r: any, i: number) => (
+                                  <div key={i} className="text-xs font-mono text-green-400 truncate">{r.data}</div>
+                                ))}
+                                {records.Answer.length > 4 && <div className="text-xs text-gray-500">+{records.Answer.length - 4} more</div>}
+                              </div>
+                            ) : (
+                              <div className="text-xs text-gray-500">No records</div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* HTTP Headers */}
+                  {apiData.data.httpHeaders?.securityHeaders && (
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                      <h3 className="font-semibold mb-3 flex items-center gap-2">
+                        <FileCode className="w-5 h-5 text-cyan-400" /> HTTP Headers & Security
+                        <span className="ml-auto text-xs text-gray-400">{apiData.data.httpHeaders.securityScore} security headers</span>
+                      </h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                        <div className="space-y-1">
+                          <div className="flex justify-between"><span className="text-gray-400">Status Code:</span><span>{apiData.data.httpHeaders.statusCode}</span></div>
+                          <div className="flex justify-between"><span className="text-gray-400">Server:</span><span>{apiData.data.httpHeaders.server}</span></div>
+                          {apiData.data.httpHeaders.headers?.['x-powered-by'] && (
+                            <div className="flex justify-between"><span className="text-gray-400">Powered By:</span><span>{apiData.data.httpHeaders.headers['x-powered-by']}</span></div>
+                          )}
+                        </div>
+                        <div className="space-y-1">
+                          {Object.entries(apiData.data.httpHeaders.securityHeaders || {}).map(([header, present]: [string, any]) => (
+                            <div key={header} className="flex items-center gap-2">
+                              {present ? <CheckCircle className="w-4 h-4 text-green-400" /> : <XCircle className="w-4 h-4 text-red-400" />}
+                              <span className={present ? '' : 'text-gray-500 line-through'}>{header}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Subdomains */}
+                  {apiData.data.subdomains?.length > 0 && (
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                      <h3 className="font-semibold mb-3 flex items-center gap-2">
+                        <Globe2 className="w-5 h-5 text-indigo-400" /> Discovered Subdomains
+                        <span className="text-xs bg-indigo-500/20 text-indigo-400 px-2 py-0.5 rounded">{apiData.data.subdomains.length} found</span>
+                      </h3>
+                      <div className="flex flex-wrap gap-2">
+                        {apiData.data.subdomains.map((sub: string, idx: number) => (
+                          <span key={idx} className="px-3 py-1 bg-gray-800 rounded-lg font-mono text-sm hover:bg-gray-700 cursor-pointer">{sub}</span>
+                        ))}
                       </div>
                     </div>
                   )}
                 </div>
               )}
 
-              {!apiData && !loading && (
+              {!apiData?.data && !loading && (
                 <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
                   <Camera className="w-16 h-16 mx-auto mb-4 text-gray-600" />
-                  <h3 className="text-lg font-semibold mb-2">Forensic Analysis Lab</h3>
-                  <p className="text-gray-400 mb-4">Complete domain forensics similar to Lookyloo. Generates a full report folder with all findings.</p>
-                  <div className="flex flex-wrap justify-center gap-2">
-                    {['example.com', 'testphp.vulnweb.com', 'demo.testfire.net'].map(d => (
-                      <button
-                        key={d}
-                        onClick={() => setInputValue(d)}
-                        className="px-3 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs font-mono"
-                      >
-                        {d}
-                      </button>
-                    ))}
-                  </div>
+                  <h3 className="text-lg font-semibold mb-2">Advanced Web Forensic Lab</h3>
+                  <p className="text-gray-400">Real-time analysis: DNS recon, directory fuzzing, phishing kit & database discovery, and threat actor attribution. Results are stored as per-site resource containers.</p>
                 </div>
               )}
             </div>

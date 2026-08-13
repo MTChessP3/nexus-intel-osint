@@ -67,7 +67,7 @@ interface Props {
   setInputValue: (v: string) => void;
   onAnalyze: (domain?: string) => void;
   onCopy: (text: string) => void;
-  onGoForensics: () => void;
+  onGoForensics: (domain: string) => void;
 }
 
 const LEVEL_COLORS: Record<string, string> = {
@@ -200,7 +200,7 @@ export default function DomainIntelPanel({
                 <button onClick={() => onCopy(intel.domain)} className="px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm flex items-center gap-2">
                   <Copy className="w-4 h-4" /> Copy
                 </button>
-                <button onClick={onGoForensics} className="px-3 py-2 bg-red-600/20 hover:bg-red-600/30 border border-red-500/40 rounded-lg text-sm flex items-center gap-2">
+                <button onClick={() => onGoForensics(intel.domain)} className="px-3 py-2 bg-red-600/20 hover:bg-red-600/30 border border-red-500/40 rounded-lg text-sm flex items-center gap-2">
                   <Eye className="w-4 h-4" /> Full Forensics
                 </button>
               </div>
