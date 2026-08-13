@@ -991,7 +991,7 @@ export default function OSINTPlatform() {
 
   const loadForensicsHistory = async () => {
     try {
-      const response = await fetch('/api/osint/forensics?action=list');
+      const response = await fetch(`/api/osint/forensics?action=list&_=${Date.now()}`);
       const result = await response.json();
       if (result.success) {
         setForensicsHistory(result.data || []);
@@ -2734,17 +2734,17 @@ export default function OSINTPlatform() {
                                     </span>
                                   ) : (
                                     <button
-                                      onClick={() => setLoadConfirm({ id: analysis.id, name: displayName })}
+                                      onClick={() => setLoadConfirm({ id: analysis.name, name: displayName })}
                                       className="text-xs px-2 py-1 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded"
                                     >Open</button>
                                   )}
-                                  <button
-                                    onClick={() => setDeleteConfirm({ id: analysis.id, name: displayName })}
-                                    className="text-xs px-2 py-1 bg-gray-600/20 hover:bg-gray-600/40 text-gray-400 rounded"
-                                    title="Delete this analysis"
-                                  >
-                                    <Trash2 className="w-3 h-3" />
-                                  </button>
+                                    <button
+                                      onClick={() => setDeleteConfirm({ id: analysis.name, name: displayName })}
+                                      className="text-xs px-2 py-1 bg-gray-600/20 hover:bg-gray-600/40 text-gray-400 rounded"
+                                      title="Delete this analysis"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
                                 </div>
                               </td>
                             </tr>
