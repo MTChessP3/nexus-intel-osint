@@ -4,7 +4,7 @@ import { kvGet, kvSet, kvListKeys, kvDel } from '@/lib/kv';
 import { lookupVirusTotalDomain } from '@/lib/intel/virustotal';
 import { runForensicAnalysis, ForensicMetadata } from '@/lib/intel/forensics';
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 const ANALYSIS_KEY_PREFIX = 'nexus:forensics:';
 const INDEX_KEY = 'nexus:forensics:index';
@@ -62,7 +62,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      source: 'Advanced Web Forensic Engine v5.0 (Lookyloo-style)',
+      source: 'Advanced Web Forensic Engine v5.1 (Lookyloo-style)',
       fetchedLive: true,
       data: { ...results, virusTotal: vt },
       message: `Forensic analysis complete. Risk Level: ${results.risk.level}. Score: ${results.risk.score}/100. Crawled: ${Object.keys(results.resourceTree.children || {}).length} pages, Fuzzed: ${results.fuzzingSummary.totalProbed} paths, Artifacts: ${results.artifacts.filter(a => a.downloaded).length}`,
@@ -138,7 +138,7 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     success: true,
     message: 'Advanced Web Forensic Engine ready. POST a domain to start live capture analysis.',
-    capabilities: ['Live Crawl (gospider-style, max depth 2, 30 pages)', 'JS Secret Extraction (SecretFinder-style)', 'Directory Fuzzing (ffuf/dirb-style, 80 paths)', 'Artifact Download (wget/curl-style)', 'Resource Tree (interactive, requests/redirects/dependencies)', 'Infrastructure Graph (DNS/MX/NS/Subdomains/Hosting)', 'Evidence Download (phishing kits, databases, configs, backups)'],
+    capabilities: ['Live Crawl (gospider-style, max depth 3, 45 pages + robots.txt/sitemap.xml seeding)', 'JS Secret + API Endpoint Extraction (SecretFinder-style)', 'Directory Fuzzing (ffuf/dirb-style, 128 paths + recursive fuzzing inside discovered dirs)', 'Directory Listing Crawl (wget -r style, Apache/nginx indexes)', 'Artifact Deep Analysis (wget/curl-style): ZIP/TAR.GZ internal file trees, SQL schema/table/email parsing, SQLite scan, config key parsing', 'Resource Tree (interactive, requests/redirects/dependencies)', 'Infrastructure Graph (DNS/MX/NS/Subdomains/Hosting)', 'Evidence Download (phishing kits, databases, configs, backups)'],
   });
 }
 

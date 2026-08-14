@@ -1,26 +1,37 @@
-// Web Forensic Analysis Engine — Lookyloo-style live capture.
-// Performs real-time crawling, JS secret extraction (SecretFinder-style),
-// directory fuzzing (ffuf/dirb-style), artifact download (wget/curl-style),
-// builds interactive resource tree and infrastructure graph.
+// Web Forensic Analysis Engine — Lookyloo-style live capture (v5.1).
+// Performs real-time crawling (gospider/siteone-crawler-style), JS secret extraction
+// (SecretFinder-style), directory fuzzing (ffuf/dirb-style, incl. recursive fuzzing),
+// artifact download & deep analysis (wget/curl-style): archive contents extraction
+// (ZIP/TAR.GZ), SQL schema parsing, SQLite scanning, config parsing, directory-listing
+// crawling, robots.txt/sitemap.xml seeding and API endpoint discovery from JS.
 // Produces per-analysis container: /analisis_[dominio]_[timestamp]/
 //   _fuzzing_tree/  (interactive directory structure)
 //   _artifacts/phishing_kits/  (archives: .zip/.rar/.tar.gz/.7z)
 //   _artifacts/databases/      (dumps: .sql/.db/.sqlite/.bak)
 //   _metadata.json             (DNS, IP/ASN/geo, subdomains, attribution, risk)
 
-const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) NEXUS-Forensic/4.0';
+import { gunzip } from 'node:zlib';
+import { promisify } from 'node:util';
+
+const gunzipAsync = promisify(gunzip);
+
+const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) NEXUS-Forensic/5.1';
 const FETCH_TIMEOUT = 12000;
-const MAX_CRAWL_DEPTH = 2;
-const MAX_CRAWL_PAGES = 30;
-const MAX_FUZZ_CONCURRENT = 10;
-const FUZZ_TIMEOUT = 8000;
+const MAX_CRAWL_DEPTH = 3;
+const MAX_CRAWL_PAGES = 45;
+const MAX_FUZZ_CONCURRENT = 16;
+const FUZZ_TIMEOUT = 7000;
+const MAX_RECURSIVE_DIRS = 6;
+const MAX_RECURSIVE_DEPTH = 2;
+const MAX_ARTIFACT_DOWNLOADS = 12;
+const MAX_ARTIFACT_SIZE = 30 * 1024 * 1024;
 
 export interface ResourceTreeNode {
   id: string;
   url: string;
   parentId: string | null;
   name: string;
-  type: 'page' | 'script' | 'style' | 'image' | 'font' | 'document' | 'font' | 'other' | 'redirect' | 'fuzz';
+  type: 'page' | 'script' | 'style' | 'image' | 'font' | 'document' | 'other' | 'redirect' | 'fuzz' | 'api';
   status: number;
   contentType: string | null;
   size: number | null;
@@ -36,7 +47,31 @@ export interface ResourceTreeNode {
     title?: string;
     category?: string;
     sensitive?: boolean;
+    endpoints?: string[];
   };
+}
+
+export interface ArtifactEntry {
+  name: string;
+  size: number;
+  type: 'file' | 'dir';
+}
+
+export interface ArtifactTable {
+  name: string;
+  columns: string[];
+  rows: number;
+}
+
+export interface ArtifactStructure {
+  kind: 'archive' | 'sql' | 'sqlite' | 'config' | 'directory' | 'text' | 'binary' | 'unknown';
+  entries?: ArtifactEntry[];
+  tables?: ArtifactTable[];
+  keys?: { key: string; value: string }[];
+  emails?: string[];
+  urls?: string[];
+  note?: string;
+  sensitive?: boolean;
 }
 
 export interface ForensicArtifact {
@@ -50,6 +85,7 @@ export interface ForensicArtifact {
   contentType: string | null;
   downloaded: boolean;
   hash?: string;
+  structure?: ArtifactStructure;
 }
 
 export interface ForensicMetadata {
@@ -81,53 +117,103 @@ export interface ForensicMetadata {
     byStatus: Record<number, number>;
     byCategory: Record<string, number>;
     exposed: number;
+    archiveEntries?: number;
+    dbTables?: number;
   };
   artifacts: ForensicArtifact[];
   verdict: string;
 }
 
-const FUZZ_PATHS: { path: string; category: 'kit' | 'admin' | 'db' | 'backup' | 'config' | 'common' }[] = [
+interface FuzzPathDef { path: string; category: 'kit' | 'admin' | 'db' | 'backup' | 'config' | 'common'; }
+
+const FUZZ_PATHS: FuzzPathDef[] = [
   { path: 'admin', category: 'admin' }, { path: 'admin/', category: 'admin' },
-  { path: 'administrator', category: 'admin' }, { path: 'wp-admin', category: 'admin' },
-  { path: 'panel', category: 'admin' }, { path: 'cpanel', category: 'admin' },
-  { path: 'login', category: 'admin' }, { path: 'dashboard', category: 'admin' },
+  { path: 'administrator', category: 'admin' }, { path: 'administrator/index.php', category: 'admin' },
+  { path: 'administrator/login.php', category: 'admin' },
+  { path: 'wp-admin', category: 'admin' }, { path: 'wp-login.php', category: 'admin' },
+  { path: 'wp-content/uploads/', category: 'common' }, { path: 'xmlrpc.php', category: 'admin' },
+  { path: 'panel', category: 'admin' }, { path: 'panel/', category: 'admin' },
+  { path: 'cpanel', category: 'admin' }, { path: 'phpmyadmin/', category: 'admin' },
+  { path: 'pma/', category: 'admin' }, { path: 'adminer.php', category: 'admin' },
+  { path: 'login', category: 'admin' }, { path: 'login.php', category: 'admin' },
+  { path: 'dashboard', category: 'admin' },
   { path: 'backup', category: 'backup' }, { path: 'backup/', category: 'backup' },
-  { path: 'backups', category: 'backup' }, { path: 'db', category: 'db' },
-  { path: 'database', category: 'db' }, { path: 'dump.sql', category: 'db' },
-  { path: 'db.sql', category: 'db' }, { path: 'database.sql', category: 'db' },
-  { path: 'backup.sql', category: 'db' }, { path: 'data.sql', category: 'db' },
-  { path: '.sql', category: 'db' }, { path: 'db.sql.gz', category: 'db' },
-  { path: 'db.sql.zip', category: 'db' }, { path: 'dump.db', category: 'db' },
-  { path: 'backup.db', category: 'db' }, { path: 'app.db', category: 'db' },
-  { path: 'users.db', category: 'db' }, { path: 'database.db', category: 'db' },
+  { path: 'backups', category: 'backup' },
+  { path: 'db', category: 'db' }, { path: 'database', category: 'db' },
+  { path: 'dump.sql', category: 'db' }, { path: 'db.sql', category: 'db' },
+  { path: 'database.sql', category: 'db' }, { path: 'backup.sql', category: 'db' },
+  { path: 'data.sql', category: 'db' }, { path: '.sql', category: 'db' },
+  { path: 'db.sql.gz', category: 'db' }, { path: 'db.sql.zip', category: 'db' },
+  { path: 'dump.db', category: 'db' }, { path: 'backup.db', category: 'db' },
+  { path: 'app.db', category: 'db' }, { path: 'users.db', category: 'db' },
+  { path: 'database.db', category: 'db' }, { path: 'data.db', category: 'db' },
+  { path: 'logins.txt', category: 'db' }, { path: 'credentials.txt', category: 'db' },
+  { path: 'users.txt', category: 'db' }, { path: 'passwords.txt', category: 'db' },
+  { path: 'emails.txt', category: 'db' }, { path: 'cc.txt', category: 'db' },
   { path: 'config.php', category: 'config' }, { path: 'config.php.bak', category: 'config' },
   { path: 'settings.php', category: 'config' }, { path: 'wp-config.php', category: 'config' },
-  { path: 'configuration.php', category: 'config' }, { path: '.env', category: 'config' },
-  { path: '.env.backup', category: 'config' }, { path: 'config.inc.php', category: 'config' },
+  { path: 'wp-config.php.bak', category: 'config' }, { path: 'configuration.php', category: 'config' },
+  { path: '.env', category: 'config' }, { path: '.env.backup', category: 'config' },
+  { path: '.env.example', category: 'config' }, { path: 'config.inc.php', category: 'config' },
   { path: 'config.yml', category: 'config' }, { path: 'config.json', category: 'config' },
   { path: 'composer.json', category: 'config' }, { path: 'package.json', category: 'config' },
-  { path: 'phpinfo.php', category: 'config' }, { path: 'test.php', category: 'config' },
+  { path: 'phpinfo.php', category: 'config' }, { path: 'info.php', category: 'config' },
+  { path: 'test.php', category: 'config' },
   { path: 'index.php~', category: 'backup' }, { path: 'index.php.bak', category: 'backup' },
+  { path: 'index.html.bak', category: 'backup' }, { path: 'index.htm.bak', category: 'backup' },
   { path: 'main.zip', category: 'kit' }, { path: 'site.zip', category: 'kit' },
   { path: 'update.zip', category: 'kit' }, { path: 'theme.zip', category: 'kit' },
   { path: 'backup.zip', category: 'kit' }, { path: 'panel.zip', category: 'kit' },
   { path: 'panel.rar', category: 'kit' }, { path: 'kit.zip', category: 'kit' },
   { path: 'phishing.zip', category: 'kit' }, { path: 'template.zip', category: 'kit' },
   { path: 'assets.zip', category: 'kit' }, { path: 'files.zip', category: 'kit' },
+  { path: 'source.zip', category: 'kit' }, { path: 'web.zip', category: 'kit' },
   { path: '.rar', category: 'kit' }, { path: '.tar.gz', category: 'kit' },
   { path: 'vendor', category: 'common' }, { path: 'uploads/', category: 'common' },
   { path: 'images/', category: 'common' }, { path: 'css/', category: 'common' },
   { path: 'js/', category: 'common' }, { path: 'assets/', category: 'common' },
   { path: 'tmp/', category: 'common' }, { path: 'temp/', category: 'common' },
-  { path: 'logs/', category: 'common' }, { path: 'error_log', category: 'common' },
+  { path: 'logs/', category: 'common' }, { path: 'log/', category: 'common' },
+  { path: 'error_log', category: 'common' }, { path: 'debug.log', category: 'common' },
+  { path: 'access.log', category: 'common' },
   { path: '.git/config', category: 'config' }, { path: '.git/HEAD', category: 'config' },
-  { path: 'info.php', category: 'config' }, { path: 'index.html.bak', category: 'backup' },
-  { path: 'index.htm.bak', category: 'backup' }, { path: 'db.zip', category: 'db' },
-  { path: 'dump.zip', category: 'db' }, { path: 'sql.zip', category: 'db' },
+  { path: 'db.zip', category: 'db' }, { path: 'dump.zip', category: 'db' },
+  { path: 'sql.zip', category: 'db' },
+  { path: 'storage/logs/laravel.log', category: 'config' }, { path: 'storage/', category: 'common' },
+  { path: 'joomla/', category: 'common' }, { path: 'server-status', category: 'config' },
+  { path: 'phpunit.xml', category: 'config' }, { path: 'composer.lock', category: 'config' },
+];
+
+// Paths re-probed recursively inside discovered directories (ffuf -recursion / dirb -r style)
+const RECURSIVE_PATHS: FuzzPathDef[] = [
+  { path: 'login.php', category: 'admin' }, { path: 'index.php', category: 'kit' },
+  { path: 'admin.php', category: 'admin' }, { path: 'panel.php', category: 'admin' },
+  { path: 'verify.php', category: 'kit' }, { path: 'check.php', category: 'kit' },
+  { path: 'capture.php', category: 'kit' }, { path: 'get.php', category: 'kit' },
+  { path: 'post.php', category: 'kit' }, { path: 'send.php', category: 'kit' },
+  { path: 'load.php', category: 'kit' }, { path: 'stealer.php', category: 'kit' },
+  { path: 'result.php', category: 'kit' }, { path: 'results.php', category: 'kit' },
+  { path: 'config.php', category: 'config' }, { path: 'config.inc.php', category: 'config' },
+  { path: 'settings.php', category: 'config' }, { path: '.env', category: 'config' },
+  { path: 'admin/', category: 'admin' }, { path: 'config/', category: 'common' },
+  { path: 'inc/', category: 'common' }, { path: 'include/', category: 'common' },
+  { path: 'lib/', category: 'common' }, { path: 'data/', category: 'common' },
+  { path: 'files/', category: 'common' }, { path: 'temp/', category: 'common' },
+  { path: 'logs/', category: 'common' },
+  { path: 'log.txt', category: 'db' }, { path: 'data.txt', category: 'db' },
+  { path: 'logins.txt', category: 'db' }, { path: 'credentials.txt', category: 'db' },
+  { path: 'users.txt', category: 'db' }, { path: 'emails.txt', category: 'db' },
+  { path: 'dump.sql', category: 'db' }, { path: 'db.sql', category: 'db' },
+  { path: 'database.sql', category: 'db' }, { path: 'db.sql.gz', category: 'db' },
+  { path: 'db.zip', category: 'db' }, { path: 'users.db', category: 'db' },
+  { path: 'app.db', category: 'db' },
+  { path: 'main.zip', category: 'kit' }, { path: 'site.zip', category: 'kit' },
+  { path: 'backup.zip', category: 'kit' }, { path: 'kit.zip', category: 'kit' },
+  { path: 'index.php.bak', category: 'backup' }, { path: '.htaccess', category: 'config' },
 ];
 
 const KIT_EXT = /\.(zip|rar|tar\.gz|tgz|7z)$/i;
-const DB_EXT = /\.(sql|db|sqlite|sqlite3|bak|dump|mysql|mdb|accdb)$/i;
+const DB_EXT = /\.(sql|db|sqlite|sqlite3|bak|dump|mysql|mdb|accdb|txt)$/i;
 const CONFIG_EXT = /\.(env|config|conf|ini|yaml|yml|json|php|inc)$/i;
 const BACKUP_EXT = /\.(bak|backup|old|orig|save|swp|~)$/i;
 
@@ -216,6 +302,29 @@ function findSecrets(content: string): string[] {
   return [...new Set(found)].slice(0, 15);
 }
 
+// API endpoint discovery from JS/HTML (gospider/siteone-crawler style)
+function extractEndpoints(content: string, baseUrl: string): string[] {
+  const out = new Set<string>();
+  const patterns = [
+    /["'`](\/(?:api|v\d|ajax|rest|wp-json|graphql|admin|auth|login|verify|get|send|load)[^"'`\s?#]*?)["'`]/gi,
+    /(?:fetch|axios\.(?:get|post|put|patch)|XMLHttpRequest[^)]*?open\([^)]*?)\s*\(\s*["'`]([^"'`\s]+)["'`]/gi,
+    /url\s*[:=]\s*["'`]([^"'`\s]+)["'`]/gi,
+    /action=["']([^"']+)["']/gi,
+  ];
+  for (const re of patterns) {
+    let m;
+    while ((m = re.exec(content)) !== null) {
+      const raw = m[1];
+      if (!raw || raw.startsWith('#') || raw.startsWith('data:') || raw.startsWith('mailto:')) continue;
+      try {
+        const abs = new URL(raw, baseUrl).href;
+        if (new URL(abs).hostname === new URL(baseUrl).hostname) out.add(abs);
+      } catch {}
+    }
+  }
+  return [...out].slice(0, 25);
+}
+
 function getResourceType(contentType: string | null, url: string): ResourceTreeNode['type'] {
   if (!contentType) {
     const ext = url.split('?')[0].split('.').pop()?.toLowerCase() || '';
@@ -243,6 +352,7 @@ async function crawlPage(url: string, visited: Set<string>, tree: ResourceTreeNo
   let status = 0, contentType: string | null = null, size = 0;
   let html = '', redirectChain: string[] = [];
   let secrets: string[] = [], forms = 0, links = 0, scripts = 0, title = '';
+  const endpoints: string[] = [];
 
   try {
     const res = await fetchWithTimeout(url, { redirect: 'manual' });
@@ -273,26 +383,30 @@ async function crawlPage(url: string, visited: Set<string>, tree: ResourceTreeNo
       scripts = scriptUrls.length;
       forms = extractForms(html);
       secrets = findSecrets(html);
+      endpoints.push(...extractEndpoints(html, currentUrl));
 
       // Recursively crawl linked pages (same domain only)
       const childLinks = extractLinks(html, currentUrl).filter(l => {
         try { return new URL(l).hostname === new URL(url).hostname; } catch { return false; }
       });
-      for (const link of childLinks.slice(0, 5)) {
-        if (!visited.has(link)) {
+      const seedSet = new Set(childLinks.slice(0, 6));
+      for (const ep of endpoints) seedSet.add(ep);
+      for (const link of [...seedSet].slice(0, 8)) {
+        if (!visited.has(link) && !link.includes('logout') && !link.includes('javascript:')) {
           const children = await crawlPage(link, visited, tree, nodeId, depth + 1);
           tree.push(...children);
         }
       }
 
-      // Analyze JS files for secrets (SecretFinder-style)
-      for (const scriptUrl of scriptUrls.slice(0, 5)) {
+      // Analyze JS files for secrets + endpoints (SecretFinder-style)
+      for (const scriptUrl of scriptUrls.slice(0, 6)) {
         try {
           const sRes = await fetchWithTimeout(scriptUrl, { redirect: 'follow' });
           if (sRes.ok) {
             const jsContent = await sRes.text();
             const jsSecrets = findSecrets(jsContent);
-            if (jsSecrets.length > 0) {
+            const jsEndpoints = extractEndpoints(jsContent, scriptUrl);
+            if (jsSecrets.length > 0 || jsEndpoints.length > 0) {
               secrets.push(...jsSecrets.map(s => `[JS] ${s}`));
               const scriptNode: ResourceTreeNode = {
                 id: Buffer.from(scriptUrl).toString('base64url').slice(0, 16),
@@ -307,13 +421,26 @@ async function crawlPage(url: string, visited: Set<string>, tree: ResourceTreeNo
                 redirectChain: [],
                 discoveredAt: new Date().toISOString(),
                 children: [],
-                meta: { secrets: jsSecrets }
+                meta: { secrets: jsSecrets, endpoints: jsEndpoints }
               };
               tree.push(scriptNode);
+              // Feed discovered API endpoints into the crawl
+              for (const ep of jsEndpoints.slice(0, 4)) {
+                if (!visited.has(ep)) {
+                  const epChildren = await crawlPage(ep, visited, tree, scriptNode.id, depth + 2);
+                  tree.push(...epChildren);
+                }
+              }
             }
           }
         } catch {}
       }
+    } else if (contentType?.includes('json') || contentType?.includes('javascript')) {
+      try {
+        const body = await currentRes.text();
+        const bodySecrets = findSecrets(body);
+        if (bodySecrets.length > 0) secrets.push(...bodySecrets);
+      } catch {}
     }
   } catch (e) {
     status = 0;
@@ -332,85 +459,388 @@ async function crawlPage(url: string, visited: Set<string>, tree: ResourceTreeNo
     redirectChain,
     discoveredAt: new Date().toISOString(),
     children: [],
-    meta: { secrets: secrets.slice(0, 10), forms, links, scripts, title }
+    meta: { secrets: secrets.slice(0, 10), forms, links, scripts, title, endpoints: endpoints.slice(0, 10) }
   };
   tree.push(node);
   return tree;
 }
 
-async function fuzzDirectories(baseUrl: string, visited: Set<string>): Promise<{ tree: ResourceTreeNode[]; artifacts: ForensicArtifact[] }> {
-  const fuzzTree: ResourceTreeNode[] = [];
-  const artifacts: ForensicArtifact[] = [];
+// Parse ZIP central directory (no external deps) → internal file listing
+function parseZip(buf: Buffer): ArtifactStructure {
+  const entries: ArtifactEntry[] = [];
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 131072); i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) return { kind: 'archive', entries: [], note: 'ZIP detected but central directory not found' };
+  const count = buf.readUInt16LE(eocd + 10);
+  const cdOffset = buf.readUInt32LE(eocd + 16);
+  let off = cdOffset;
+  for (let i = 0; i < Math.min(count, 500); i++) {
+    if (off + 46 > buf.length) break;
+    if (buf.readUInt32LE(off) !== 0x02014b50) break;
+    const compSize = buf.readUInt32LE(off + 20);
+    const nameLen = buf.readUInt16LE(off + 28);
+    const extraLen = buf.readUInt16LE(off + 30);
+    const commentLen = buf.readUInt16LE(off + 32);
+    const name = buf.subarray(off + 46, off + 46 + nameLen).toString('utf8');
+    entries.push({ name, size: compSize, type: name.endsWith('/') ? 'dir' : 'file' });
+    off += 46 + nameLen + extraLen + commentLen;
+  }
+  return { kind: 'archive', entries: entries.slice(0, 300), note: `ZIP archive (${count} entries)` };
+}
 
-  for (let i = 0; i < FUZZ_PATHS.length; i += MAX_FUZZ_CONCURRENT) {
-    const batch = FUZZ_PATHS.slice(i, i + MAX_FUZZ_CONCURRENT);
-    const results = await Promise.allSettled(
-      batch.map(async (p) => {
-        const url = `${baseUrl}/${p.path}`;
-        try {
-          const res = await fetchWithTimeout(url, { method: 'GET', redirect: 'manual' }, FUZZ_TIMEOUT);
-          const status = res.status;
-          const size = parseInt(res.headers.get('content-length') || '0');
-          const contentType = res.headers.get('content-type');
-          const category = classifyPath(p.path, p.category);
-          const sensitive = p.category !== 'common';
+// Parse TAR (ustar) after gunzip → internal file listing
+function parseTar(buf: Buffer): ArtifactStructure {
+  const entries: ArtifactEntry[] = [];
+  let off = 0;
+  while (off + 512 <= buf.length) {
+    const name = buf.subarray(off, off + 100).toString('utf8').replace(/\0.*$/, '');
+    if (!name) break;
+    const sizeStr = buf.subarray(off + 124, off + 136).toString('utf8').replace(/\0.*$/, '').trim();
+    const size = parseInt(sizeStr, 8) || 0;
+    const type = String.fromCharCode(buf[off + 156] || 48);
+    if (type === 'x' || type === 'g') { off += 512; continue; }
+    entries.push({ name, size, type: type === '5' || name.endsWith('/') ? 'dir' : 'file' });
+    off += 512 + Math.ceil(size / 512) * 512;
+    if (entries.length > 500) break;
+  }
+  return { kind: 'archive', entries: entries.slice(0, 300), note: `TAR archive (${entries.length} entries)` };
+}
 
-          const entry: ResourceTreeNode = {
-            id: Buffer.from(url).toString('base64url').slice(0, 16),
-            url,
-            parentId: null,
-            name: p.path,
-            type: 'fuzz',
-            status,
-            contentType,
-            size,
-            depth: 0,
-            redirectChain: [],
-            discoveredAt: new Date().toISOString(),
-            children: [],
-            meta: { category: p.category, sensitive }
-          };
-          fuzzTree.push(entry);
+// Parse SQL dump → tables, columns, row counts, emails
+function parseSqlDump(text: string): ArtifactStructure {
+  const tables: ArtifactTable[] = [];
+  const emailSet = new Set<string>();
+  for (const e of (text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [])) emailSet.add(e.toLowerCase());
+  const tableRe = /CREATE TABLE\s+(?:IF NOT EXISTS\s+)?[`"]?([\w$-]+)[`"]?\s*\(/gi;
+  let m;
+  const colRe = /[`"]?([\w$-]{1,64})[`"]?\s+(?:INT|VARCHAR|TEXT|CHAR|BLOB|TIMESTAMP|DATETIME|DATE|TIME|BOOL|BOOLEAN|FLOAT|DOUBLE|DECIMAL|ENUM|JSON|LONGTEXT|MEDIUMTEXT|TINYTEXT|TINYINT|SMALLINT|MEDIUMINT|BIGINT|INTEGER|SERIAL|UUID|BINARY|VARBINARY|MEDIUMBLOB|LONGBLOB)\b/gi;
+  while ((m = tableRe.exec(text)) && tables.length < 60) {
+    const tname = m[1];
+    const start = text.indexOf('(', m.index);
+    let depth = 0, i = start;
+    for (; i < text.length; i++) {
+      const c = text[i];
+      if (c === '(') depth++;
+      else if (c === ')') { depth--; if (depth === 0) break; }
+    }
+    const block = text.slice(start + 1, i);
+    const cols: string[] = [];
+    let cm;
+    const esc = tname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    while ((cm = colRe.exec(block)) && cols.length < 40) cols.push(cm[1]);
+    const rows = (text.match(new RegExp(`INSERT INTO\\s+[\\\`"]?${esc}[\\\`"]?`, 'gi')) || []).length;
+    tables.push({ name: tname, columns: cols, rows });
+  }
+  const sensitive = tables.some(t => /user|login|pass|cc|card|log|victim|account|session|token|email/i.test(t.name));
+  return { kind: 'sql', tables: tables.slice(0, 60), emails: [...emailSet].slice(0, 25), note: `SQL dump — ${tables.length} table(s), ${emailSet.size} email(s)`, sensitive };
+}
 
-          if ((status === 200 || status === 403) && sensitive) {
-            const artifact: ForensicArtifact = {
-              id: Buffer.from(url).toString('base64url').slice(0, 16),
-              url,
-              localPath: `_artifacts/${category}/${p.path.replace(/\//g, '_')}`,
-              category,
-              kind: p.category,
-              status,
-              size,
-              contentType,
-              downloaded: false
-            };
-            artifacts.push(artifact);
-          }
-          return entry;
-        } catch {
-          return null;
+// SQLite binary scan
+function parseSqlite(buf: Buffer): ArtifactStructure {
+  const tables: ArtifactTable[] = [];
+  const text = buf.toString('latin1');
+  const re = /CREATE TABLE\s+[`"]?([\w$-]+)[`"]?\s*\(/gi;
+  let m;
+  while ((m = re.exec(text)) && tables.length < 60) {
+    tables.push({ name: m[1], columns: [], rows: 0 });
+  }
+  for (const t of tables) {
+    const esc = t.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    t.rows = (text.match(new RegExp(esc + '\\x00', 'g')) || []).length || 0;
+  }
+  const sensitive = tables.some(t => /user|login|pass|card|log|victim|account|session|token/i.test(t.name));
+  return { kind: 'sqlite', tables: tables.slice(0, 60), note: `SQLite database — ${tables.length} table(s)`, sensitive };
+}
+
+// Config key/value parsing (.env/.ini/.php/.json style)
+function parseConfig(text: string): ArtifactStructure {
+  const keys: { key: string; value: string }[] = [];
+  const emailSet = new Set<string>();
+  for (const e of (text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [])) emailSet.add(e.toLowerCase());
+  const lines = text.split(/\r?\n/).slice(0, 400);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('//') || trimmed.startsWith(';') || trimmed.startsWith('/*')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq > 0) {
+      const key = trimmed.slice(0, eq).trim();
+      let value = trimmed.slice(eq + 1).trim().replace(/^["']|["']$/g, '');
+      if (key.length > 1 && key.length < 40 && value.length > 0 && value.length < 200) {
+        if (/(pass|secret|key|token|api|auth|pwd|db_host|db_user)/i.test(key)) {
+          if (value.length > 4) value = value.slice(0, 3) + '***';
         }
-      })
-    );
-    for (const r of results) {
-      if (r.status === 'fulfilled' && r.value) fuzzTree.push(r.value);
+        keys.push({ key, value });
+      }
+    } else if (/^\$/.test(trimmed)) {
+      const m2 = trimmed.match(/^\$(\w+)\s*=\s*(.+)$/);
+      if (m2 && m2[2].length < 200) {
+        let value = m2[2];
+        if (/(pass|secret|key|token|api|auth|pwd)/i.test(m2[1])) value = value.slice(0, 3) + '***';
+        keys.push({ key: m2[1], value });
+      }
     }
   }
+  const sensitive = keys.some(k => /(pass|secret|key|token|api|auth|pwd)/i.test(k.key));
+  return { kind: 'config', keys: keys.slice(0, 40), emails: [...emailSet].slice(0, 15), note: `Config file — ${keys.length} key(s) parsed`, sensitive };
+}
+
+// Apache/nginx directory listing parse (wget -r style)
+function parseDirListingHtml(html: string, baseUrl: string): ArtifactEntry[] {
+  const entries: ArtifactEntry[] = [];
+  const hrefRe = /<a\s+[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gi;
+  let m;
+  while ((m = hrefRe.exec(html)) && entries.length < 120) {
+    let href = m[1];
+    const text = m[2].replace(/<[^>]+>/g, '').trim();
+    if (!href || href.startsWith('?') || href.startsWith('#')) continue;
+    if (href.startsWith('mailto:') || href.startsWith('javascript:')) continue;
+    if (href.includes('..')) continue;
+    let isDir = href.endsWith('/');
+    if (href.startsWith('http')) {
+      try {
+        const u = new URL(href);
+        if (u.hostname !== new URL(baseUrl).hostname) continue;
+        href = u.pathname;
+        isDir = href.endsWith('/');
+      } catch { continue; }
+    }
+    const display = text || href;
+    entries.push({ name: display, size: 0, type: isDir ? 'dir' : 'file' });
+  }
+  return entries;
+}
+
+// Directory listing crawl (wget -r style): fetch listed files, add to tree/artifacts
+async function crawlDirListing(url: string, depth: number, visited: Set<string>, tree: ResourceTreeNode[], artifacts: ForensicArtifact[], parentId: string | null): Promise<void> {
+  if (depth > 1 || visited.has(url)) return;
+  visited.add(url);
+  try {
+    const res = await fetchWithTimeout(url, { redirect: 'follow' }, FUZZ_TIMEOUT);
+    if (!res.ok) return;
+    const html = await res.text();
+    if (!/index|Index|directory/i.test(html.slice(0, 2000))) return;
+    const entries = parseDirListingHtml(html, url);
+    if (entries.length === 0) return;
+    for (const e of entries.slice(0, 40)) {
+      const fileUrl = url.endsWith('/') ? url + encodeURIComponent(e.name) : url + '/' + encodeURIComponent(e.name);
+      if (visited.has(fileUrl)) continue;
+      visited.add(fileUrl);
+      if (e.type === 'dir') {
+        await crawlDirListing(fileUrl, depth + 1, visited, tree, artifacts, parentId);
+        continue;
+      }
+      const cat = classifyPath(fileUrl, 'common');
+      if (cat !== 'other') {
+        artifacts.push({
+          id: Buffer.from(fileUrl).toString('base64url').slice(0, 16),
+          url: fileUrl,
+          localPath: `_artifacts/${cat}/${fileUrl.split('/').pop()}`,
+          category: cat,
+          kind: 'listing',
+          status: 200,
+          size: e.size,
+          contentType: null,
+          downloaded: false,
+        });
+      }
+      tree.push({
+        id: Buffer.from(fileUrl).toString('base64url').slice(0, 16),
+        url: fileUrl,
+        parentId,
+        name: e.name,
+        type: 'fuzz',
+        status: 200,
+        contentType: null,
+        size: e.size || null,
+        depth,
+        redirectChain: [],
+        discoveredAt: new Date().toISOString(),
+        children: [],
+        meta: { category: 'common', sensitive: cat !== 'other', title: `[dir listing] ${e.type}` },
+      });
+    }
+  } catch {}
+}
+
+async function fuzzDirectories(baseUrl: string): Promise<{ tree: ResourceTreeNode[]; artifacts: ForensicArtifact[] }> {
+  const fuzzTree: ResourceTreeNode[] = [];
+  const artifacts: ForensicArtifact[] = [];
+  const probeHistory = new Set<string>();
+  let dirCount = 0;
+
+  const probe = async (p: FuzzPathDef, prefix: string, depth: number, parentId: string | null): Promise<void> => {
+    const url = `${baseUrl}/${prefix}${p.path}`;
+    if (probeHistory.has(url)) return;
+    probeHistory.add(url);
+    try {
+      const res = await fetchWithTimeout(url, { method: 'GET', redirect: 'manual' }, FUZZ_TIMEOUT);
+      const status = res.status;
+      const size = parseInt(res.headers.get('content-length') || '0');
+      const contentType = res.headers.get('content-type');
+      const category = classifyPath(p.path, p.category);
+      const sensitive = p.category !== 'common';
+      const isDirLike = p.path.endsWith('/') || status === 200 && p.category === 'admin' || status === 200 && p.category === 'common' && p.path.endsWith('/');
+
+      const entry: ResourceTreeNode = {
+        id: Buffer.from(url).toString('base64url').slice(0, 16),
+        url,
+        parentId,
+        name: p.path,
+        type: 'fuzz',
+        status,
+        contentType,
+        size,
+        depth,
+        redirectChain: [],
+        discoveredAt: new Date().toISOString(),
+        children: [],
+        meta: { category: p.category, sensitive }
+      };
+      fuzzTree.push(entry);
+
+      const exposed = (status === 200 || status === 403);
+      if (exposed) {
+        if (category !== 'other') {
+          artifacts.push({
+            id: Buffer.from(url).toString('base64url').slice(0, 16),
+            url,
+            localPath: `_artifacts/${category}/${(prefix + p.path).replace(/\//g, '_')}`,
+            category,
+            kind: p.category,
+            status,
+            size,
+            contentType,
+            downloaded: false,
+          });
+        }
+
+        // Directory-listing detection: fetch body of sensitive 200s
+        if (status === 200 && sensitive && contentType?.includes('html')) {
+          try {
+            const body = await res.clone().text();
+            if (/Index of|Directory listing|Parent Directory/i.test(body.slice(0, 3000))) {
+              entry.meta!.title = '[dir listing]';
+              await crawlDirListing(url, 0, probeHistory, fuzzTree, artifacts, entry.id);
+            }
+          } catch {}
+        }
+
+        // Recursive fuzzing inside discovered directories (ffuf -recursion style)
+        const dirish = p.path.endsWith('/') || p.category === 'admin' || p.category === 'common';
+        if (dirish && depth < MAX_RECURSIVE_DEPTH && dirCount < MAX_RECURSIVE_DIRS) {
+          dirCount++;
+          const childPrefix = prefix + p.path + (p.path.endsWith('/') ? '' : '/');
+          const batch = RECURSIVE_PATHS.slice(0, 42);
+          for (let i = 0; i < batch.length; i += MAX_FUZZ_CONCURRENT) {
+            await Promise.allSettled(
+              batch.slice(i, i + MAX_FUZZ_CONCURRENT).map(sub => probe(sub, childPrefix, depth + 1, entry.id))
+            );
+          }
+        }
+      }
+    } catch {}
+  };
+
+  // Main fuzz pass
+  for (let i = 0; i < FUZZ_PATHS.length; i += MAX_FUZZ_CONCURRENT) {
+    await Promise.allSettled(FUZZ_PATHS.slice(i, i + MAX_FUZZ_CONCURRENT).map(p => probe(p, '', 0, null)));
+  }
+
+  // Root-level directory listing (wget -r style)
+  try {
+    const res = await fetchWithTimeout(baseUrl + '/', { redirect: 'follow' }, FUZZ_TIMEOUT);
+    if (res.ok && res.headers.get('content-type')?.includes('html')) {
+      const body = await res.text();
+      if (/Index of|Directory listing|Parent Directory/i.test(body.slice(0, 3000))) {
+        const rootNode: ResourceTreeNode = {
+          id: Buffer.from(baseUrl + '/').toString('base64url').slice(0, 16),
+          url: baseUrl + '/',
+          parentId: null,
+          name: '/',
+          type: 'fuzz',
+          status: res.status,
+          contentType: res.headers.get('content-type'),
+          size: parseInt(res.headers.get('content-length') || '0'),
+          depth: 0,
+          redirectChain: [],
+          discoveredAt: new Date().toISOString(),
+          children: [],
+          meta: { category: 'common', sensitive: true, title: '[dir listing]' } as any,
+        };
+        fuzzTree.push(rootNode);
+        await crawlDirListing(baseUrl + '/', 0, probeHistory, fuzzTree, artifacts, rootNode.id);
+      }
+    }
+  } catch {}
+
   return { tree: fuzzTree, artifacts };
+}
+
+async function analyzeArtifactContent(a: ForensicArtifact, buf: Buffer): Promise<ArtifactStructure | undefined> {
+  try {
+    const pathname = new URL(a.url).pathname.toLowerCase();
+    // ZIP magic
+    if (buf.length > 4 && buf[0] === 0x50 && buf[1] === 0x4b && (buf[2] === 0x03 || buf[2] === 0x05)) {
+      const st = parseZip(buf);
+      return st;
+    }
+    // GZIP → TAR
+    if (buf.length > 2 && buf[0] === 0x1f && buf[1] === 0x8b) {
+      try {
+        const inflated = await gunzipAsync(buf as any);
+        return parseTar(Buffer.from(inflated as any));
+      } catch { return { kind: 'binary', note: 'gzip archive (extraction failed)' }; }
+    }
+    // SQLite
+    if (buf.subarray(0, 16).toString('latin1') === 'SQLite format 3\0') {
+      return parseSqlite(buf);
+    }
+    const head = buf.subarray(0, 4096).toString('latin1');
+    // SQL dump
+    if (/\.(sql|dump|bak|mysql)$/i.test(pathname) || /CREATE TABLE|INSERT INTO/i.test(head)) {
+      return parseSqlDump(buf.toString('latin1'));
+    }
+    // Config files
+    if (/\.(env|ini|conf|config|cfg|yml|yaml|php|json)$/i.test(pathname) || a.category === 'config') {
+      return parseConfig(buf.toString('latin1'));
+    }
+    // Directory listing HTML
+    if (a.contentType?.includes('html') || /Index of|Directory listing|<title>Index/i.test(head)) {
+      const entries = parseDirListingHtml(buf.toString('latin1'), a.url);
+      if (entries.length > 0) return { kind: 'directory', entries: entries.slice(0, 120), note: `Directory listing — ${entries.length} item(s)` };
+    }
+    // Text content: extract emails/URLs
+    if (a.contentType?.includes('text') || /\.(txt|log|bak)$/i.test(pathname)) {
+      const text = buf.toString('utf8');
+      const emails = [...new Set(text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [])].slice(0, 25);
+      const urls = [...new Set(text.match(/https?:\/\/[^\s"'<>]+/g) || [])].slice(0, 20);
+      const sensitive = /(pass|login|user|victim|card|cc_|credential|token)/i.test(text.slice(0, 10000));
+      if (emails.length || urls.length || sensitive) {
+        return { kind: 'text', emails, urls, sensitive, note: 'Text artifact — extracted emails/URLs' };
+      }
+    }
+    return undefined;
+  } catch {
+    return { kind: 'binary', note: 'Binary file (structure unavailable)' };
+  }
 }
 
 async function downloadArtifacts(artifacts: ForensicArtifact[]): Promise<ForensicArtifact[]> {
   const downloaded: ForensicArtifact[] = [];
-  for (const a of artifacts.slice(0, 10)) {
+  for (const a of artifacts.slice(0, MAX_ARTIFACT_DOWNLOADS)) {
     try {
-      const res = await fetchWithTimeout(a.url, { method: 'GET', redirect: 'follow' }, 30000);
-      if (res.ok) {
-        const buf = await res.arrayBuffer();
-        a.size = buf.byteLength;
-        a.hash = Buffer.from(await crypto.subtle.digest('SHA-256', buf)).toString('hex').slice(0, 16);
-        a.downloaded = true;
-        downloaded.push(a);
-      }
+      const res = await fetchWithTimeout(a.url, { method: 'GET', redirect: 'follow' }, 25000);
+      if (!res.ok) continue;
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.byteLength > MAX_ARTIFACT_SIZE) continue;
+      a.size = buf.byteLength;
+      a.contentType = res.headers.get('content-type') || a.contentType;
+      a.hash = Buffer.from(await crypto.subtle.digest('SHA-256', buf)).toString('hex').slice(0, 16);
+      a.downloaded = true;
+      a.structure = await analyzeArtifactContent(a, buf);
+      downloaded.push(a);
     } catch {}
   }
   return downloaded;
@@ -431,6 +861,39 @@ async function getIPInfo(ip: string): Promise<{ asn: string | null; isp: string 
     }
   } catch {}
   return { asn: null, isp: null, geo: null };
+}
+
+// robots.txt + sitemap.xml seeding (gospider --robots style)
+async function discoverSeedUrls(baseUrl: string): Promise<string[]> {
+  const seeds = new Set<string>();
+  try {
+    const robots = await fetchWithTimeout(baseUrl + '/robots.txt', { redirect: 'follow' }, 6000);
+    if (robots.ok && robots.headers.get('content-type')?.includes('text')) {
+      const text = await robots.text();
+      for (const line of text.split(/\r?\n/)) {
+        const t = line.trim();
+        if (/^(allow|disallow)\s*:/i.test(t)) {
+          const p = t.split(':').slice(1).join(':').trim().replace(/^\*/, '');
+          if (p && !p.startsWith('*')) seeds.add(p.replace(/^https?:\/\/[^/]+/i, ''));
+        } else if (/^sitemap\s*:/i.test(t)) {
+          const s = t.split(':').slice(1).join(':').trim();
+          if (s.startsWith('http')) seeds.add(s);
+        }
+      }
+    }
+  } catch {}
+  try {
+    const sm = await fetchWithTimeout(baseUrl + '/sitemap.xml', { redirect: 'follow' }, 6000);
+    if (sm.ok) {
+      const text = await sm.text();
+      const locs = text.match(/<loc>([^<]+)<\/loc>/gi) || [];
+      for (const loc of locs.slice(0, 25)) {
+        const u = loc.replace(/<\/?loc>/gi, '').trim();
+        if (u.startsWith('http')) seeds.add(u);
+      }
+    }
+  } catch {}
+  return [...seeds].slice(0, 30);
 }
 
 export async function runForensicAnalysis(input: string): Promise<ForensicMetadata> {
@@ -518,24 +981,36 @@ export async function runForensicAnalysis(input: string): Promise<ForensicMetada
     ssl = { secure: res.url.startsWith('https:'), protocol: 'TLS (verified)', subject: domain };
   } catch { ssl = { secure: false, error: 'Could not establish HTTPS connection' }; }
 
-  // ---- Live Crawl (gospider-style) ----
+  // ---- Live Crawl (gospider-style) with robots/sitemap seeding ----
   const visited = new Set<string>();
   const resourceTree: ResourceTreeNode[] = [];
   const rootNode = await crawlPage(baseUrl, visited, resourceTree, null, 0);
+  const seeds = await discoverSeedUrls(baseUrl);
+  for (const seed of seeds) {
+    if (visited.size >= MAX_CRAWL_PAGES) break;
+    try {
+      const u = new URL(seed);
+      if (u.hostname === domain && !visited.has(seed)) {
+        const seedNodes = await crawlPage(seed, visited, resourceTree, null, 1);
+        resourceTree.push(...seedNodes);
+      }
+    } catch {}
+  }
 
-  // ---- Directory Fuzzing (ffuf/dirb-style) ----
-  const { tree: fuzzTree, artifacts: fuzzArtifacts } = await fuzzDirectories(baseUrl, visited);
+  // ---- Directory Fuzzing (ffuf/dirb-style + recursion) ----
+  const { tree: fuzzTree, artifacts: fuzzArtifacts } = await fuzzDirectories(baseUrl);
 
-  // ---- Artifact Download (wget/curl-style) ----
+  // ---- Artifact Download + Deep Analysis (wget/curl-style) ----
   const downloadedArtifacts = await downloadArtifacts(fuzzArtifacts);
 
-  // ---- Attribution from crawled pages ----
+  // ---- Attribution from crawled pages + artifact content ----
   const allHtml = resourceTree.filter(n => n.type === 'page').map(n => n.meta?.title || '').join(' ');
   const emailMatches = allHtml.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [];
+  const artifactEmails = downloadedArtifacts.flatMap(a => a.structure?.emails || []);
   const telegramMatches = allHtml.match(/(?:t\.me\/|telegram\.me\/|@)([a-zA-Z0-9_]{4,32})/g) || [];
   const trackingMatches = allHtml.match(/[?&](?:id|tid|client|zone|site)=([A-Za-z0-9\-_]+)/g) || [];
   const attribution = {
-    emails: [...new Set(emailMatches)].filter(e => !e.match(/\.(png|jpg|svg|gif|webp)$/i)).slice(0, 10),
+    emails: [...new Set([...emailMatches, ...artifactEmails])].filter(e => !e.match(/\.(png|jpg|svg|gif|webp)$/i)).slice(0, 15),
     telegramIds: [...new Set(telegramMatches)].slice(0, 10),
     trackingIds: [...new Set(trackingMatches)].map(m => m.replace(/^[?&]/, '')).slice(0, 10),
     apiKeys: resourceTree.flatMap(n => n.meta?.secrets || []).filter(s => s.includes('Key') || s.includes('Token') || s.includes('Secret')).slice(0, 10),
@@ -563,10 +1038,12 @@ export async function runForensicAnalysis(input: string): Promise<ForensicMetada
   const dbCount = downloadedArtifacts.filter(a => a.category === 'database').length;
   const configCount = downloadedArtifacts.filter(a => a.category === 'config').length;
   const backupCount = downloadedArtifacts.filter(a => a.category === 'backup').length;
+  const sensitiveStructure = downloadedArtifacts.filter(a => a.structure?.sensitive).length;
   if (kitCount > 0) { score += 40; signals.push(`${kitCount} phishing kit(s) exposed`); }
   if (dbCount > 0) { score += 35; signals.push(`${dbCount} exposed database file(s)`); }
   if (configCount > 0) { score += 15; signals.push(`${configCount} config file(s) exposed`); }
   if (backupCount > 0) { score += 10; signals.push(`${backupCount} backup file(s) exposed`); }
+  if (sensitiveStructure > 0) { score += 10; signals.push(`Sensitive data inside artifacts (credentials/tables)`); }
   if (attribution.apiKeys.length > 0) { score += 10; signals.push('Hardcoded API keys/secrets in page source'); }
   if (httpHeaders.securityScore) {
     const n = parseInt(String(httpHeaders.securityScore).split('/')[0]);
@@ -579,11 +1056,15 @@ export async function runForensicAnalysis(input: string): Promise<ForensicMetada
   const level = score >= 60 ? 'CRITICAL' : score >= 40 ? 'HIGH' : score >= 15 ? 'MEDIUM' : 'LOW';
 
   // ---- Fuzzing Summary ----
+  const archiveEntries = downloadedArtifacts.filter(a => a.structure?.kind === 'archive').reduce((acc, a) => acc + (a.structure?.entries?.length || 0), 0);
+  const dbTables = downloadedArtifacts.filter(a => a.structure?.kind === 'sql' || a.structure?.kind === 'sqlite').reduce((acc, a) => acc + (a.structure?.tables?.length || 0), 0);
   const fuzzingSummary = {
     totalProbed: fuzzTree.length,
     byStatus: fuzzTree.reduce((acc, n) => { acc[n.status] = (acc[n.status] || 0) + 1; return acc; }, {} as Record<number, number>),
     byCategory: fuzzTree.reduce((acc, n) => { const cat = n.meta?.category || 'unknown'; acc[cat] = (acc[cat] || 0) + 1; return acc; }, {} as Record<string, number>),
     exposed: fuzzTree.filter(n => n.meta?.sensitive && (n.status === 200 || n.status === 403)).length,
+    archiveEntries,
+    dbTables,
   };
 
   // ---- Build complete resource tree (root + fuzz) ----

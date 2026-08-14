@@ -2917,20 +2917,90 @@ export default function OSINTPlatform() {
                          <span className="px-2 py-0.5 bg-yellow-500/20 text-yellow-400 rounded text-xs">{apiData.data.artifacts.filter((a: any) => a.category === 'config' && a.downloaded).length} config(s)</span>
                          <span className="px-2 py-0.5 bg-gray-500/20 text-gray-400 rounded text-xs">{apiData.data.artifacts.filter((a: any) => a.category === 'backup' && a.downloaded).length} backup(s)</span>
                        </h3>
-                       <div className="space-y-2">
-                         {apiData.data.artifacts.filter((a: any) => a.downloaded).map((a: any, i: number) => (
-                           <div key={i} className="flex items-center gap-3 p-3 bg-gray-800/50 border border-gray-700 rounded-lg">
-                             <span className={`w-2 h-2 rounded-full ${
-                               a.category === 'phishing_kit' ? 'bg-red-400' : a.category === 'database' ? 'bg-orange-400' : a.category === 'config' ? 'bg-yellow-400' : 'bg-gray-400'
-                             }`} />
-                             <span className="font-mono text-xs text-gray-300 flex-1 truncate">{a.url}</span>
-                             <span className="text-xs text-gray-500">{(a.size / 1024).toFixed(1)} KB</span>
-                             {a.hash && <span className="text-[10px] font-mono text-gray-500">SHA256: {a.hash}</span>}
-                             <a href={a.url} target="_blank" rel="noreferrer" className="text-xs px-2 py-1 bg-red-600 hover:bg-red-700 rounded text-white flex items-center gap-1 shrink-0">
-                               <Download className="w-3 h-3" /> Download
-                             </a>
-                           </div>
-                         ))}
+                        <div className="space-y-2">
+                          {apiData.data.artifacts.filter((a: any) => a.downloaded).map((a: any, i: number) => (
+                            <details key={i} className="p-3 bg-gray-800/50 border border-gray-700 rounded-lg group">
+                              <summary className="flex items-center gap-3 cursor-pointer list-none">
+                                <span className={`w-2 h-2 rounded-full shrink-0 ${
+                                  a.category === 'phishing_kit' ? 'bg-red-400' : a.category === 'database' ? 'bg-orange-400' : a.category === 'config' ? 'bg-yellow-400' : 'bg-gray-400'
+                                }`} />
+                                <span className="font-mono text-xs text-gray-300 flex-1 truncate">{a.url}</span>
+                                {a.structure?.note && <span className="text-[10px] px-2 py-0.5 bg-blue-500/10 text-blue-300 rounded shrink-0 hidden sm:inline">{a.structure.note}</span>}
+                                {a.structure?.sensitive && <span className="text-[10px] px-2 py-0.5 bg-red-500/20 text-red-400 rounded shrink-0">sensitive</span>}
+                                <span className="text-xs text-gray-500 shrink-0">{(a.size / 1024).toFixed(1)} KB</span>
+                                {a.hash && <span className="text-[10px] font-mono text-gray-500 hidden md:inline shrink-0">SHA256: {a.hash}</span>}
+                                <a href={a.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="text-xs px-2 py-1 bg-red-600 hover:bg-red-700 rounded text-white flex items-center gap-1 shrink-0">
+                                  <Download className="w-3 h-3" /> Download
+                                </a>
+                                <ChevronDown className="w-4 h-4 text-gray-500 transition-transform shrink-0 group-open:rotate-180" />
+                              </summary>
+                              <div className="mt-3 pt-3 border-t border-gray-700 space-y-3 text-xs">
+                                {a.structure?.entries && a.structure.entries.length > 0 && (
+                                  <div>
+                                    <p className="text-gray-400 mb-1.5 font-medium">Internal structure ({a.structure.entries.length} items)</p>
+                                    <div className="max-h-56 overflow-auto bg-gray-900/60 rounded-lg p-2 font-mono text-[11px] space-y-0.5">
+                                      {a.structure.entries.map((e: any, j: number) => (
+                                        <div key={j} className="flex items-center gap-2">
+                                          <span className={`shrink-0 ${e.type === 'dir' ? 'text-yellow-400' : 'text-gray-400'}`}>{e.type === 'dir' ? '📁' : '📄'}</span>
+                                          <span className="text-gray-300 truncate flex-1">{e.name}</span>
+                                          {e.size > 0 && <span className="text-gray-500 shrink-0">{(e.size / 1024).toFixed(1)} KB</span>}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {a.structure?.tables && a.structure.tables.length > 0 && (
+                                  <div>
+                                    <p className="text-gray-400 mb-1.5 font-medium">Database schema ({a.structure.tables.length} tables)</p>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                      {a.structure.tables.map((t: any, j: number) => (
+                                        <div key={j} className="bg-gray-900/60 rounded-lg p-2">
+                                          <p className="text-orange-300 font-mono truncate">{t.name} <span className="text-gray-500">({t.rows} rows)</span></p>
+                                          {t.columns.length > 0 && <p className="text-[10px] text-gray-500 font-mono truncate">{t.columns.join(', ')}</p>}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {a.structure?.keys && a.structure.keys.length > 0 && (
+                                  <div>
+                                    <p className="text-gray-400 mb-1.5 font-medium">Config keys ({a.structure.keys.length})</p>
+                                    <div className="max-h-40 overflow-auto bg-gray-900/60 rounded-lg p-2 font-mono text-[11px] space-y-0.5">
+                                      {a.structure.keys.map((k: any, j: number) => (
+                                        <div key={j} className="flex gap-2">
+                                          <span className="text-yellow-300 shrink-0">{k.key}</span>
+                                          <span className="text-gray-400 truncate">= {k.value}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {a.structure?.emails && a.structure.emails.length > 0 && (
+                                  <div>
+                                    <p className="text-gray-400 mb-1.5 font-medium">Emails found ({a.structure.emails.length})</p>
+                                    <div className="flex flex-wrap gap-1">
+                                      {a.structure.emails.map((e: string, j: number) => (
+                                        <span key={j} className="px-2 py-0.5 bg-gray-900/60 rounded font-mono text-[10px] text-blue-300">{e}</span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {a.structure?.urls && a.structure.urls.length > 0 && (
+                                  <div>
+                                    <p className="text-gray-400 mb-1.5 font-medium">URLs found ({a.structure.urls.length})</p>
+                                    <div className="flex flex-wrap gap-1">
+                                      {a.structure.urls.map((u: string, j: number) => (
+                                        <span key={j} className="px-2 py-0.5 bg-gray-900/60 rounded font-mono text-[10px] text-sky-300">{u}</span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {a.structure?.note && !a.structure?.entries && !a.structure?.tables && !a.structure?.keys && (
+                                  <p className="text-gray-500">{a.structure.note}</p>
+                                )}
+                              </div>
+                            </details>
+                          ))}
                          {apiData.data.artifacts.filter((a: any) => !a.downloaded).length > 0 && (
                            <div className="text-xs text-gray-500 text-center py-2">
                              {apiData.data.artifacts.filter((a: any) => !a.downloaded).length} artifact(s) detected but not downloaded (size limit / timeout)
