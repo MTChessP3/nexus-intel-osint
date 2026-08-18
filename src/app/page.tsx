@@ -1938,8 +1938,8 @@ export default function OSINTPlatform() {
                 </button>
               </div>
 
-              {/* Stats Cards - Clickable */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              {/* Stats Cards - Clickable (2x2 split) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {[
                   { label: 'Total IOCs', value: iocs.length, icon: Database, color: 'blue', onClick: () => setActiveTab('iocs') },
                   { label: 'Critical Threats', value: iocs.filter(i => i.severity === 'CRITICAL').length, icon: AlertTriangle, color: 'red', onClick: () => setActiveTab('iocs') },
@@ -1949,7 +1949,7 @@ export default function OSINTPlatform() {
                   <button
                     key={label}
                     onClick={onClick}
-                    className={`p-5 bg-gray-900 border border-gray-800 rounded-xl hover:border-${color}-500/50 transition-all group cursor-pointer`}
+                    className={`p-4 bg-gray-900 border border-gray-800 rounded-xl hover:border-${color}-500/50 transition-all group cursor-pointer`}
                   >
                     <div className="flex items-center justify-between">
                       <Icon className={`w-8 h-8 text-${color}-400 group-hover:scale-110 transition-transform`} />
