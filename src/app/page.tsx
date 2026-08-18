@@ -851,6 +851,7 @@ export default function OSINTPlatform() {
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
   const [loadConfirm, setLoadConfirm] = useState<{ id: string; name: string } | null>(null);
   const [wgetZipLoading, setWgetZipLoading] = useState(false);
+  const [storageHealth, setStorageHealth] = useState<any>(null);
 
   // ============ Forensics local history (localStorage, reliable w/o KV) ============
   const LOCAL_HISTORY_KEY = 'nexus_forensics_local';
@@ -989,6 +990,7 @@ export default function OSINTPlatform() {
   useEffect(() => {
     loadIOCs();
     loadForensicsHistory();
+    getStorageHealth();
   }, []);
 
   // Persistent IP analysis queue (localStorage, FIFO, max 20)
@@ -1114,6 +1116,14 @@ export default function OSINTPlatform() {
     } catch (err) {
       console.error('Load IOCs error:', err);
     }
+  };
+
+  const getStorageHealth = async () => {
+    try {
+      const response = await fetch(`/api/osint/forensics?action=health&_=${Date.now()}`);
+      const result = await response.json();
+      if (result.success) setStorageHealth(result);
+    } catch { /* ignore */ }
   };
 
   const loadForensicsHistory = async () => {
@@ -2819,13 +2829,28 @@ export default function OSINTPlatform() {
               {forensicsHistory.length > 0 && (
                 <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                   <div className="flex items-center justify-between mb-3">
-                    <h3 className="font-semibold flex items-center gap-2">
-                      <FolderOpen className="w-5 h-5 text-yellow-400" /> Analyzed Resources ({forensicsHistory.length})
-                    </h3>
-                    <button onClick={loadForensicsHistory} className="text-xs text-gray-400 hover:text-gray-200 flex items-center gap-1">
-                      <RefreshCw className="w-3 h-3" /> Refresh
-                    </button>
-                  </div>
+                      <h3 className="font-semibold flex items-center gap-2">
+                        <FolderOpen className="w-5 h-5 text-yellow-400" /> Analyzed Resources ({forensicsHistory.length})
+                      </h3>
+                      <div className="flex items-center gap-2">
+                        {storageHealth && (
+                          <button
+                            onClick={getStorageHealth}
+                            title={storageHealth.backend === 'vercel-kv'
+                              ? (storageHealth.message || 'Vercel KV conectado')
+                              : 'Historial del servidor en memoria efímera (se reinicia por invocación). Para persistencia real: Vercel → Storage → Create Database → KV → Redeploy. El historial igual funciona vía localStorage del navegador.'}
+                            className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 ${
+                              storageHealth.backend === 'vercel-kv' ? 'bg-green-500/20 text-green-400' : 'bg-amber-500/20 text-amber-400'
+                            }`}
+                          >
+                            ● {storageHealth.backend === 'vercel-kv' ? 'KV conectado' : 'Memoria efímera'}
+                          </button>
+                        )}
+                        <button onClick={loadForensicsHistory} className="text-xs text-gray-400 hover:text-gray-200 flex items-center gap-1">
+                          <RefreshCw className="w-3 h-3" /> Refresh
+                        </button>
+                      </div>
+                    </div>
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead>

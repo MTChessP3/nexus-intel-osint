@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { upsertIOC, createAnalysis } from '@/lib/store';
-import { kvGet, kvSet, kvListKeys, kvDel } from '@/lib/kv';
+import { kvGet, kvSet, kvListKeys, kvDel, kvHealth } from '@/lib/kv';
 import { lookupVirusTotalDomain } from '@/lib/intel/virustotal';
 import { runForensicAnalysis, ForensicMetadata } from '@/lib/intel/forensics';
 import { buildZip, mirrorUrls, mimeForPath } from '@/lib/intel/wgetExport';
@@ -112,6 +112,15 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const action = searchParams.get('action');
   const idParam = searchParams.get('id') || searchParams.get('name') || '';
+
+  if (action === 'health') {
+    try {
+      const health = await kvHealth();
+      return NextResponse.json({ success: true, ...health });
+    } catch (error) {
+      return NextResponse.json({ success: true, backend: 'memory', ok: false, message: 'Storage check failed' });
+    }
+  }
 
   if (action === 'content') {
     const url = searchParams.get('url') || '';
