@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
 
     // wget-style bulk export: mirror all discovered paths into a ZIP
     if (action === 'wget') {
-      const urls = Array.isArray(body.urls) ? body.urls.slice(0, 60) : [];
+      const urls = Array.isArray(body.urls) ? body.urls.slice(0, 100) : [];
       if (urls.length === 0) {
         return NextResponse.json({ success: false, error: 'No paths to mirror' }, { status: 400 });
       }
@@ -81,6 +81,15 @@ export async function POST(request: NextRequest) {
       });
     } catch (storeError) {
       console.error('Store save error (non-critical):', storeError);
+    }
+
+    try {
+      const iocStats = await exportArtifactIOCs(results);
+      if (iocStats.emails + iocStats.urls + iocStats.telegram > 0) {
+        console.log(`Forensic IOC export: ${iocStats.emails} emails, ${iocStats.urls} urls, ${iocStats.telegram} telegram`);
+      }
+    } catch (iocError) {
+      console.error('Artifact IOC export error (non-critical):', iocError);
     }
 
     return NextResponse.json({
@@ -206,4 +215,64 @@ function countNodes(node: any): number {
     for (const child of node.children) count += countNodes(child);
   }
   return count;
+}
+
+// Auto-export IOCs discovered inside downloaded artifacts (emails/URLs from dumps, telegram IDs)
+async function exportArtifactIOCs(results: ForensicMetadata): Promise<{ emails: number; urls: number; telegram: number }> {
+  const emails = new Set<string>();
+  const urls = new Set<string>();
+  const telegram = new Set<string>();
+  for (const a of results.artifacts) {
+    if (!a.downloaded || !a.structure) continue;
+    for (const e of a.structure.emails || []) {
+      if (/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(e)) emails.add(e.toLowerCase());
+    }
+    for (const u of a.structure.urls || []) {
+      if (/^https?:\/\//i.test(u)) urls.add(u);
+    }
+  }
+  for (const t of results.attribution?.telegramIds || []) telegram.add(t);
+
+  const events: Promise<unknown>[] = [];
+  const domainTag = results.domain.replace(/[^a-zA-Z0-9._-]/g, '_');
+  for (const e of [...emails].slice(0, 30)) {
+    events.push(upsertIOC({
+      type: 'EMAIL',
+      value: e,
+      description: `Email extraído de artefacto forense (dump/kit) de ${results.domain} — riesgo ${results.risk.level}`,
+      severity: 'HIGH',
+      confidence: 98,
+      status: 'SUSPICIOUS',
+      source: 'Forensic-Engine',
+      rawResponse: JSON.stringify({ domain: results.domain, analysis: results.name, foundIn: [...results.artifacts.filter(a => a.structure?.emails?.includes(e)).map(a => a.url)] }).substring(0, 2000),
+      tags: ['forensics', 'artifact', 'email-dump', `fx:${domainTag}`],
+    }));
+  }
+  for (const u of [...urls].slice(0, 30)) {
+    events.push(upsertIOC({
+      type: 'URL',
+      value: u,
+      description: `URL extraída de artefacto forense (dump/kit) de ${results.domain} — riesgo ${results.risk.level}`,
+      severity: 'HIGH',
+      confidence: 98,
+      status: 'SUSPICIOUS',
+      source: 'Forensic-Engine',
+      rawResponse: JSON.stringify({ domain: results.domain, analysis: results.name, foundIn: [...results.artifacts.filter(a => a.structure?.urls?.includes(u)).map(a => a.url)] }).substring(0, 2000),
+      tags: ['forensics', 'artifact', 'url-extracted', `fx:${domainTag}`],
+    }));
+  }
+  for (const t of [...telegram].slice(0, 10)) {
+    events.push(upsertIOC({
+      type: 'URL',
+      value: `https://t.me/${t.replace(/^(?:t\.me\/|telegram\.me\/|@)/, '')}`,
+      description: `Telegram ID de atribución encontrado en análisis forense de ${results.domain}`,
+      severity: 'MEDIUM',
+      confidence: 95,
+      status: 'SUSPICIOUS',
+      source: 'Forensic-Engine',
+      tags: ['forensics', 'attribution', 'telegram', `fx:${domainTag}`],
+    }));
+  }
+  await Promise.allSettled(events);
+  return { emails: emails.size, urls: urls.size, telegram: telegram.size };
 }

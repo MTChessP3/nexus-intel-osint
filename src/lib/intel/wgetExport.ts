@@ -2,8 +2,8 @@
 // (minimal ZIP writer, STORE method, no external dependencies).
 
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) NEXUS-Forensic/5.1';
-const MAX_FETCH_SIZE = 2 * 1024 * 1024;
-const MAX_TOTAL_SIZE = 15 * 1024 * 1024;
+const MAX_FETCH_SIZE = 3 * 1024 * 1024;
+const MAX_TOTAL_SIZE = 20 * 1024 * 1024;
 
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);
@@ -84,7 +84,7 @@ export function buildZip(files: { name: string; data: Buffer }[]): Buffer {
 
 export interface MirrorUrl { url: string; name: string; }
 
-export async function mirrorUrls(urls: MirrorUrl[], limit = 60): Promise<{ name: string; data: Buffer }[]> {
+export async function mirrorUrls(urls: MirrorUrl[], limit = 100): Promise<{ name: string; data: Buffer }[]> {
   const files: { name: string; data: Buffer }[] = [];
   let total = 0;
   const batches: MirrorUrl[][] = [];

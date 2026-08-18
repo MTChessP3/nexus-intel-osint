@@ -21,9 +21,9 @@ const MAX_CRAWL_DEPTH = 3;
 const MAX_CRAWL_PAGES = 45;
 const MAX_FUZZ_CONCURRENT = 20;
 const FUZZ_TIMEOUT = 6000;
-const MAX_RECURSIVE_DIRS = 6;
+const MAX_RECURSIVE_DIRS = 8;
 const MAX_RECURSIVE_DEPTH = 2;
-const MAX_RECURSIVE_PROBES = 240;
+const MAX_RECURSIVE_PROBES = 300;
 const MAX_ARTIFACT_DOWNLOADS = 12;
 const MAX_ARTIFACT_SIZE = 30 * 1024 * 1024;
 
@@ -819,7 +819,7 @@ async function fuzzDirectories(baseUrl: string, discoveredDirs: string[] = []): 
         if (dirish && status === 200 && depth < MAX_RECURSIVE_DEPTH && dirCount < MAX_RECURSIVE_DIRS) {
           dirCount++;
           const childPrefix = prefix + p.path + (p.path.endsWith('/') ? '' : '/');
-          const batch = RECURSIVE_PATHS.slice(0, 45);
+          const batch = RECURSIVE_PATHS.slice(0, 50);
           for (let i = 0; i < batch.length; i += MAX_FUZZ_CONCURRENT) {
             await Promise.allSettled(
               batch.slice(i, i + MAX_FUZZ_CONCURRENT).map(sub => probe(sub, childPrefix, depth + 1, entry.id))
@@ -855,7 +855,7 @@ async function fuzzDirectories(baseUrl: string, discoveredDirs: string[] = []): 
       meta: { category: 'common', sensitive: true, title: '[crawl dir]' },
     };
     fuzzTree.push(dirNode);
-    const batch = RECURSIVE_PATHS.slice(0, 45);
+    const batch = RECURSIVE_PATHS.slice(0, 50);
     for (let i = 0; i < batch.length; i += MAX_FUZZ_CONCURRENT) {
       await Promise.allSettled(
         batch.slice(i, i + MAX_FUZZ_CONCURRENT).map(sub => probe(sub, rel.endsWith('/') ? rel : rel + '/', 1, dirNode.id))

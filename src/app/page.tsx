@@ -910,6 +910,29 @@ export default function OSINTPlatform() {
     }
   };
 
+  const handleForensicReport = async () => {
+    const data = apiData?.data;
+    if (!data) { showFeedback('Sin datos de análisis para exportar', 'error'); return; }
+    showFeedback('Generando informe imprimible...', 'info');
+    try {
+      const res = await fetch('/api/osint/forensics/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain: data.domain, data }),
+      });
+      if (!res.ok) { showFeedback('Error generando el informe', 'error'); return; }
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `informe_forense_${data.domain.replace(/[^a-zA-Z0-9._-]/g, '_')}.html`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      showFeedback('Informe forense descargado', 'success');
+    } catch {
+      showFeedback('Error generando el informe', 'error');
+    }
+  };
+
   const handleWgetZip = async () => {
     const tree = apiData?.data?.resourceTree;
     const domain = apiData?.data?.domain;
@@ -934,7 +957,7 @@ export default function OSINTPlatform() {
       const res = await fetch('/api/osint/forensics', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'wget', domain, urls: urls.slice(0, 60) }),
+        body: JSON.stringify({ action: 'wget', domain, urls: urls.slice(0, 100) }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => null);
@@ -2941,29 +2964,37 @@ export default function OSINTPlatform() {
                        apiData.data.risk.level === 'MEDIUM' ? 'bg-yellow-500/10 border-yellow-500/50' :
                        'bg-green-500/10 border-green-500/50'
                      }`}>
-                       <div className="flex items-center justify-between flex-wrap gap-3">
-                         <div>
-                           <h3 className="font-semibold flex items-center gap-2">
-                             <ShieldAlert className="w-5 h-5" /> Forensic Risk Assessment
-                             <span className={`px-2 py-0.5 rounded text-xs font-bold ${
-                               apiData.data.risk.level === 'CRITICAL' ? 'bg-red-500 text-white' :
-                               apiData.data.risk.level === 'HIGH' ? 'bg-orange-500 text-black' :
-                               apiData.data.risk.level === 'MEDIUM' ? 'bg-yellow-500 text-black' : 'bg-green-500 text-black'
-                             }`}>
-                               {apiData.data.risk.level} ({apiData.data.risk.score}/100)
-                             </span>
-                           </h3>
-                           <p className="text-sm font-mono text-red-300 mt-1 break-all">{apiData.data.domain}</p>
-                           <p className="text-sm text-gray-400 mt-1">{apiData.data.verdict || 'No critical indicators found'}</p>
-                         </div>
-                         <div className="text-right text-xs text-gray-400">
-                           <div>IP: <span className="font-mono">{apiData.data.ip || '—'}</span></div>
-                           <div className="mt-1">ASN: <span className="font-mono">{apiData.data.asn || '—'}</span></div>
-                           <div className="mt-1">ISP: <span className="font-mono">{apiData.data.isp || '—'}</span></div>
-                           <div className="mt-1">Resource: <span className="font-mono">{apiData.data.name}</span></div>
-                           <div className="mt-1">{new Date(apiData.data.timestamp).toLocaleString()}</div>
-                         </div>
-                       </div>
+                        <div className="flex items-center justify-between flex-wrap gap-3">
+                          <div>
+                            <h3 className="font-semibold flex items-center gap-2">
+                              <ShieldAlert className="w-5 h-5" /> Forensic Risk Assessment
+                              <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                                apiData.data.risk.level === 'CRITICAL' ? 'bg-red-500 text-white' :
+                                apiData.data.risk.level === 'HIGH' ? 'bg-orange-500 text-black' :
+                                apiData.data.risk.level === 'MEDIUM' ? 'bg-yellow-500 text-black' : 'bg-green-500 text-black'
+                              }`}>
+                                {apiData.data.risk.level} ({apiData.data.risk.score}/100)
+                              </span>
+                            </h3>
+                            <p className="text-sm font-mono text-red-300 mt-1 break-all">{apiData.data.domain}</p>
+                            <p className="text-sm text-gray-400 mt-1">{apiData.data.verdict || 'No critical indicators found'}</p>
+                          </div>
+                          <div className="flex flex-col items-end gap-2">
+                            <button
+                              onClick={handleForensicReport}
+                              className="text-xs px-2.5 py-1 bg-purple-600 hover:bg-purple-700 rounded text-white flex items-center gap-1.5"
+                            >
+                              <Download className="w-3 h-3" /> Informe imprimible (HTML)
+                            </button>
+                            <div className="text-right text-xs text-gray-400">
+                              <div>IP: <span className="font-mono">{apiData.data.ip || '—'}</span></div>
+                              <div className="mt-1">ASN: <span className="font-mono">{apiData.data.asn || '—'}</span></div>
+                              <div className="mt-1">ISP: <span className="font-mono">{apiData.data.isp || '—'}</span></div>
+                              <div className="mt-1">Resource: <span className="font-mono">{apiData.data.name}</span></div>
+                              <div className="mt-1">{new Date(apiData.data.timestamp).toLocaleString()}</div>
+                            </div>
+                          </div>
+                        </div>
                        <div className="mt-3 h-2 rounded-full bg-gray-900 overflow-hidden">
                          <div className={`h-full ${apiData.data.risk.level === 'CRITICAL' ? 'bg-red-500' : apiData.data.risk.level === 'HIGH' ? 'bg-orange-500' : apiData.data.risk.level === 'MEDIUM' ? 'bg-yellow-500' : 'bg-green-500'}`}
                            style={{ width: `${Math.max(apiData.data.risk.score, 2)}%` }} />
