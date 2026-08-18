@@ -195,7 +195,7 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     success: true,
     message: 'Advanced Web Forensic Engine ready. POST a domain to start live capture analysis.',
-    capabilities: ['Live Crawl (gospider-style, max depth 3, 45 pages + robots.txt/sitemap.xml seeding)', 'JS Secret + API Endpoint Extraction (SecretFinder-style)', 'Directory Fuzzing (ffuf/dirb-style, 128 paths + recursive fuzzing inside discovered dirs)', 'Directory Listing Crawl (wget -r style, Apache/nginx indexes)', 'Artifact Deep Analysis (wget/curl-style): ZIP/TAR.GZ internal file trees, SQL schema/table/email parsing, SQLite scan, config key parsing', 'Resource Tree (interactive, requests/redirects/dependencies)', 'Infrastructure Graph (DNS/MX/NS/Subdomains/Hosting)', 'Evidence Download (phishing kits, databases, configs, backups)'],
+    capabilities: ['Live Crawl (gospider-style, max depth 3, 45 pages + robots.txt/sitemap.xml seeding)', 'JS Secret + API Endpoint Extraction (SecretFinder-style)', 'Directory Fuzzing (ffuf/dirb-style, 220+ paths + recursive fuzzing inside discovered dirs + crawl-discovered dirs)', 'Directory Listing Crawl (wget -r style, Apache/nginx indexes)', 'Artifact Deep Analysis (wget/curl-style): ZIP/TAR.GZ internal file trees, SQL schema/table/email parsing, SQLite scan, config key parsing', 'Resource Tree (interactive, requests/redirects/dependencies)', 'Infrastructure Graph (DNS/MX/NS/Subdomains/Hosting)', 'Evidence Download (phishing kits, databases, configs, backups)', 'Per-path content download (wget-style) + bulk ZIP export'],
   });
 }
 

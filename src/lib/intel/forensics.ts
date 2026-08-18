@@ -19,10 +19,11 @@ const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Geck
 const FETCH_TIMEOUT = 12000;
 const MAX_CRAWL_DEPTH = 3;
 const MAX_CRAWL_PAGES = 45;
-const MAX_FUZZ_CONCURRENT = 16;
-const FUZZ_TIMEOUT = 7000;
+const MAX_FUZZ_CONCURRENT = 20;
+const FUZZ_TIMEOUT = 6000;
 const MAX_RECURSIVE_DIRS = 6;
 const MAX_RECURSIVE_DEPTH = 2;
+const MAX_RECURSIVE_PROBES = 240;
 const MAX_ARTIFACT_DOWNLOADS = 12;
 const MAX_ARTIFACT_SIZE = 30 * 1024 * 1024;
 
@@ -127,18 +128,43 @@ export interface ForensicMetadata {
 interface FuzzPathDef { path: string; category: 'kit' | 'admin' | 'db' | 'backup' | 'config' | 'common'; }
 
 const FUZZ_PATHS: FuzzPathDef[] = [
+  // admin panels / backends
   { path: 'admin', category: 'admin' }, { path: 'admin/', category: 'admin' },
   { path: 'administrator', category: 'admin' }, { path: 'administrator/index.php', category: 'admin' },
-  { path: 'administrator/login.php', category: 'admin' },
+  { path: 'administrator/login.php', category: 'admin' }, { path: 'administrator2', category: 'admin' },
   { path: 'wp-admin', category: 'admin' }, { path: 'wp-login.php', category: 'admin' },
   { path: 'wp-content/uploads/', category: 'common' }, { path: 'xmlrpc.php', category: 'admin' },
   { path: 'panel', category: 'admin' }, { path: 'panel/', category: 'admin' },
-  { path: 'cpanel', category: 'admin' }, { path: 'phpmyadmin/', category: 'admin' },
-  { path: 'pma/', category: 'admin' }, { path: 'adminer.php', category: 'admin' },
+  { path: 'paneladmin', category: 'admin' }, { path: 'cpanel', category: 'admin' },
+  { path: 'phpmyadmin/', category: 'admin' }, { path: 'phpmyadmin2', category: 'admin' },
+  { path: 'pma/', category: 'admin' }, { path: 'myadmin', category: 'admin' },
+  { path: 'dbadmin', category: 'admin' }, { path: 'adminer.php', category: 'admin' },
   { path: 'login', category: 'admin' }, { path: 'login.php', category: 'admin' },
-  { path: 'dashboard', category: 'admin' },
+  { path: 'login.html', category: 'admin' }, { path: 'login.aspx', category: 'admin' },
+  { path: 'signin', category: 'admin' }, { path: 'dashboard', category: 'admin' },
+  { path: 'manager', category: 'admin' }, { path: 'management', category: 'admin' },
+  { path: 'manage', category: 'admin' }, { path: 'cp', category: 'admin' },
+  { path: 'controlpanel', category: 'admin' }, { path: 'backoffice', category: 'admin' },
+  { path: 'console', category: 'admin' }, { path: 'portal', category: 'admin' },
+  { path: 'staff', category: 'admin' }, { path: 'users', category: 'admin' },
+  { path: 'user/login', category: 'admin' }, { path: 'member', category: 'admin' },
+  { path: 'account', category: 'admin' }, { path: 'webadmin', category: 'admin' },
+  { path: 'adm', category: 'admin' }, { path: 'administrador', category: 'admin' },
+  { path: 'sistema', category: 'admin' }, { path: 'master', category: 'admin' },
+  { path: 'drupal/', category: 'common' }, { path: 'sites/default/files/', category: 'common' },
+  // backups
   { path: 'backup', category: 'backup' }, { path: 'backup/', category: 'backup' },
   { path: 'backups', category: 'backup' },
+  { path: 'index.php~', category: 'backup' }, { path: 'index.php.bak', category: 'backup' },
+  { path: 'index.html.bak', category: 'backup' }, { path: 'index.htm.bak', category: 'backup' },
+  { path: 'index.old', category: 'backup' }, { path: 'index.save', category: 'backup' },
+  { path: 'index.tar.gz', category: 'backup' }, { path: 'index.tar', category: 'backup' },
+  { path: 'site.tar.gz', category: 'backup' }, { path: 'web.tar.gz', category: 'backup' },
+  { path: 'html.zip', category: 'backup' }, { path: 'htdocs.zip', category: 'backup' },
+  { path: 'htdocs.tar.gz', category: 'backup' }, { path: 'public_html.zip', category: 'backup' },
+  { path: 'webroot.zip', category: 'backup' }, { path: '.backup', category: 'backup' },
+  { path: '.swp', category: 'backup' },
+  // databases / credential dumps
   { path: 'db', category: 'db' }, { path: 'database', category: 'db' },
   { path: 'dump.sql', category: 'db' }, { path: 'db.sql', category: 'db' },
   { path: 'database.sql', category: 'db' }, { path: 'backup.sql', category: 'db' },
@@ -147,20 +173,53 @@ const FUZZ_PATHS: FuzzPathDef[] = [
   { path: 'dump.db', category: 'db' }, { path: 'backup.db', category: 'db' },
   { path: 'app.db', category: 'db' }, { path: 'users.db', category: 'db' },
   { path: 'database.db', category: 'db' }, { path: 'data.db', category: 'db' },
+  { path: 'sqlite.db', category: 'db' }, { path: '.sqlite3', category: 'db' },
+  { path: 'site.sql', category: 'db' }, { path: 'wp.sql', category: 'db' },
+  { path: 'joomla.sql', category: 'db' }, { path: 'users.sql', category: 'db' },
+  { path: 'mysqldump.sql', category: 'db' }, { path: 'db_backup.sql', category: 'db' },
+  { path: 'backup_database.sql', category: 'db' }, { path: 'dump.txt', category: 'db' },
+  { path: 'dump.gz', category: 'db' }, { path: 'dump.tar.gz', category: 'db' },
   { path: 'logins.txt', category: 'db' }, { path: 'credentials.txt', category: 'db' },
-  { path: 'users.txt', category: 'db' }, { path: 'passwords.txt', category: 'db' },
+  { path: 'creds.txt', category: 'db' }, { path: 'users.txt', category: 'db' },
+  { path: 'passwords.txt', category: 'db' }, { path: 'password.txt', category: 'db' },
   { path: 'emails.txt', category: 'db' }, { path: 'cc.txt', category: 'db' },
+  { path: 'cards.txt', category: 'db' }, { path: 'cc.zip', category: 'db' },
+  { path: 'victims.txt', category: 'db' }, { path: 'victim.txt', category: 'db' },
+  { path: 'logs.txt', category: 'db' }, { path: 'logs.zip', category: 'db' },
+  { path: 'tokens.txt', category: 'db' }, { path: 'sessions.txt', category: 'db' },
+  { path: 'db.zip', category: 'db' }, { path: 'dump.zip', category: 'db' },
+  { path: 'sql.zip', category: 'db' }, { path: 'data.zip', category: 'db' },
+  // configs / secrets
   { path: 'config.php', category: 'config' }, { path: 'config.php.bak', category: 'config' },
-  { path: 'settings.php', category: 'config' }, { path: 'wp-config.php', category: 'config' },
-  { path: 'wp-config.php.bak', category: 'config' }, { path: 'configuration.php', category: 'config' },
+  { path: 'config.old', category: 'config' }, { path: 'config.save', category: 'config' },
+  { path: 'config.txt', category: 'config' }, { path: 'config.bak', category: 'config' },
+  { path: 'settings.php', category: 'config' }, { path: 'settings.php.bak', category: 'config' },
+  { path: 'settings.old', category: 'config' }, { path: 'wp-config.php', category: 'config' },
+  { path: 'wp-config.php.bak', category: 'config' }, { path: 'wp-config.php.save', category: 'config' },
+  { path: 'wp-config.php.txt', category: 'config' }, { path: 'wp-config.old', category: 'config' },
+  { path: 'configuration.php', category: 'config' },
   { path: '.env', category: 'config' }, { path: '.env.backup', category: 'config' },
-  { path: '.env.example', category: 'config' }, { path: 'config.inc.php', category: 'config' },
-  { path: 'config.yml', category: 'config' }, { path: 'config.json', category: 'config' },
+  { path: '.env.example', category: 'config' }, { path: '.env.local', category: 'config' },
+  { path: '.env.production', category: 'config' },
+  { path: 'config.inc.php', category: 'config' }, { path: 'config.yml', category: 'config' },
+  { path: 'config.json', category: 'config' },
   { path: 'composer.json', category: 'config' }, { path: 'package.json', category: 'config' },
+  { path: 'composer.lock', category: 'config' },
   { path: 'phpinfo.php', category: 'config' }, { path: 'info.php', category: 'config' },
-  { path: 'test.php', category: 'config' },
-  { path: 'index.php~', category: 'backup' }, { path: 'index.php.bak', category: 'backup' },
-  { path: 'index.html.bak', category: 'backup' }, { path: 'index.htm.bak', category: 'backup' },
+  { path: 'test.php', category: 'config' }, { path: 'php.ini', category: 'config' },
+  { path: '.htaccess', category: 'config' }, { path: '.htpasswd', category: 'config' },
+  { path: '.user.ini', category: 'config' }, { path: '.DS_Store', category: 'config' },
+  { path: '.ftpconfig', category: 'config' }, { path: '.gitignore', category: 'config' },
+  { path: 'db.php', category: 'config' }, { path: 'dbconnect.php', category: 'config' },
+  { path: 'connection.php', category: 'config' }, { path: 'connect.php', category: 'config' },
+  { path: 'conn.php', category: 'config' }, { path: 'database.php', category: 'config' },
+  { path: 'database.yml', category: 'config' }, { path: 'web.config', category: 'config' },
+  { path: 'storage/logs/laravel.log', category: 'config' }, { path: 'storage/logs/', category: 'common' },
+  { path: '.git/config', category: 'config' }, { path: '.git/HEAD', category: 'config' },
+  { path: '.gitignore', category: 'config' },
+  { path: 'server-status', category: 'config' }, { path: 'server-info', category: 'config' },
+  { path: 'phpunit.xml', category: 'config' },
+  // phishing kits (named archives)
   { path: 'main.zip', category: 'kit' }, { path: 'site.zip', category: 'kit' },
   { path: 'update.zip', category: 'kit' }, { path: 'theme.zip', category: 'kit' },
   { path: 'backup.zip', category: 'kit' }, { path: 'panel.zip', category: 'kit' },
@@ -168,7 +227,23 @@ const FUZZ_PATHS: FuzzPathDef[] = [
   { path: 'phishing.zip', category: 'kit' }, { path: 'template.zip', category: 'kit' },
   { path: 'assets.zip', category: 'kit' }, { path: 'files.zip', category: 'kit' },
   { path: 'source.zip', category: 'kit' }, { path: 'web.zip', category: 'kit' },
+  { path: 'index.zip', category: 'kit' }, { path: 'home.zip', category: 'kit' },
+  { path: 'www.zip', category: 'kit' }, { path: 'login.zip', category: 'kit' },
+  { path: 'verify.zip', category: 'kit' }, { path: 'capture.zip', category: 'kit' },
+  { path: 'inc.zip', category: 'kit' }, { path: 'template2.zip', category: 'kit' },
+  { path: 'facebook.zip', category: 'kit' }, { path: 'whatsapp.zip', category: 'kit' },
+  { path: 'whatsapp.rar', category: 'kit' }, { path: 'paypal.zip', category: 'kit' },
+  { path: 'apple.zip', category: 'kit' }, { path: 'icloud.zip', category: 'kit' },
+  { path: 'microsoft.zip', category: 'kit' }, { path: 'office365.zip', category: 'kit' },
+  { path: 'outlook.zip', category: 'kit' }, { path: 'netflix.zip', category: 'kit' },
+  { path: 'gmail.zip', category: 'kit' }, { path: 'google.zip', category: 'kit' },
+  { path: 'amazon.zip', category: 'kit' }, { path: 'dhl.zip', category: 'kit' },
+  { path: 'fedex.zip', category: 'kit' }, { path: 'usps.zip', category: 'kit' },
+  { path: 'steam.zip', category: 'kit' }, { path: 'instagram.zip', category: 'kit' },
+  { path: 'telegram.zip', category: 'kit' }, { path: 'banking.zip', category: 'kit' },
+  { path: 'bank.zip', category: 'kit' },
   { path: '.rar', category: 'kit' }, { path: '.tar.gz', category: 'kit' },
+  // common dirs / infra
   { path: 'vendor', category: 'common' }, { path: 'uploads/', category: 'common' },
   { path: 'images/', category: 'common' }, { path: 'css/', category: 'common' },
   { path: 'js/', category: 'common' }, { path: 'assets/', category: 'common' },
@@ -176,17 +251,20 @@ const FUZZ_PATHS: FuzzPathDef[] = [
   { path: 'logs/', category: 'common' }, { path: 'log/', category: 'common' },
   { path: 'error_log', category: 'common' }, { path: 'debug.log', category: 'common' },
   { path: 'access.log', category: 'common' },
-  { path: '.git/config', category: 'config' }, { path: '.git/HEAD', category: 'config' },
-  { path: 'db.zip', category: 'db' }, { path: 'dump.zip', category: 'db' },
-  { path: 'sql.zip', category: 'db' },
-  { path: 'storage/logs/laravel.log', category: 'config' }, { path: 'storage/', category: 'common' },
-  { path: 'joomla/', category: 'common' }, { path: 'server-status', category: 'config' },
-  { path: 'phpunit.xml', category: 'config' }, { path: 'composer.lock', category: 'config' },
+  { path: 'storage/', category: 'common' }, { path: 'joomla/', category: 'common' },
+  { path: 'dev/', category: 'common' }, { path: 'src/', category: 'common' },
+  { path: 'public/', category: 'common' }, { path: 'private/', category: 'common' },
+  { path: 'protected/', category: 'common' }, { path: 'secret/', category: 'common' },
+  { path: 'hidden/', category: 'common' }, { path: 'downloads/', category: 'common' },
+  { path: 'docs/', category: 'common' }, { path: 'doc/', category: 'common' },
+  { path: 'readme.md', category: 'common' }, { path: '.well-known/', category: 'common' },
 ];
 
 // Paths re-probed recursively inside discovered directories (ffuf -recursion / dirb -r style)
 const RECURSIVE_PATHS: FuzzPathDef[] = [
-  { path: 'login.php', category: 'admin' }, { path: 'index.php', category: 'kit' },
+  { path: 'login.php', category: 'admin' }, { path: 'login.html', category: 'admin' },
+  { path: 'index.php', category: 'kit' }, { path: 'index2.php', category: 'kit' },
+  { path: 'home.php', category: 'kit' },
   { path: 'admin.php', category: 'admin' }, { path: 'panel.php', category: 'admin' },
   { path: 'verify.php', category: 'kit' }, { path: 'check.php', category: 'kit' },
   { path: 'capture.php', category: 'kit' }, { path: 'get.php', category: 'kit' },
@@ -194,22 +272,29 @@ const RECURSIVE_PATHS: FuzzPathDef[] = [
   { path: 'load.php', category: 'kit' }, { path: 'stealer.php', category: 'kit' },
   { path: 'result.php', category: 'kit' }, { path: 'results.php', category: 'kit' },
   { path: 'config.php', category: 'config' }, { path: 'config.inc.php', category: 'config' },
-  { path: 'settings.php', category: 'config' }, { path: '.env', category: 'config' },
+  { path: 'config.php.bak', category: 'config' }, { path: 'config.txt', category: 'config' },
+  { path: 'settings.php', category: 'config' }, { path: 'settings.php.bak', category: 'config' },
+  { path: 'db.php', category: 'config' }, { path: 'conn.php', category: 'config' },
+  { path: 'database.php', category: 'config' }, { path: '.env', category: 'config' },
+  { path: '.htaccess', category: 'config' },
   { path: 'admin/', category: 'admin' }, { path: 'config/', category: 'common' },
   { path: 'inc/', category: 'common' }, { path: 'include/', category: 'common' },
-  { path: 'lib/', category: 'common' }, { path: 'data/', category: 'common' },
-  { path: 'files/', category: 'common' }, { path: 'temp/', category: 'common' },
-  { path: 'logs/', category: 'common' },
+  { path: 'includes/', category: 'common' }, { path: 'lib/', category: 'common' },
+  { path: 'data/', category: 'common' }, { path: 'files/', category: 'common' },
+  { path: 'temp/', category: 'common' }, { path: 'logs/', category: 'common' },
+  { path: 'src/', category: 'common' }, { path: 'private/', category: 'common' },
   { path: 'log.txt', category: 'db' }, { path: 'data.txt', category: 'db' },
   { path: 'logins.txt', category: 'db' }, { path: 'credentials.txt', category: 'db' },
-  { path: 'users.txt', category: 'db' }, { path: 'emails.txt', category: 'db' },
+  { path: 'creds.txt', category: 'db' }, { path: 'users.txt', category: 'db' },
+  { path: 'emails.txt', category: 'db' }, { path: 'victim.txt', category: 'db' },
   { path: 'dump.sql', category: 'db' }, { path: 'db.sql', category: 'db' },
   { path: 'database.sql', category: 'db' }, { path: 'db.sql.gz', category: 'db' },
   { path: 'db.zip', category: 'db' }, { path: 'users.db', category: 'db' },
-  { path: 'app.db', category: 'db' },
+  { path: 'app.db', category: 'db' }, { path: 'logins.zip', category: 'db' },
   { path: 'main.zip', category: 'kit' }, { path: 'site.zip', category: 'kit' },
   { path: 'backup.zip', category: 'kit' }, { path: 'kit.zip', category: 'kit' },
-  { path: 'index.php.bak', category: 'backup' }, { path: '.htaccess', category: 'config' },
+  { path: 'index.zip', category: 'kit' }, { path: 'login.zip', category: 'kit' },
+  { path: 'index.php.bak', category: 'backup' },
 ];
 
 const KIT_EXT = /\.(zip|rar|tar\.gz|tgz|7z)$/i;
@@ -664,16 +749,19 @@ async function crawlDirListing(url: string, depth: number, visited: Set<string>,
   } catch {}
 }
 
-async function fuzzDirectories(baseUrl: string): Promise<{ tree: ResourceTreeNode[]; artifacts: ForensicArtifact[] }> {
+async function fuzzDirectories(baseUrl: string, discoveredDirs: string[] = []): Promise<{ tree: ResourceTreeNode[]; artifacts: ForensicArtifact[] }> {
   const fuzzTree: ResourceTreeNode[] = [];
   const artifacts: ForensicArtifact[] = [];
   const probeHistory = new Set<string>();
   let dirCount = 0;
+  let probeCount = 0;
 
   const probe = async (p: FuzzPathDef, prefix: string, depth: number, parentId: string | null): Promise<void> => {
     const url = `${baseUrl}/${prefix}${p.path}`;
     if (probeHistory.has(url)) return;
+    if (probeCount >= FUZZ_PATHS.length + MAX_RECURSIVE_PROBES) return;
     probeHistory.add(url);
+    probeCount++;
     try {
       const res = await fetchWithTimeout(url, { method: 'GET', redirect: 'manual' }, FUZZ_TIMEOUT);
       const status = res.status;
@@ -681,7 +769,6 @@ async function fuzzDirectories(baseUrl: string): Promise<{ tree: ResourceTreeNod
       const contentType = res.headers.get('content-type');
       const category = classifyPath(p.path, p.category);
       const sensitive = p.category !== 'common';
-      const isDirLike = p.path.endsWith('/') || status === 200 && p.category === 'admin' || status === 200 && p.category === 'common' && p.path.endsWith('/');
 
       const entry: ResourceTreeNode = {
         id: Buffer.from(url).toString('base64url').slice(0, 16),
@@ -729,10 +816,10 @@ async function fuzzDirectories(baseUrl: string): Promise<{ tree: ResourceTreeNod
 
         // Recursive fuzzing inside discovered directories (ffuf -recursion style)
         const dirish = p.path.endsWith('/') || p.category === 'admin' || p.category === 'common';
-        if (dirish && depth < MAX_RECURSIVE_DEPTH && dirCount < MAX_RECURSIVE_DIRS) {
+        if (dirish && status === 200 && depth < MAX_RECURSIVE_DEPTH && dirCount < MAX_RECURSIVE_DIRS) {
           dirCount++;
           const childPrefix = prefix + p.path + (p.path.endsWith('/') ? '' : '/');
-          const batch = RECURSIVE_PATHS.slice(0, 42);
+          const batch = RECURSIVE_PATHS.slice(0, 45);
           for (let i = 0; i < batch.length; i += MAX_FUZZ_CONCURRENT) {
             await Promise.allSettled(
               batch.slice(i, i + MAX_FUZZ_CONCURRENT).map(sub => probe(sub, childPrefix, depth + 1, entry.id))
@@ -746,6 +833,34 @@ async function fuzzDirectories(baseUrl: string): Promise<{ tree: ResourceTreeNod
   // Main fuzz pass
   for (let i = 0; i < FUZZ_PATHS.length; i += MAX_FUZZ_CONCURRENT) {
     await Promise.allSettled(FUZZ_PATHS.slice(i, i + MAX_FUZZ_CONCURRENT).map(p => probe(p, '', 0, null)));
+  }
+
+  // Fuzz directories discovered during crawl (links/forms/JS endpoints ending in /)
+  for (const dir of discoveredDirs.slice(0, 4)) {
+    if (probeCount >= FUZZ_PATHS.length + MAX_RECURSIVE_PROBES) break;
+    const rel = dir.replace(baseUrl + '/', '').replace(/\/$/, '');
+    const dirNode: ResourceTreeNode = {
+      id: Buffer.from(dir).toString('base64url').slice(0, 16),
+      url: dir,
+      parentId: null,
+      name: rel + '/',
+      type: 'fuzz',
+      status: 200,
+      contentType: 'text/html',
+      size: 0,
+      depth: 0,
+      redirectChain: [],
+      discoveredAt: new Date().toISOString(),
+      children: [],
+      meta: { category: 'common', sensitive: true, title: '[crawl dir]' },
+    };
+    fuzzTree.push(dirNode);
+    const batch = RECURSIVE_PATHS.slice(0, 45);
+    for (let i = 0; i < batch.length; i += MAX_FUZZ_CONCURRENT) {
+      await Promise.allSettled(
+        batch.slice(i, i + MAX_FUZZ_CONCURRENT).map(sub => probe(sub, rel.endsWith('/') ? rel : rel + '/', 1, dirNode.id))
+      );
+    }
   }
 
   // Root-level directory listing (wget -r style)
@@ -998,7 +1113,10 @@ export async function runForensicAnalysis(input: string): Promise<ForensicMetada
   }
 
   // ---- Directory Fuzzing (ffuf/dirb-style + recursion) ----
-  const { tree: fuzzTree, artifacts: fuzzArtifacts } = await fuzzDirectories(baseUrl);
+  const discoveredDirs = resourceTree
+    .filter(n => n.status === 200 && n.url.endsWith('/') && n.type !== 'fuzz')
+    .map(n => n.url);
+  const { tree: fuzzTree, artifacts: fuzzArtifacts } = await fuzzDirectories(baseUrl, discoveredDirs);
 
   // ---- Artifact Download + Deep Analysis (wget/curl-style) ----
   const downloadedArtifacts = await downloadArtifacts(fuzzArtifacts);
