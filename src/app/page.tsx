@@ -850,6 +850,110 @@ export default function OSINTPlatform() {
   const [fuzzingExpanded, setFuzzingExpanded] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
   const [loadConfirm, setLoadConfirm] = useState<{ id: string; name: string } | null>(null);
+  const [wgetZipLoading, setWgetZipLoading] = useState(false);
+
+  // ============ Forensics local history (localStorage, reliable w/o KV) ============
+  const LOCAL_HISTORY_KEY = 'nexus_forensics_local';
+
+  const localHistoryLoad = (): any[] => {
+    try {
+      const raw = window.localStorage.getItem(LOCAL_HISTORY_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch { return []; }
+  };
+  const localHistorySave = (items: any[]) => {
+    try { window.localStorage.setItem(LOCAL_HISTORY_KEY, JSON.stringify(items.slice(0, 40))); } catch {}
+  };
+  const localHistoryAdd = (analysis: any) => {
+    const items = localHistoryLoad().filter((i: any) => i.name !== analysis.name);
+    items.unshift(analysis);
+    localHistorySave(items);
+  };
+  const localHistoryRemove = (name: string) => {
+    localHistorySave(localHistoryLoad().filter((i: any) => i.name !== name));
+  };
+  const toListRow = (data: any) => ({
+    id: data.id,
+    name: data.name,
+    domain: data.domain,
+    ip: data.ip,
+    asn: data.asn,
+    isp: data.isp,
+    created: data.timestamp,
+    riskLevel: data.risk?.level,
+    score: data.risk?.score,
+    kits: data.artifacts?.filter((a: any) => a.category === 'phishing_kit' && a.downloaded).length || 0,
+    databases: data.artifacts?.filter((a: any) => a.category === 'database' && a.downloaded).length || 0,
+    pagesCrawled: 0,
+    fuzzed: data.fuzzingSummary?.totalProbed || 0,
+    exposed: data.fuzzingSummary?.exposed || 0,
+    _local: data,
+  });
+
+  const downloadNodeContent = async (url: string) => {
+    if (!url) return;
+    showFeedback('Descargando contenido...', 'info');
+    try {
+      const res = await fetch(`/api/osint/forensics?action=content&url=${encodeURIComponent(url)}`);
+      if (!res.ok) { showFeedback(`Descarga fallida (${res.status})`, 'error'); return; }
+      const blob = await res.blob();
+      const cd = res.headers.get('content-disposition') || '';
+      const fname = (cd.match(/filename="?([^";]+)/i)?.[1] || url.split('/').filter(Boolean).pop() || 'resource').trim();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = fname.replace(/[\\/:*?"<>|]/g, '_') || 'resource';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      showFeedback('Contenido descargado', 'success');
+    } catch {
+      showFeedback('Descarga fallida', 'error');
+    }
+  };
+
+  const handleWgetZip = async () => {
+    const tree = apiData?.data?.resourceTree;
+    const domain = apiData?.data?.domain;
+    if (!tree || !domain) return;
+    const urls: { url: string; name: string }[] = [];
+    const seen = new Set<string>();
+    const walk = (n: any) => {
+      if (n?.url && /^https?:\/\//i.test(n.url) && n.status && n.status >= 200 && n.status < 400 && n.type !== 'redirect') {
+        const k = n.url.split('?')[0];
+        if (!seen.has(k)) {
+          seen.add(k);
+          urls.push({ url: n.url, name: n.name || n.url.split('/').filter(Boolean).pop() || 'index.html' });
+        }
+      }
+      n?.children?.forEach(walk);
+    };
+    walk(tree);
+    if (urls.length === 0) { showFeedback('No hay rutas descargables', 'error'); return; }
+    setWgetZipLoading(true);
+    showFeedback(`Descargando contenido de ${urls.length} rutas (wget-style)...`, 'info');
+    try {
+      const res = await fetch('/api/osint/forensics', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'wget', domain, urls: urls.slice(0, 60) }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        showFeedback(err?.error || 'Generación ZIP fallida', 'error');
+        return;
+      }
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `analisis_${domain.replace(/[^a-zA-Z0-9._-]/g, '_')}_wget.zip`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      showFeedback(`ZIP descargado (${(blob.size / 1024).toFixed(1)} KB)`, 'success');
+    } catch {
+      showFeedback('Generación ZIP fallida', 'error');
+    } finally {
+      setWgetZipLoading(false);
+    }
+  };
 
   // Generated Reports History
   const [reports, setReports] = useState<any[]>([]);
@@ -990,15 +1094,22 @@ export default function OSINTPlatform() {
   };
 
   const loadForensicsHistory = async () => {
+    const localRows = localHistoryLoad().map(toListRow);
     try {
       const response = await fetch(`/api/osint/forensics?action=list&_=${Date.now()}`);
       const result = await response.json();
-      if (result.success) {
-        setForensicsHistory(result.data || []);
+      if (result.success && Array.isArray(result.data)) {
+        const remoteByName = new Map<string, any>(result.data.map((r: any) => [String(r.name), r] as [string, any]));
+        const merged = [...localRows];
+        for (const [name, row] of remoteByName) {
+          if (!merged.some((m: any) => m.name === name)) merged.push(row);
+        }
+        merged.sort((a: any, b: any) => new Date(b.created || 0).getTime() - new Date(a.created || 0).getTime());
+        setForensicsHistory(merged);
+        return;
       }
-    } catch (err) {
-      console.error('Load forensics history error:', err);
-    }
+    } catch { /* backend unavailable — local only */ }
+    setForensicsHistory(localRows);
   };
 
   // ==================== HANDLER FUNCTIONS ====================
@@ -1123,6 +1234,7 @@ export default function OSINTPlatform() {
     });
 
     if (result.success) {
+      if (result.data) localHistoryAdd(result.data);
       loadForensicsHistory();
     }
   };
@@ -2769,8 +2881,15 @@ export default function OSINTPlatform() {
                         onClick={async () => {
                           const id = loadConfirm.id;
                           setLoadConfirm(null);
-                          showFeedback('Loading forensic resource...', 'info');
-                          const res = await fetch(`/api/osint/forensics?action=get&id=${id}`);
+                          const localItem = localHistoryLoad().find((i: any) => i.name === id);
+                          if (localItem) {
+                            setApiData({ success: true, data: localItem });
+                            setSelectedForensics(localItem);
+                            showFeedback('Recurso cargado (local)', 'success');
+                            return;
+                          }
+                          showFeedback('Cargando recurso forense...', 'info');
+                          const res = await fetch(`/api/osint/forensics?action=get&id=${encodeURIComponent(id)}`);
                           const data = await res.json();
                           if (data.success) { setApiData({ success: true, data: data.data }); setSelectedForensics(data.data); }
                           else showFeedback(`Error: ${data.error || 'not found'}`, 'error');
@@ -2795,16 +2914,14 @@ export default function OSINTPlatform() {
                         onClick={async () => {
                           const id = deleteConfirm.id;
                           setDeleteConfirm(null);
-                          showFeedback('Deleting forensic resource...', 'info');
-                          const res = await fetch(`/api/osint/forensics?action=delete&id=${id}`, { method: 'DELETE' });
-                          const data = await res.json();
-                          if (data.success) {
-                            showFeedback('Analysis deleted', 'success');
-                            loadForensicsHistory();
-                            if (selectedForensics?.id === id) { setApiData(null); setSelectedForensics(null); }
-                          } else {
-                            showFeedback(`Error: ${data.error || 'failed'}`, 'error');
-                          }
+                          showFeedback('Eliminando recurso forense...', 'info');
+                          localHistoryRemove(id);
+                          try {
+                            await fetch(`/api/osint/forensics?action=delete&id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+                          } catch {}
+                          loadForensicsHistory();
+                          if (selectedForensics?.id === id || selectedForensics?.name === id) { setApiData(null); setSelectedForensics(null); }
+                          showFeedback('Recurso eliminado', 'success');
                         }}
                         className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg"
                       >Delete</button>
@@ -2891,18 +3008,25 @@ export default function OSINTPlatform() {
                      </div>
                    )}
 
-                    {/* Resource Tree (Live Crawl) - Interactive */}
+                    {/* Resource Tree (Live Crawl) - Interactive + Downloadable */}
                     {apiData.data.resourceTree && (
                       <div className="bg-gray-900 border border-blue-500/30 rounded-xl p-5">
-                        <h3 className="font-semibold mb-3 flex items-center gap-2">
+                        <h3 className="font-semibold mb-3 flex items-center gap-2 flex-wrap">
                           <FileCode className="w-5 h-5 text-blue-400" /> Resource Tree — Live Crawl (gospider-style)
                           <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded">
                             {(() => { let c=0; const count=(n:any)=>{c++; n.children?.forEach(count); }; count(apiData.data.resourceTree); return c; })()} nodes
                           </span>
+                          <button
+                            onClick={handleWgetZip}
+                            disabled={wgetZipLoading}
+                            className="ml-auto text-xs px-2.5 py-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded text-white flex items-center gap-1.5"
+                          >
+                            <Download className="w-3 h-3" /> {wgetZipLoading ? 'Descargando rutas...' : 'Descargar todas las rutas (.zip)'}
+                          </button>
                         </h3>
-                        <p className="text-xs text-gray-500 mb-3">Interactive tree of crawled pages, scripts, resources, redirects & fuzz hits. Click to expand.</p>
+                        <p className="text-xs text-gray-500 mb-3">Click para expandir. Usa <Download className="w-3 h-3 inline" /> en un nodo para descargar su contenido real (wget/curl-style), o descarga todas las rutas en un solo .zip.</p>
                         <div className="max-h-[400px] overflow-auto space-y-1">
-                          <TreeNode node={apiData.data.resourceTree} indent={0} />
+                          <TreeNode node={apiData.data.resourceTree} indent={0} onDownload={downloadNodeContent} />
                         </div>
                       </div>
                     )}
@@ -5116,7 +5240,7 @@ function ShoppingCart({ className }: { className?: string }) {
   return <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" /></svg>;
 }
 
-function TreeNode({ node, indent = 0 }: { node: any; indent?: number }) {
+function TreeNode({ node, indent = 0, onDownload }: { node: any; indent?: number; onDownload?: (url: string) => void }) {
   const [expanded, setExpanded] = React.useState(false);
   const typeIcon = {
     page: <Globe2 className="w-3.5 h-3.5 text-blue-400" />,
@@ -5132,6 +5256,7 @@ function TreeNode({ node, indent = 0 }: { node: any; indent?: number }) {
   const statusColor = node.status === 200 ? 'text-green-400' : node.status === 403 ? 'text-red-400' : node.status >= 300 && node.status < 400 ? 'text-yellow-400' : node.status === 404 ? 'text-gray-500' : 'text-gray-400';
   const secrets = node.meta?.secrets?.length || 0;
   const hasChildren = node.children && node.children.length > 0;
+  const downloadable = node.status && node.status >= 200 && node.status < 400 && node.type !== 'redirect';
   return (
     <div key={node.id} style={{ marginLeft: `${indent * 16}px` }}>
       <div className="flex items-center gap-2 py-1 text-xs" onClick={() => setExpanded(!expanded)}>
@@ -5142,10 +5267,19 @@ function TreeNode({ node, indent = 0 }: { node: any; indent?: number }) {
         {node.size && <span className="text-gray-500">{(node.size / 1024).toFixed(1)} KB</span>}
         {secrets > 0 && <span className="px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded text-[10px] font-bold">{secrets} secrets</span>}
         {node.meta?.forms > 0 && <span className="px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded text-[10px] font-bold">{node.meta.forms} forms</span>}
+        {downloadable && onDownload && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onDownload(node.url); }}
+            className="text-gray-400 hover:text-blue-400 transition-colors shrink-0"
+            title={`Download content: ${node.url}`}
+          >
+            <Download className="w-3.5 h-3.5" />
+          </button>
+        )}
       </div>
       {expanded && node.children && (
         <div className="border-l border-gray-800 pl-2 mt-1 space-y-1">
-          {node.children.map((child: any) => <TreeNode key={child.id} node={child} indent={indent + 1} />)}
+          {node.children.map((child: any) => <TreeNode key={child.id} node={child} indent={indent + 1} onDownload={onDownload} />)}
         </div>
       )}
     </div>

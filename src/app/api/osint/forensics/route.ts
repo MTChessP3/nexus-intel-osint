@@ -3,6 +3,7 @@ import { upsertIOC, createAnalysis } from '@/lib/store';
 import { kvGet, kvSet, kvListKeys, kvDel } from '@/lib/kv';
 import { lookupVirusTotalDomain } from '@/lib/intel/virustotal';
 import { runForensicAnalysis, ForensicMetadata } from '@/lib/intel/forensics';
+import { buildZip, mirrorUrls, mimeForPath } from '@/lib/intel/wgetExport';
 
 export const maxDuration = 300;
 
@@ -12,7 +13,29 @@ const INDEX_KEY = 'nexus:forensics:index';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { domain, options = {} } = body;
+    const { domain, action } = body;
+
+    // wget-style bulk export: mirror all discovered paths into a ZIP
+    if (action === 'wget') {
+      const urls = Array.isArray(body.urls) ? body.urls.slice(0, 60) : [];
+      if (urls.length === 0) {
+        return NextResponse.json({ success: false, error: 'No paths to mirror' }, { status: 400 });
+      }
+      const files = await mirrorUrls(urls.map((u: any) => ({ url: String(u.url), name: String(u.name || '') })));
+      if (files.length === 0) {
+        return NextResponse.json({ success: false, error: 'No path content could be downloaded (all blocked/empty)' }, { status: 502 });
+      }
+      const zip = buildZip(files);
+      const safeDomain = String(domain || 'target').replace(/[^a-zA-Z0-9._-]/g, '_');
+      return new NextResponse(new Uint8Array(zip), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/zip',
+          'Content-Disposition': `attachment; filename="analisis_${safeDomain}_wget.zip"`,
+          'Content-Length': String(zip.length),
+        },
+      });
+    }
 
     if (!domain) {
       return NextResponse.json({ success: false, error: 'Domain is required for forensic analysis' }, { status: 400 });
@@ -80,6 +103,40 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const action = searchParams.get('action');
   const idParam = searchParams.get('id') || searchParams.get('name') || '';
+
+  if (action === 'content') {
+    const url = searchParams.get('url') || '';
+    if (!/^https?:\/\//i.test(url)) {
+      return NextResponse.json({ success: false, error: 'Invalid URL (must be http/https)' }, { status: 400 });
+    }
+    try {
+      const res = await fetch(url, {
+        redirect: 'follow',
+        headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) NEXUS-Forensic/5.1' },
+        signal: AbortSignal.timeout(20000),
+      });
+      if (!res.ok) {
+        return NextResponse.json({ success: false, error: `Target returned HTTP ${res.status}` }, { status: 502 });
+      }
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length > 10 * 1024 * 1024) {
+        return NextResponse.json({ success: false, error: 'Content too large (>10MB)' }, { status: 413 });
+      }
+      const path = new URL(url).pathname;
+      const rawName = path.split('/').filter(Boolean).pop() || 'resource.html';
+      const safeName = rawName.replace(/[\\/:*?"<>|]/g, '_').slice(0, 80) || 'resource.html';
+      return new NextResponse(new Uint8Array(buf), {
+        status: 200,
+        headers: {
+          'Content-Type': mimeForPath(rawName),
+          'Content-Disposition': `attachment; filename="${safeName}"`,
+          'Content-Length': String(buf.length),
+        },
+      });
+    } catch (error) {
+      return NextResponse.json({ success: false, error: 'Content fetch failed (timeout/blocked)' }, { status: 502 });
+    }
+  }
 
   if (action === 'list') {
     try {
