@@ -3,6 +3,7 @@ import { enrichmentAgent, analysisAgent } from '@/lib/agents';
 import { detectType } from '@/lib/intel';
 import { isAIEnabled } from '@/lib/ai';
 import { upsertIOC, createAnalysis, createAlert } from '@/lib/store';
+import { resolveModuleScope } from '@/lib/intel/moduleScope';
 
 export const maxDuration = 60;
 
@@ -11,6 +12,11 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { target, type, context } = body;
+
+    const { module: aiModule, error: moduleError } = resolveModuleScope(request, body);
+    if (moduleError) {
+      return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+    }
 
     if (!target) {
       return NextResponse.json(
@@ -73,6 +79,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
+      module: aiModule,
       source: analysis.usedAI ? 'Groq-LLM + Agent Engine' : 'Agent Engine (rule-based fallback)',
       timestamp: new Date().toISOString(),
       fetchedLive: true,

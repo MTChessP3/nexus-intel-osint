@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { lookupCVE } from '@/lib/intel';
 import { upsertIOC } from '@/lib/store';
+import { resolveModuleScope } from '@/lib/intel/moduleScope';
 
 // CVE Database — real NIST NVD v2.0 integration
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const cveId = searchParams.get('cveId');
   const keyword = searchParams.get('keyword');
+
+  const { module: cveModule, error: moduleError } = resolveModuleScope(request);
+  if (moduleError) {
+    return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+  }
 
   if (!cveId && !keyword) {
     return NextResponse.json(
@@ -44,6 +50,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
+      module: cveModule,
       source: live ? 'NIST-NVD-v2.0' : 'cached-data',
       timestamp: new Date().toISOString(),
       fetchedLive: live,
@@ -56,6 +63,7 @@ export async function GET(request: NextRequest) {
     const { results } = await lookupCVE(cveId || keyword || '');
     return NextResponse.json({
       success: true,
+      module: cveModule,
       source: 'emergency-fallback',
       timestamp: new Date().toISOString(),
       fetchedLive: false,

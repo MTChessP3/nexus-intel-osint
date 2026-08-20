@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { lookupDomain } from '@/lib/intel';
 import { isAIEnabled } from '@/lib/ai';
+import { resolveModuleScope } from '@/lib/intel/moduleScope';
 
 export const maxDuration = 60;
 
@@ -54,6 +55,10 @@ function reverseRange(ip: string): string[] {
 }
 
 export async function GET(request: NextRequest) {
+  const { module: dnsModule, error: moduleError } = resolveModuleScope(request);
+  if (moduleError) {
+    return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+  }
   const { searchParams } = new URL(request.url);
   const domain = searchParams.get('domain');
 
@@ -92,6 +97,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
+      module: dnsModule,
       source: 'Monitor-Threat DNS Dumpster',
       timestamp: new Date().toISOString(),
       fetchedLive: true,

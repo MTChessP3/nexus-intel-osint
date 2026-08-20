@@ -3,6 +3,7 @@ import { lookupDomain, detectType } from '@/lib/intel';
 import { upsertIOC, createAlert, generateId } from '@/lib/store';
 import { kvPushList, kvGetList } from '@/lib/kv';
 import { isAIEnabled } from '@/lib/ai';
+import { resolveModuleScope } from '@/lib/intel/moduleScope';
 
 export const maxDuration = 60;
 
@@ -115,6 +116,12 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { brand, candidate, mode = 'scan' } = body;
+
+    const { module: brandModule, error: moduleError } = resolveModuleScope(request, body);
+    if (moduleError) {
+      return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+    }
+
     if (!brand || !candidate) {
       return NextResponse.json({ success: false, error: 'brand and candidate are required' }, { status: 400 });
     }
@@ -146,6 +153,7 @@ export async function POST(request: NextRequest) {
 
       return NextResponse.json({
         success: true,
+        module: brandModule,
         source: 'Brand-Protection Engine',
         timestamp: new Date().toISOString(),
         aiEnabled: isAIEnabled(),
@@ -185,9 +193,14 @@ export async function GET(request: NextRequest) {
   const action = searchParams.get('action');
   const brand = searchParams.get('brand') || 'Acme';
 
+  const { module: brandModule, error: moduleError } = resolveModuleScope(request);
+  if (moduleError) {
+    return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+  }
+
   if (action === 'watchlist') {
     const profiles = await kvGetList<BrandProfile>(WATCH_KEY);
-    return NextResponse.json({ success: true, data: profiles, message: `${profiles.length} brand(s) watched` });
+    return NextResponse.json({ success: true, module: brandModule, data: profiles, message: `${profiles.length} brand(s) watched` });
   }
 
   // Demo scan of lookalikes for a brand
@@ -195,6 +208,7 @@ export async function GET(request: NextRequest) {
   const results = await Promise.all(candidates.slice(0, 6).map((c) => checkCandidate(c, brand)));
   return NextResponse.json({
     success: true,
+    module: brandModule,
     source: 'Brand-Protection Engine',
     brand,
     lookalikes: candidates,

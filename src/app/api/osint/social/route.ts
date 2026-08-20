@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { generateId } from '@/lib/store';
 import { kvPushList, kvGetList } from '@/lib/kv';
 import { isAIEnabled } from '@/lib/ai';
+import { resolveModuleScope } from '@/lib/intel/moduleScope';
 
 export const maxDuration = 60;
 
@@ -136,6 +137,11 @@ export async function GET(request: NextRequest) {
   const author = searchParams.get('author') || '';
   const from = searchParams.get('from') || '';
 
+  const { module: socialModule, error: moduleError } = resolveModuleScope(request);
+  if (moduleError) {
+    return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+  }
+
   // Collect messages (real when tokens present, else demo)
   let messages = await kvGetList<Message>(MESSAGES_KEY);
   if (configured && action === 'refresh') {
@@ -185,6 +191,7 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     success: true,
+    module: socialModule,
     source: configured ? 'Telegram/Discord live' : 'Telegram/Discord (demo mode)',
     timestamp: new Date().toISOString(),
     configured,
@@ -207,11 +214,16 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { action, keywords, message } = body;
 
+    const { module: socialModule, error: moduleError } = resolveModuleScope(request, body);
+    if (moduleError) {
+      return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+    }
+
     if (action === 'set-keywords') {
       if (!Array.isArray(keywords)) return NextResponse.json({ success: false, error: 'keywords must be an array' }, { status: 400 });
       const unique = [...new Set(keywords.map((k) => String(k).trim()).filter(Boolean))];
       for (const k of unique) await kvPushList(KEYWORDS_KEY, k, 100);
-      return NextResponse.json({ success: true, data: unique, message: `${unique.length} keyword(s) configured` });
+      return NextResponse.json({ success: true, module: socialModule, data: unique, message: `${unique.length} keyword(s) configured` });
     }
 
     if (action === 'ingest') {

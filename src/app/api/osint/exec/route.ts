@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { generateId } from '@/lib/store';
 import { kvPushList, kvGetList } from '@/lib/kv';
 import { isAIEnabled } from '@/lib/ai';
+import { resolveModuleScope } from '@/lib/intel/moduleScope';
 
 export const maxDuration = 60;
 
@@ -111,14 +112,19 @@ export async function GET(request: NextRequest) {
   const action = searchParams.get('action');
   const name = searchParams.get('name') || '';
 
+  const { module: execModule, error: moduleError } = resolveModuleScope(request);
+  if (moduleError) {
+    return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+  }
+
   if (action === 'profiles') {
     const profiles = await kvGetList<ExecutiveProfile>(PROFILES_KEY);
-    return NextResponse.json({ success: true, data: profiles, message: `${profiles.length} executive profile(s)` });
+    return NextResponse.json({ success: true, module: execModule, data: profiles, message: `${profiles.length} executive profile(s)` });
   }
 
   if (action === 'family') {
     const family = await kvGetList<any>(FAMILY_KEY);
-    return NextResponse.json({ success: true, data: family, message: `${family.length} related profile(s)` });
+    return NextResponse.json({ success: true, module: execModule, data: family, message: `${family.length} related profile(s)` });
   }
 
   if (!name) {
@@ -152,6 +158,7 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     success: true,
+    module: execModule,
     source: gsearchConfigured ? 'Executive-OSINT (Google PSE + index)' : 'Executive-OSINT (indexed demo)',
     timestamp: new Date().toISOString(),
     fetchedLive: gsearchConfigured,
@@ -178,6 +185,11 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { action, profile, family } = body;
 
+    const { module: execModule, error: moduleError } = resolveModuleScope(request, body);
+    if (moduleError) {
+      return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+    }
+
     if (action === 'add-profile') {
       if (!profile?.name) return NextResponse.json({ success: false, error: 'profile.name is required' }, { status: 400 });
       const p: ExecutiveProfile = {
@@ -187,14 +199,14 @@ export async function POST(request: NextRequest) {
         documents: profile.documents || [], createdAt: new Date().toISOString(),
       };
       await kvPushList(PROFILES_KEY, p, 100);
-      return NextResponse.json({ success: true, data: p, message: `Executive profile "${p.name}" created` });
+      return NextResponse.json({ success: true, module: execModule, data: p, message: `Executive profile "${p.name}" created` });
     }
 
     if (action === 'add-family') {
       if (!family?.name || !family?.relation) return NextResponse.json({ success: false, error: 'family.name and relation required' }, { status: 400 });
       const f = { id: generateId(), ...family, createdAt: new Date().toISOString() };
       await kvPushList(FAMILY_KEY, f, 100);
-      return NextResponse.json({ success: true, data: f, message: `Related profile "${f.name}" linked` });
+      return NextResponse.json({ success: true, module: execModule, data: f, message: `Related profile "${f.name}" linked` });
     }
 
     return NextResponse.json({ success: false, error: 'Unknown action' }, { status: 400 });

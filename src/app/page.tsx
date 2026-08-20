@@ -788,7 +788,9 @@ export default function OSINTPlatform() {
   const [selectedIOC, setSelectedIOC] = useState<IOC | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [modalType, setModalType] = useState<'detail' | 'edit' | 'add'>('detail');
-  const [searchQuery, setSearchQuery] = useState('');
+  // Per-module search isolation: each tab keeps its own term; nothing persists
+  // globally after execution (requirement: no cross-module state/caching leaks).
+  const [searchTerms, setSearchTerms] = useState<Record<string, string>>({});
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const [ipQueue, setIpQueue] = useState<IpQueueEntry[]>([]);
   const [selectedQueue, setSelectedQueue] = useState<Set<string>>(new Set());
@@ -796,8 +798,11 @@ export default function OSINTPlatform() {
   const [showEnrichment, setShowEnrichment] = useState(false);
   const [openArtifact, setOpenArtifact] = useState<string | null>('timestamps');
   
-  // Input State
-  const [inputValue, setInputValue] = useState('');
+  // Input State — isolated per module (activeTab), reset after execution
+  const inputValue = searchTerms[activeTab] ?? '';
+  const setInputValue = (v: string) => setSearchTerms((t) => ({ ...t, [activeTab]: v }));
+  const searchQuery = searchTerms.iocs ?? '';
+  const setSearchQuery = (v: string) => setSearchTerms((t) => ({ ...t, iocs: v }));
   const [formData, setFormData] = useState({
     type: 'IP',
     value: '',
@@ -1067,10 +1072,26 @@ export default function OSINTPlatform() {
     setLoading(true);
     setError(null);
     showFeedback('Connecting to API...', 'info');
-    
+
+    // Per-module scoping: inject originating module so no generalized
+    // state/cache leaks between modules (ip_risk, scanner, forensics, ...).
+    let finalEndpoint = endpoint;
+    const finalOptions: RequestInit = options ? { ...options } : {};
+    const method = (finalOptions.method || 'GET').toUpperCase();
     try {
-      const response = await fetch(endpoint, {
-        ...options,
+      if (method === 'GET') {
+        finalEndpoint = `${finalEndpoint}${finalEndpoint.includes('?') ? '&' : '?'}module=${encodeURIComponent(activeTab)}`;
+      } else {
+        let body: any = null;
+        try { body = finalOptions.body ? JSON.parse(finalOptions.body as string) : null; } catch { body = null; }
+        if (body && typeof body === 'object' && !body.module) {
+          body.module = activeTab;
+          finalOptions.body = JSON.stringify(body);
+        }
+      }
+
+      const response = await fetch(finalEndpoint, {
+        ...finalOptions,
         headers: {
           'Content-Type': 'application/json',
           ...options?.headers
@@ -1089,6 +1110,14 @@ export default function OSINTPlatform() {
         if (options?.method === 'POST' || options?.method === 'DELETE' || options?.method === 'PATCH') {
           setTimeout(() => loadIOCs(), 500);
         }
+        // Reset current module's search term: the executed query must not stay
+        // persistent in any global context.
+        setSearchTerms((t) => {
+          if (!t[activeTab]) return t;
+          const next = { ...t };
+          delete next[activeTab];
+          return next;
+        });
       }
       
       return data;
@@ -1106,6 +1135,7 @@ export default function OSINTPlatform() {
     try {
       const params = new URLSearchParams();
       if (searchQuery) params.set('search', searchQuery);
+      params.set('module', 'iocs');
       
       const response = await fetch(`/api/osint/iocs?${params}`);
       const result = await response.json();

@@ -11,6 +11,7 @@ import {
   updateAlertStatus,
   removeAlert,
 } from '@/lib/store';
+import { resolveModuleScope } from '@/lib/intel/moduleScope';
 
 // IOC CRUD Operations — persistent via Vercel KV / in-memory fallback
 export async function GET(request: NextRequest) {
@@ -23,10 +24,15 @@ export async function GET(request: NextRequest) {
   const limit = parseInt(searchParams.get('limit') || '50');
   const scope = searchParams.get('scope');
 
+  const { module: iocsModule, error: moduleError } = resolveModuleScope(request);
+  if (moduleError) {
+    return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+  }
+
   try {
     if (scope === 'alerts') {
       const alerts = await getAlerts({ status: searchParams.get('alertStatus') || undefined });
-      return NextResponse.json({ success: true, data: alerts, scope: 'alerts' });
+      return NextResponse.json({ success: true, data: alerts, module: iocsModule, scope: 'alerts' });
     }
 
     const result = await getIOCs({ type, status, severity, search, page, limit });
@@ -42,6 +48,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
+      module: iocsModule,
       data: enrichedData,
       pagination: {
         page: result.page,

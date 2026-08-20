@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { loadThreatFeeds } from '@/lib/intel';
 import { createAlert, upsertIOC } from '@/lib/store';
+import { resolveModuleScope } from '@/lib/intel/moduleScope';
 
 // Live threat feeds — real CISA KEV, MalwareBazaar, Abuse.ch SSLBL
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const feed = searchParams.get('feed') || 'all';
   const limit = parseInt(searchParams.get('limit') || '20');
+
+  const { module: threatsModule, error: moduleError } = resolveModuleScope(request);
+  if (moduleError) {
+    return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+  }
 
   try {
     const feeds = await loadThreatFeeds(feed === 'all' ? undefined : feed, limit);
@@ -52,6 +58,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
+      module: threatsModule,
       timestamp: new Date().toISOString(),
       fetchedLive: true,
       totalFeeds: feeds.length,
@@ -67,6 +74,7 @@ export async function GET(request: NextRequest) {
     console.error('Threat Feed Error:', error);
     return NextResponse.json({
       success: true,
+      module: threatsModule,
       timestamp: new Date().toISOString(),
       fetchedLive: false,
       totalFeeds: 0,

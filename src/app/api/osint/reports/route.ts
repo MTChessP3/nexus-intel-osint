@@ -5,6 +5,7 @@ import { loadThreatFeeds } from '@/lib/intel';
 import { aiJSON, isAIEnabled } from '@/lib/ai';
 import { kvGet, kvSet, kvPushList, kvGetList } from '@/lib/kv';
 import { buildPDF, buildDOCX, buildPPTX, ReportSpec, ReportSection } from '@/lib/reportgen';
+import { resolveModuleScope } from '@/lib/intel/moduleScope';
 
 export const maxDuration = 60;
 
@@ -29,6 +30,7 @@ interface ReportConfig {
 
 interface ReportRecord {
   id: string;
+  module?: string;
   title: string;
   config: ReportConfig;
   timestamp: string;
@@ -158,6 +160,12 @@ function generateTimeline(bundle: Record<string, any>): any[] {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+
+    const { module: reportModule, error: moduleError } = resolveModuleScope(request, body);
+    if (moduleError) {
+      return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+    }
+
     const config: ReportConfig = {
       title: body.title || 'NEXUS INTEL Intelligence Report',
       modules: body.modules || ['iocs', 'threats'],
@@ -216,6 +224,7 @@ export async function POST(request: NextRequest) {
 
     const report: ReportRecord = {
       id: generateId(),
+      module: reportModule,
       title: config.title,
       config,
       timestamp: new Date().toISOString(),

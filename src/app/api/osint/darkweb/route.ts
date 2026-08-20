@@ -1,11 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { aiComplete, isAIEnabled, extractJSON } from '@/lib/ai';
 import { upsertIOC, createAnalysis } from '@/lib/store';
+import { resolveModuleScope } from '@/lib/intel/moduleScope';
 
 // Dark Web Watch — curated OSINT references + LLM synthesis
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const query = searchParams.get('query');
+
+  const { module: dwModule, error: moduleError } = resolveModuleScope(request);
+  if (moduleError) {
+    return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+  }
 
   if (!query) {
     return NextResponse.json(
@@ -65,6 +71,7 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     success: true,
+    module: dwModule,
     query,
     timestamp: new Date().toISOString(),
     source: aiEnabled ? 'DarkWeb-Osint+AI' : 'DarkWeb-Osint',
@@ -87,6 +94,12 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const body = await request.json();
   const { query } = body;
+
+  const { module: dwModule, error: moduleError } = resolveModuleScope(request, body);
+  if (moduleError) {
+    return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+  }
+
   if (!query) {
     return NextResponse.json({ success: false, error: 'Search term is required' }, { status: 400 });
   }
@@ -127,6 +140,7 @@ export async function POST(request: NextRequest) {
 
   return NextResponse.json({
     success: true,
+    module: dwModule,
     query,
     timestamp: new Date().toISOString(),
     source: aiEnabled ? 'DarkWeb-Osint+AI' : 'DarkWeb-Osint',
