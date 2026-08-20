@@ -4,6 +4,7 @@ import { kvGet, kvSet, kvListKeys, kvDel, kvHealth } from '@/lib/kv';
 import { lookupVirusTotalDomain } from '@/lib/intel/virustotal';
 import { runForensicAnalysis, ForensicMetadata } from '@/lib/intel/forensics';
 import { buildZip, mirrorUrls, mimeForPath } from '@/lib/intel/wgetExport';
+import { resolveModuleScope } from '@/lib/intel/moduleScope';
 
 export const maxDuration = 300;
 
@@ -13,6 +14,10 @@ const INDEX_KEY = 'nexus:forensics:index';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+    const { error: moduleError } = resolveModuleScope(request, body);
+    if (moduleError) {
+      return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+    }
     const { domain, action } = body;
 
     // wget-style bulk export: mirror all discovered paths into a ZIP
@@ -109,6 +114,10 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
+  const { error: moduleError } = resolveModuleScope(request);
+  if (moduleError) {
+    return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+  }
   const { searchParams } = new URL(request.url);
   const action = searchParams.get('action');
   const idParam = searchParams.get('id') || searchParams.get('name') || '';

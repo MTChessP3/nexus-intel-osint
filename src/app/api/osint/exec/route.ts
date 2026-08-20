@@ -99,10 +99,10 @@ async function googleDorkQueries(name: string): Promise<any[]> {
       const data = await res.json();
       const items = data.items || [];
       out.push({
-        query: q, total: data.searchInformation?.totalResults || items.length,
+        total: data.searchInformation?.totalResults || items.length,
         results: items.slice(0, 5).map((it: any) => ({ title: it.title, url: it.link, snippet: it.snippet })),
       });
-    } catch { out.push({ query: q, total: 0, results: [], error: 'Search API unavailable' }); }
+    } catch { out.push({ total: 0, results: [], error: 'Search API unavailable' }); }
   }
   return out;
 }

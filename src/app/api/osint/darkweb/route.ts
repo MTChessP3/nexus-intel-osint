@@ -141,7 +141,6 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({
     success: true,
     module: dwModule,
-    query,
     timestamp: new Date().toISOString(),
     source: aiEnabled ? 'DarkWeb-Osint+AI' : 'DarkWeb-Osint',
     aiEnabled,

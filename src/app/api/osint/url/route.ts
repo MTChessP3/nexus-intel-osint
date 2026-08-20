@@ -3,6 +3,7 @@ import { scanUrl } from '@/lib/intel/scanner';
 import { upsertIOC, createAlert, generateId } from '@/lib/store';
 import { kvPushList, kvGetList } from '@/lib/kv';
 import { lookupVirusTotalUrl } from '@/lib/intel/virustotal';
+import { resolveModuleScope } from '@/lib/intel/moduleScope';
 
 export const maxDuration = 60;
 
@@ -18,6 +19,10 @@ interface ScanJob {
 }
 
 export async function GET(request: NextRequest) {
+  const { error: moduleError } = resolveModuleScope(request);
+  if (moduleError) {
+    return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+  }
   const searchParams = request.nextUrl.searchParams;
   const action = searchParams.get('action');
 

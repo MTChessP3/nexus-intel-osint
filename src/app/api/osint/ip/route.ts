@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { lookupIP } from '@/lib/intel';
 import { enrichIP } from '@/lib/intel/ipenrich';
 import { upsertIOC, createAnalysis, createAlert } from '@/lib/store';
+import { resolveModuleScope } from '@/lib/intel/moduleScope';
 
 async function fetchRdap(ip: string): Promise<any> {
   let rdap: any = null;
@@ -51,6 +52,10 @@ async function fetchRdap(ip: string): Promise<any> {
 
 // IP Intelligence — real ip-api.com lookup + free OSINT enrichment + active fingerprinting
 export async function GET(request: NextRequest) {
+  const { error: moduleError } = resolveModuleScope(request);
+  if (moduleError) {
+    return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+  }
   const searchParams = request.nextUrl.searchParams;
   const ip = searchParams.get('ip');
   const scan = searchParams.get('scan') !== '0';
@@ -153,6 +158,10 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+    const { error: moduleError } = resolveModuleScope(request, body);
+    if (moduleError) {
+      return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+    }
     const { ip, description, tags, severity } = body;
 
     if (!ip) {

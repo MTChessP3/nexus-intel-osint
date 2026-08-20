@@ -3,6 +3,7 @@ import { runSandbox, mergeExternalResults, pollSandboxJob } from '@/lib/intel/sa
 import type { ExternalJob } from '@/lib/intel/sandbox/hybrid';
 import { upsertIOC, createAlert, generateId } from '@/lib/store';
 import { kvPushList, kvGetList } from '@/lib/kv';
+import { resolveModuleScope } from '@/lib/intel/moduleScope';
 
 export const maxDuration = 60;
 
@@ -21,6 +22,10 @@ interface SandboxJob {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+    const { error: moduleError } = resolveModuleScope(request, body);
+    if (moduleError) {
+      return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+    }
     const { url, external } = body;
     if (!url) {
       return NextResponse.json({ success: false, error: 'URL is required' }, { status: 400 });
@@ -91,6 +96,10 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
+  const { error: moduleError } = resolveModuleScope(request);
+  if (moduleError) {
+    return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+  }
   const { searchParams } = new URL(request.url);
   const action = searchParams.get('action');
 

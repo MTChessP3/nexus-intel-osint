@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { aiComplete, extractJSON, isAIEnabled } from '@/lib/ai';
 import { upsertIOC, kvSet, kvListKeys, kvGet, generateId } from '@/lib/store';
 import { lookupHash } from '@/lib/intel';
+import { resolveModuleScope } from '@/lib/intel/moduleScope';
 
 const ANALYSIS_KEY_PREFIX = 'nexus:mobile:';
 
@@ -98,6 +99,10 @@ function generateSecurityFindings(analysis: any): any[] {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+    const { error: moduleError } = resolveModuleScope(request, body);
+    if (moduleError) {
+      return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+    }
     const { fileName, fileType = 'APK', useAI = true } = body;
 
     if (!fileName) {
@@ -258,6 +263,10 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
+  const { error: moduleError } = resolveModuleScope(request);
+  if (moduleError) {
+    return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+  }
   const { searchParams } = new URL(request.url);
   const action = searchParams.get('action');
 

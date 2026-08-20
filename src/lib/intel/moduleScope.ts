@@ -26,6 +26,7 @@ export const MODULES = [
   'threats',
   'reports',
   'sources',
+  'export',
 ];
 
 export interface ModuleScopeResult {

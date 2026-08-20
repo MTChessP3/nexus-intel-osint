@@ -2,12 +2,17 @@ import { NextRequest, NextResponse } from 'next/server';
 import { buildDomainIntel } from '@/lib/intel/domain';
 import { upsertIOC } from '@/lib/store';
 import { lookupVirusTotalDomain } from '@/lib/intel/virustotal';
+import { resolveModuleScope } from '@/lib/intel/moduleScope';
 
 export const maxDuration = 60;
 
 // Domain Intelligence — DNS, email security, WHOIS/RDAP, subdomains (crt.sh),
 // IP/ASN infrastructure and risk scoring via the Domain Intel module.
 export async function GET(request: NextRequest) {
+  const { error: moduleError } = resolveModuleScope(request);
+  if (moduleError) {
+    return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+  }
   const searchParams = request.nextUrl.searchParams;
   const domain = searchParams.get('domain');
 

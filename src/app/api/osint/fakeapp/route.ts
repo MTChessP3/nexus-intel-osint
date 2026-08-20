@@ -4,6 +4,7 @@ import { lookupCVE } from '@/lib/intel';
 import { upsertIOC, createAlert, generateId } from '@/lib/store';
 import { kvPushList, kvGetList } from '@/lib/kv';
 import { isAIEnabled } from '@/lib/ai';
+import { resolveModuleScope } from '@/lib/intel/moduleScope';
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
@@ -59,6 +60,10 @@ async function correlateCVEs(appAnalysis: FakeAppReport): Promise<any[]> {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+    const { error: moduleError } = resolveModuleScope(request, body);
+    if (moduleError) {
+      return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+    }
     const { action = 'analyze', url, fileName, brand, site, approvedAppIds, report } = body;
 
     if (action === 'analyze' || action === 'analyze-upload') {
@@ -184,6 +189,10 @@ function suggestActors(analysis: FakeAppReport): any[] {
 }
 
 export async function GET(request: NextRequest) {
+  const { error: moduleError } = resolveModuleScope(request);
+  if (moduleError) {
+    return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+  }
   const { searchParams } = new URL(request.url);
   const action = searchParams.get('action');
   if (action === 'watch') {

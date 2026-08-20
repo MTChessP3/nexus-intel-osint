@@ -7,6 +7,14 @@
 
 const baseUrl = process.argv[2] || 'http://localhost:3000';
 
+// Per-module scoping: every search/query endpoint requires ?module=<tab> (or
+// body.module). Append the originating module on every call so no state/cache
+// leaks across modules (see src/lib/intel/moduleScope.ts).
+function mod(path, module) {
+  if (!path) return path;
+  return path.includes('?') ? `${path}&module=${module}` : `${path}?module=${module}`;
+}
+
 let passed = 0;
 let failed = 0;
 const failures = [];
@@ -45,7 +53,7 @@ async function main() {
   console.log(`\nNEXUS INTEL API Tests against ${baseUrl}\n`);
   console.log('Checking server availability...');
 
-  const health = await request('/api/osint/ip?ip=8.8.8.8').catch(() => null);
+  const health = await request('/api/osint/ip?ip=8.8.8.8&module=ip').catch(() => null);
   if (!health) {
     console.log('\n\x1b[31mCannot reach server. Start it with `bun run dev` and retry.\x1b[0m\n');
     process.exit(1);
@@ -55,21 +63,21 @@ async function main() {
   // ---------- IP ----------
   console.log('IP Intelligence');
   await test('GET /api/osint/ip returns live data', async () => {
-    const { status, body } = await request('/api/osint/ip?ip=8.8.8.8');
+    const { status, body } = await request(mod('/api/osint/ip?ip=8.8.8.8', 'ip'));
     if (status !== 200) throw new Error(`expected 200, got ${status}`);
     if (!body.success) throw new Error(`success=false: ${body.error}`);
     if (!body.data || !body.data.country) throw new Error('missing data.country');
   });
 
   await test('GET /api/osint/ip rejects missing ip', async () => {
-    const { status } = await request('/api/osint/ip');
+    const { status } = await request(mod('/api/osint/ip', 'ip'));
     if (status !== 400) throw new Error(`expected 400, got ${status}`);
   });
 
   // ---------- Domain ----------
   console.log('\nDomain Intelligence');
   await test('GET /api/osint/domain resolves DNS', async () => {
-    const { status, body } = await request('/api/osint/domain?domain=google.com');
+    const { status, body } = await request(mod('/api/osint/domain?domain=google.com', 'domain'));
     if (status !== 200) throw new Error(`expected 200, got ${status}`);
     if (!body.success) throw new Error(`success=false: ${body.error}`);
   });
@@ -77,7 +85,7 @@ async function main() {
   // ---------- URL ----------
   console.log('\nURL Scanner');
   await test('GET /api/osint/url scores a URL', async () => {
-    const { status, body } = await request('/api/osint/url?url=https://example.com');
+    const { status, body } = await request(mod('/api/osint/url?url=https://example.com', 'url'));
     if (status !== 200) throw new Error(`expected 200, got ${status}`);
     if (!body.riskAssessment || !body.riskAssessment.level) throw new Error('missing riskAssessment');
   });
@@ -85,12 +93,12 @@ async function main() {
   // ---------- Hash ----------
   console.log('\nHash Lookup');
   await test('GET /api/osint/hash returns 400 for missing hash', async () => {
-    const { status } = await request('/api/osint/hash');
+    const { status } = await request(mod('/api/osint/hash', 'hash'));
     if (status !== 400) throw new Error(`expected 400, got ${status}`);
   });
 
   await test('GET /api/osint/hash handles lookup gracefully', async () => {
-    const { status, body } = await request('/api/osint/hash?hash=0000000000000000000000000000000000000000000000000000000000000000');
+    const { status, body } = await request(mod('/api/osint/hash?hash=0000000000000000000000000000000000000000000000000000000000000000', 'hash'));
     if (status !== 200) throw new Error(`expected 200, got ${status}`);
     if (body.message === undefined) throw new Error('missing message');
   });
@@ -98,19 +106,19 @@ async function main() {
   // ---------- CVE ----------
   console.log('\nCVE Database');
   await test('GET /api/osint/cve returns 400 for missing input', async () => {
-    const { status } = await request('/api/osint/cve');
+    const { status } = await request(mod('/api/osint/cve', 'cve'));
     if (status !== 400) throw new Error(`expected 400, got ${status}`);
   });
 
   await test('GET /api/osint/cve searches', async () => {
-    const { status, body } = await request('/api/osint/cve?keyword=log4j');
+    const { status, body } = await request(mod('/api/osint/cve?keyword=log4j', 'cve'));
     if (status !== 200) throw new Error(`expected 200, got ${status}`);
   });
 
   // ---------- Threats ----------
   console.log('\nThreat Feeds');
   await test('GET /api/osint/threats loads feeds', async () => {
-    const { status, body } = await request('/api/osint/threats?limit=5');
+    const { status, body } = await request(mod('/api/osint/threats?limit=5', 'threats'));
     if (status !== 200) throw new Error(`expected 200, got ${status}`);
     if (!body.success) throw new Error(`success=false: ${body.message}`);
   });
@@ -118,12 +126,12 @@ async function main() {
   // ---------- Dark Web ----------
   console.log('\nDark Web Intel');
   await test('GET /api/osint/darkweb rejects missing query', async () => {
-    const { status } = await request('/api/osint/darkweb');
+    const { status } = await request(mod('/api/osint/darkweb', 'darkweb'));
     if (status !== 400) throw new Error(`expected 400, got ${status}`);
   });
 
   await test('GET /api/osint/darkweb returns matches', async () => {
-    const { status, body } = await request('/api/osint/darkweb?query=acme');
+    const { status, body } = await request(mod('/api/osint/darkweb?query=acme', 'darkweb'));
     if (status !== 200) throw new Error(`expected 200, got ${status}`);
     if (!Array.isArray(body.matches)) throw new Error('missing matches array');
   });
@@ -131,7 +139,7 @@ async function main() {
   // ---------- AI ----------
   console.log('\nAI Analyst');
   await test('GET /api/osint/ai reports status', async () => {
-    const { status, body } = await request('/api/osint/ai');
+    const { status, body } = await request(mod('/api/osint/ai', 'ai'));
     if (status !== 200) throw new Error(`expected 200, got ${status}`);
     if (body.aiEnabled === undefined) throw new Error('missing aiEnabled flag');
   });
@@ -140,7 +148,7 @@ async function main() {
     const { status, body } = await request('/api/osint/ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ target: '8.8.8.8', type: 'IP' }),
+      body: JSON.stringify({ target: '8.8.8.8', type: 'IP', module: 'ai' }),
     });
     if (status !== 200) throw new Error(`expected 200, got ${status}`);
     if (body.analysis === undefined && body.error === undefined) throw new Error('missing analysis result');
@@ -162,6 +170,7 @@ async function main() {
         status: 'UNKNOWN',
         source: 'api-tests',
         tags: ['test'],
+        module: 'iocs',
       }),
     });
     if (status !== 200 && status !== 201) throw new Error(`expected 200/201, got ${status}`);
@@ -169,36 +178,36 @@ async function main() {
   });
 
   await test('GET /api/osint/iocs lists the created IOC', async () => {
-    const { status, body } = await request('/api/osint/iocs?type=DOMAIN');
+    const { status, body } = await request('/api/osint/iocs?type=DOMAIN&module=iocs');
     if (status !== 200) throw new Error(`expected 200, got ${status}`);
     const found = (body.data || []).some((i) => i.value === testIocValue);
     if (!found) throw new Error('created IOC not found in list');
   });
 
   await test('PATCH /api/osint/iocs updates an IOC', async () => {
-    const { body: list } = await request('/api/osint/iocs?type=DOMAIN');
+    const { body: list } = await request('/api/osint/iocs?type=DOMAIN&module=iocs');
     const ioc = (list.data || []).find((i) => i.value === testIocValue);
     if (!ioc) throw new Error('IOC not found to update');
     const { status } = await request('/api/osint/iocs', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: ioc.id, status: 'SUSPICIOUS', severity: 'HIGH' }),
+      body: JSON.stringify({ id: ioc.id, status: 'SUSPICIOUS', severity: 'HIGH', module: 'iocs' }),
     });
     if (status !== 200) throw new Error(`expected 200, got ${status}`);
   });
 
   await test('DELETE /api/osint/iocs removes the IOC', async () => {
-    const { body: list } = await request('/api/osint/iocs?type=DOMAIN');
+    const { body: list } = await request('/api/osint/iocs?type=DOMAIN&module=iocs');
     const ioc = (list.data || []).find((i) => i.value === testIocValue);
     if (!ioc) throw new Error('IOC not found to delete');
-    const { status } = await request(`/api/osint/iocs?id=${ioc.id}`, { method: 'DELETE' });
+    const { status } = await request(`/api/osint/iocs?id=${ioc.id}&module=iocs`, { method: 'DELETE' });
     if (status !== 200) throw new Error(`expected 200, got ${status}`);
   });
 
   // ---------- Export ----------
   console.log('\nExport');
   await test('GET /api/osint/export returns JSON', async () => {
-    const res = await fetch(`${baseUrl}/api/osint/export?format=json`);
+    const res = await fetch(`${baseUrl}/api/osint/export?format=json&module=export`);
     if (res.status !== 200) throw new Error(`expected 200, got ${res.status}`);
     const ct = res.headers.get('content-type') || '';
     if (!ct.includes('json')) throw new Error(`expected json content-type, got ${ct}`);
@@ -207,14 +216,14 @@ async function main() {
   });
 
   await test('GET /api/osint/export returns CSV', async () => {
-    const res = await fetch(`${baseUrl}/api/osint/export?format=csv`);
+    const res = await fetch(`${baseUrl}/api/osint/export?format=csv&module=export`);
     if (res.status !== 200) throw new Error(`expected 200, got ${res.status}`);
     const ct = res.headers.get('content-type') || '';
     if (!ct.includes('csv')) throw new Error(`expected csv content-type, got ${ct}`);
   });
 
   await test('GET /api/osint/export returns STIX 2.1', async () => {
-    const res = await fetch(`${baseUrl}/api/osint/export?format=stix`);
+    const res = await fetch(`${baseUrl}/api/osint/export?format=stix&module=export`);
     if (res.status !== 200) throw new Error(`expected 200, got ${res.status}`);
     const body = await res.json();
     if (body.type !== 'bundle' && body.type !== 'bundle-stix21') throw new Error(`expected STIX bundle, got type=${body.type}`);
@@ -232,6 +241,7 @@ async function main() {
         executiveSummary: true,
         recommendations: true,
         includeTimeline: false,
+        module: 'reports',
       }),
     });
     if (status !== 200) throw new Error(`expected 200, got ${status}`);
@@ -239,30 +249,30 @@ async function main() {
   });
 
   await test('GET /api/osint/reports lists reports', async () => {
-    const { status, body } = await request('/api/osint/reports?action=list');
+    const { status, body } = await request('/api/osint/reports?action=list&module=reports');
     if (status !== 200) throw new Error(`expected 200, got ${status}`);
     if (!Array.isArray(body.data)) throw new Error('expected reports array');
   });
 
   await test('GET /api/osint/reports downloads HTML', async () => {
-    const { body: list } = await request('/api/osint/reports?action=list');
+    const { body: list } = await request('/api/osint/reports?action=list&module=reports');
     const report = list.data?.[0];
     if (!report) throw new Error('no report to download');
-    const res = await fetch(`${baseUrl}/api/osint/reports?action=download&id=${report.id}&format=html`);
+    const res = await fetch(`${baseUrl}/api/osint/reports?action=download&id=${report.id}&format=html&module=reports`);
     if (res.status !== 200) throw new Error(`expected 200, got ${res.status}`);
   });
 
   // ---------- Sources ----------
   console.log('\nIntelligence Sources');
   await test('GET /api/osint/sources lists sources', async () => {
-    const { status, body } = await request('/api/osint/sources');
+    const { status, body } = await request('/api/osint/sources?module=sources');
     if (status !== 200) throw new Error(`expected 200, got ${status}`);
     if (!Array.isArray(body.data)) throw new Error('expected data array');
     if (body.data.length < 3) throw new Error(`expected built-in sources, got ${body.data.length}`);
   });
 
   await test('GET /api/osint/sources?action=health reports status', async () => {
-    const { status, body } = await request('/api/osint/sources?action=health');
+    const { status, body } = await request('/api/osint/sources?action=health&module=sources');
     if (status !== 200) throw new Error(`expected 200, got ${status}`);
     if (typeof body.data !== 'object' || body.data === null) throw new Error('expected health object');
     if (body.data.totalSources === undefined) throw new Error('expected totalSources');
@@ -278,6 +288,7 @@ async function main() {
         method: 'GET',
         endpoint: 'https://example.com/feed.json',
         enabled: true,
+        module: 'sources',
       }),
     });
     if (status !== 201) throw new Error(`expected 201, got ${status}`);
@@ -287,13 +298,13 @@ async function main() {
   // ---------- Forensics / Mobile ----------
   console.log('\nForensics & Mobile');
   await test('GET /api/osint/forensics lists analyses', async () => {
-    const { status, body } = await request('/api/osint/forensics?action=list');
+    const { status, body } = await request('/api/osint/forensics?action=list&module=forensics');
     if (status !== 200) throw new Error(`expected 200, got ${status}`);
     if (!Array.isArray(body.data)) throw new Error('expected data array');
   });
 
   await test('GET /api/osint/mobile reports capabilities', async () => {
-    const { status, body } = await request('/api/osint/mobile');
+    const { status, body } = await request('/api/osint/mobile?module=mobile');
     if (status !== 200) throw new Error(`expected 200, got ${status}`);
   });
 
@@ -301,7 +312,7 @@ async function main() {
     const { status, body } = await request('/api/osint/mobile', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fileName: 'test-app.apk', fileType: 'APK', useAI: false }),
+      body: JSON.stringify({ fileName: 'test-app.apk', fileType: 'APK', useAI: false, module: 'mobile' }),
     });
     if (status !== 200) throw new Error(`expected 200, got ${status}`);
     if (!body.data || !body.data.sha256) throw new Error('missing analysis data');

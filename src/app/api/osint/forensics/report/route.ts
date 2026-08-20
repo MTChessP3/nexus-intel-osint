@@ -2,6 +2,7 @@
 // Client posts the full analysis JSON (always available, KV-independent).
 
 import { NextRequest, NextResponse } from 'next/server';
+import { resolveModuleScope } from '@/lib/intel/moduleScope';
 
 function esc(v: unknown): string {
   return String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -57,6 +58,10 @@ function renderStructure(s: any): string {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+    const { error: moduleError } = resolveModuleScope(request, body);
+    if (moduleError) {
+      return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+    }
     const d = body?.data;
     const domain = String(body?.domain || d?.domain || 'target');
     if (!d) {

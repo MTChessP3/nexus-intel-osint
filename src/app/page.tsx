@@ -900,7 +900,7 @@ export default function OSINTPlatform() {
     if (!url) return;
     showFeedback('Descargando contenido...', 'info');
     try {
-      const res = await fetch(`/api/osint/forensics?action=content&url=${encodeURIComponent(url)}`);
+      const res = await fetch(`/api/osint/forensics?action=content&url=${encodeURIComponent(url)}&module=forensics`);
       if (!res.ok) { showFeedback(`Descarga fallida (${res.status})`, 'error'); return; }
       const blob = await res.blob();
       const cd = res.headers.get('content-disposition') || '';
@@ -924,7 +924,7 @@ export default function OSINTPlatform() {
       const res = await fetch('/api/osint/forensics/report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ domain: data.domain, data }),
+        body: JSON.stringify({ domain: data.domain, data, module: 'forensics' }),
       });
       if (!res.ok) { showFeedback('Error generando el informe', 'error'); return; }
       const blob = await res.blob();
@@ -963,7 +963,7 @@ export default function OSINTPlatform() {
       const res = await fetch('/api/osint/forensics', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'wget', domain, urls: urls.slice(0, 100) }),
+        body: JSON.stringify({ action: 'wget', domain, urls: urls.slice(0, 100), module: 'forensics' }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => null);
@@ -1148,9 +1148,21 @@ export default function OSINTPlatform() {
     }
   };
 
+  // IOC search: executes the query AND resets the module's term afterwards so
+  // the executed parameter never persists in any global/context state.
+  const searchIOCs = async () => {
+    await loadIOCs();
+    setSearchTerms((t) => {
+      if (!t.iocs) return t;
+      const next = { ...t };
+      delete next.iocs;
+      return next;
+    });
+  };
+
   const getStorageHealth = async () => {
     try {
-      const response = await fetch(`/api/osint/forensics?action=health&_=${Date.now()}`);
+      const response = await fetch(`/api/osint/forensics?action=health&_=${Date.now()}&module=forensics`);
       const result = await response.json();
       if (result.success) setStorageHealth(result);
     } catch { /* ignore */ }
@@ -1159,7 +1171,7 @@ export default function OSINTPlatform() {
   const loadForensicsHistory = async () => {
     const localRows = localHistoryLoad().map(toListRow);
     try {
-      const response = await fetch(`/api/osint/forensics?action=list&_=${Date.now()}`);
+      const response = await fetch(`/api/osint/forensics?action=list&_=${Date.now()}&module=forensics`);
       const result = await response.json();
       if (result.success && Array.isArray(result.data)) {
         const remoteByName = new Map<string, any>(result.data.map((r: any) => [String(r.name), r] as [string, any]));
@@ -1629,7 +1641,7 @@ export default function OSINTPlatform() {
   // Export Handler
   const handleExport = async (format: string) => {
     showFeedback(`Preparing ${format} export...`, 'info');
-    window.open(`/api/osint/export?format=${format}`, '_blank');
+    window.open(`/api/osint/export?format=${format}&module=export`, '_blank');
     showFeedback(`${format} export started`, 'success');
   };
 
@@ -1655,7 +1667,7 @@ export default function OSINTPlatform() {
   // Load generated reports history
   const loadReports = async () => {
     try {
-      const res = await fetch('/api/osint/reports?action=list');
+      const res = await fetch('/api/osint/reports?action=list&module=reports');
       const data = await res.json();
       if (data.success) setReports(data.data || []);
     } catch (e) {
@@ -1667,8 +1679,8 @@ export default function OSINTPlatform() {
   const loadSources = async () => {
     try {
       const [sourcesRes, healthRes] = await Promise.all([
-        fetch('/api/osint/sources'),
-        fetch('/api/osint/sources?action=health')
+        fetch('/api/osint/sources?module=sources'),
+        fetch('/api/osint/sources?action=health&module=sources')
       ]);
       const sourcesData = await sourcesRes.json();
       const healthData = await healthRes.json();
@@ -1685,7 +1697,7 @@ export default function OSINTPlatform() {
       const res = await fetch('/api/osint/sources', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'test', id })
+        body: JSON.stringify({ action: 'test', id, module: 'sources' })
       });
       const data = await res.json();
       showFeedback(data.message || (data.success ? 'Source OK' : 'Source failed'), data.success ? 'success' : 'error');
@@ -1700,7 +1712,7 @@ export default function OSINTPlatform() {
       const res = await fetch('/api/osint/sources', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: source.id, enabled: !source.enabled })
+        body: JSON.stringify({ id: source.id, enabled: !source.enabled, module: 'sources' })
       });
       const data = await res.json();
       if (data.success) {
@@ -1722,7 +1734,7 @@ export default function OSINTPlatform() {
       const res = await fetch('/api/osint/sources', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newSource)
+        body: JSON.stringify({ ...newSource, module: 'sources' })
       });
       const data = await res.json();
       if (data.success) {
@@ -1842,7 +1854,7 @@ export default function OSINTPlatform() {
                   placeholder="Search IOCs, IPs, domains, hashes, CVEs..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && loadIOCs()}
+                  onKeyPress={(e) => e.key === 'Enter' && searchIOCs()}
                   className="w-full pl-10 pr-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm focus:border-red-500 focus:outline-none focus:ring-1 focus:ring-red-500"
                 />
               </div>
@@ -2967,7 +2979,7 @@ export default function OSINTPlatform() {
                             return;
                           }
                           showFeedback('Cargando recurso forense...', 'info');
-                          const res = await fetch(`/api/osint/forensics?action=get&id=${encodeURIComponent(id)}`);
+                          const res = await fetch(`/api/osint/forensics?action=get&id=${encodeURIComponent(id)}&module=forensics`);
                           const data = await res.json();
                           if (data.success) { setApiData({ success: true, data: data.data }); setSelectedForensics(data.data); }
                           else showFeedback(`Error: ${data.error || 'not found'}`, 'error');
@@ -2995,7 +3007,7 @@ export default function OSINTPlatform() {
                           showFeedback('Eliminando recurso forense...', 'info');
                           localHistoryRemove(id);
                           try {
-                            await fetch(`/api/osint/forensics?action=delete&id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+                            await fetch(`/api/osint/forensics?action=delete&id=${encodeURIComponent(id)}&module=forensics`, { method: 'DELETE' });
                           } catch {}
                           loadForensicsHistory();
                           if (selectedForensics?.id === id || selectedForensics?.name === id) { setApiData(null); setSelectedForensics(null); }
@@ -4196,7 +4208,7 @@ export default function OSINTPlatform() {
                     <option>HIGH</option>
                     <option>MEDIUM</option>
                   </select>
-                  <button onClick={loadIOCs} className="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm">
+                  <button onClick={searchIOCs} className="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm">
                     <Search className="w-4 h-4 inline mr-1" /> Search
                   </button>
                 </div>

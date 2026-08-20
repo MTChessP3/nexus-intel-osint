@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { lookupHash } from '@/lib/intel';
 import { upsertIOC } from '@/lib/store';
+import { resolveModuleScope } from '@/lib/intel/moduleScope';
 
 function getHashType(hash: string): string {
   const len = hash.length;
@@ -12,6 +13,10 @@ function getHashType(hash: string): string {
 
 // Hash Lookup — real MalwareBazaar (and optional VirusTotal)
 export async function GET(request: NextRequest) {
+  const { error: moduleError } = resolveModuleScope(request);
+  if (moduleError) {
+    return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+  }
   const searchParams = request.nextUrl.searchParams;
   const hash = searchParams.get('hash');
 

@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getIOCs } from '@/lib/store';
+import { resolveModuleScope } from '@/lib/intel/moduleScope';
 
 // Export functionality — JSON, CSV, STIX 2.1 (backed by the persistent store)
 export async function GET(request: NextRequest) {
+  const { module: exportModule, error: moduleError } = resolveModuleScope(request);
+  if (moduleError) {
+    return NextResponse.json({ success: false, error: moduleError }, { status: 400 });
+  }
   const searchParams = request.nextUrl.searchParams;
   const format = searchParams.get('format') || 'json'; // json, csv, stix
   const type = searchParams.get('type') || undefined;
