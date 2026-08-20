@@ -1839,7 +1839,7 @@ export default function OSINTPlatform() {
               <Radar className="w-8 h-8 text-red-500 animate-pulse" />
               <div>
                 <h1 className="text-xl font-bold bg-gradient-to-r from-red-500 via-orange-500 to-yellow-500 bg-clip-text text-transparent">
-                  MONITOR-THREAT
+                  MONITOR-THREAT-v2
                 </h1>
                 <p className="text-xs text-gray-400">Brand Protection • URL Sandbox • Social Monitoring • Executive OSINT</p>
               </div>
