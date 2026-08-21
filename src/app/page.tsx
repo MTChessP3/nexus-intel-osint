@@ -1,4 +1,5 @@
 'use client';
+import UnifiedSearch from '@/components/executive-osint/UnifiedSearch';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import DomainIntelPanel from '@/components/domain/DomainIntelPanel';
