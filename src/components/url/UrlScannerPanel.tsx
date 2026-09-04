@@ -10,7 +10,7 @@ import {
   Search, Loader2, Copy, ChevronDown, ChevronRight, Shield, ShieldAlert,
   ShieldCheck, AlertTriangle, CheckCircle, XCircle, Network, Server, Lock,
   Globe, Mail, Fingerprint, MapPin, FileCode, Bug, ArrowRight, ExternalLink,
-  Image, RefreshCw, Eye, FileSearch, FolderOpen, Hash, Send, Binary,
+  Image, RefreshCw, Eye, FileSearch, FolderOpen, Hash, Send, Binary, Printer,
 } from 'lucide-react';
 
 interface ScannerData {
@@ -74,6 +74,7 @@ interface Props {
   setInputValue: (v: string) => void;
   onScan: (url?: string) => void;
   onCopy: (text: string) => void;
+  onReport?: () => void;
 }
 
 const LEVEL_STYLES: Record<string, { badge: string; bar: string; icon: any }> = {
@@ -113,7 +114,7 @@ function fmtBytes(bytes: number | null): string {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
 
-export default function UrlScannerPanel({ data, virusTotal, loading, inputValue, setInputValue, onScan, onCopy }: Props) {
+export default function UrlScannerPanel({ data, virusTotal, loading, inputValue, setInputValue, onScan, onCopy, onReport }: Props) {
   const [openSection, setOpenSection] = useState<string | null>('fuzz');
   const [showAllFuzz, setShowAllFuzz] = useState(false);
   const [showAllArtifacts, setShowAllArtifacts] = useState(false);
@@ -122,7 +123,7 @@ export default function UrlScannerPanel({ data, virusTotal, loading, inputValue,
   const style = verdict ? LEVEL_STYLES[verdict.level] || LEVEL_STYLES.BENIGN : null;
   const VerdictIcon = style?.icon || Shield;
 
-  const exposed = data?.fuzz.filter((f) => f.status !== null && f.status < 400 && f.status >= 200) || [];
+  const exposed = (data?.fuzz || []).filter((f) => f.status !== null && f.status < 400 && f.status >= 200) || [];
   const shownFuzz = showAllFuzz ? data?.fuzz || [] : exposed;
   const visibleArtifacts = showAllArtifacts ? data?.artifacts || [] : (data?.artifacts || []).slice(0, 12);
 
@@ -152,21 +153,56 @@ export default function UrlScannerPanel({ data, virusTotal, loading, inputValue,
             Scan
           </button>
         </div>
-        <div className="mt-3 flex flex-wrap gap-2 items-center">
-          <span className="text-xs text-gray-500">Try:</span>
-          {['https://example.com', 'http://secure-login-update.xyz/verify', 'https://google.com'].map((d) => (
-            <button
-              key={d}
-              onClick={() => { setInputValue(d); onScan(d); }}
-              className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs font-mono"
-            >
-              {d}
-            </button>
-          ))}
-          <span className="ml-auto text-xs text-yellow-400/80 flex items-center gap-1">
-            <FileSearch className="w-3 h-3" /> path fuzzing + kit fingerprint — real probes
-          </span>
-        </div>
+<div className="mt-3 flex flex-wrap gap-2 items-center">
+            {data ? (
+              <>
+                <span className="px-2 py-1 bg-gray-800 rounded text-xs font-mono text-gray-300">
+                  {verdict ? (
+                    <span className={style?.badge || LEVEL_STYLES.BENIGN.badge}>{verdict.level}</span>
+                  ) : (
+                    'Scanned'
+                  )}
+                </span>
+                {data.http && (
+                  <span className="px-2 py-1 bg-gray-800 rounded text-xs font-mono text-gray-300">
+                    {data.http.status} {data.http.statusText}
+                  </span>
+                )}
+                {exposed.length > 0 && (
+                  <span className="px-2 py-1 bg-red-500/20 border border-red-500/40 rounded text-xs font-mono text-red-300">
+                    {exposed.length} exposed paths
+                  </span>
+                )}
+                {(data?.kitFiles || []).length > 0 && (
+                  <span className="px-2 py-1 bg-purple-500/20 border border-purple-500/40 rounded text-xs font-mono text-purple-300">
+                    {(data?.kitFiles || []).length} kit files
+                  </span>
+                )}
+                {(data?.exfil || []).length > 0 && (
+                  <span className="px-2 py-1 bg-red-500/20 border border-red-500/40 rounded text-xs font-mono text-red-300">
+                    {(data?.exfil || []).length} exfil endpoints
+                  </span>
+                )}
+                {virusTotal && (
+                  <span className={`px-2 py-1 rounded text-xs font-mono ${
+                    virusTotal.verdict === 'MALICIOUS' ? 'bg-red-500/20 text-red-300 border border-red-500/40'
+                    : virusTotal.verdict === 'SUSPICIOUS' ? 'bg-orange-500/20 text-orange-300 border border-orange-500/40'
+                    : virusTotal.verdict === 'CLEAN' ? 'bg-green-500/20 text-green-300 border border-green-500/40'
+                    : 'bg-gray-800 text-gray-300 border border-gray-600'
+                  }`}>
+                    VT: {virusTotal.verdict} ({virusTotal.lastAnalysisStats.malicious}/{virusTotal.totalEngines})
+                  </span>
+                )}
+                <span className="ml-auto text-xs text-yellow-400/80 flex items-center gap-1">
+                  <FileSearch className="w-3 h-3" /> path fuzzing + kit fingerprint - real probes
+                </span>
+              </>
+            ) : (
+              <span className="ml-auto text-xs text-yellow-400/80 flex items-center gap-1">
+                <FileSearch className="w-3 h-3" /> path fuzzing + kit fingerprint - real probes
+              </span>
+            )}
+          </div>
       </div>
 
       {!data && !loading && (
@@ -199,11 +235,11 @@ export default function UrlScannerPanel({ data, virusTotal, loading, inputValue,
             <div className="mt-4 h-2 rounded-full bg-gray-900 overflow-hidden">
               <div className={`h-full transition-all ${style.bar}`} style={{ width: `${Math.max(verdict.score, 2)}%` }} />
             </div>
-            {verdict.reasons.length > 0 && (
+            {(verdict.reasons || []).length > 0 && (
               <div className="mt-4">
-                <p className="text-xs text-gray-400 mb-2">Detected signals ({verdict.reasons.length})</p>
+                <p className="text-xs text-gray-400 mb-2">Detected signals ({(verdict.reasons || []).length})</p>
                 <div className="flex flex-wrap gap-2">
-                  {verdict.reasons.slice(0, 8).map((r, i) => (
+                  {(verdict.reasons || []).slice(0, 8).map((r, i) => (
                     <span key={i} className="px-2 py-1 rounded text-xs bg-gray-900 border border-gray-700 text-gray-300">{r}</span>
                   ))}
                 </div>
@@ -216,8 +252,8 @@ export default function UrlScannerPanel({ data, virusTotal, loading, inputValue,
             {[
               { label: 'HTTP Status', value: data.http ? String(data.http.status) : '—', icon: <Server className="w-4 h-4" /> },
               { label: 'Exposed Paths', value: String(exposed.length), icon: <FolderOpen className="w-4 h-4" /> },
-              { label: 'Kit Files', value: String(data.kitFiles.length), icon: <FileCode className="w-4 h-4" /> },
-              { label: 'Exfil Endpoints', value: String(data.exfil.length), icon: <Send className="w-4 h-4" /> },
+              { label: 'Kit Files', value: String((data?.kitFiles || []).length), icon: <FileCode className="w-4 h-4" /> },
+              { label: 'Exfil Endpoints', value: String((data?.exfil || []).length), icon: <Send className="w-4 h-4" /> },
             ].map((s) => (
               <div key={s.label} className="bg-gray-900 border border-gray-800 rounded-xl p-3 flex flex-col gap-1">
                 <div className="flex items-center gap-2 text-gray-500 text-xs">{s.icon} {s.label}</div>
@@ -323,9 +359,9 @@ export default function UrlScannerPanel({ data, virusTotal, loading, inputValue,
                 ))}
               </div>
             )}
-            {data.kitFiles.length > 0 ? (
+            {(data.kitFiles || []).length > 0 ? (
               <div className="space-y-1.5">
-                {data.kitFiles.map((f, i) => (
+                {(data.kitFiles || []).map((f, i) => (
                   <div key={i} className="flex items-center gap-3 p-2 bg-gray-800/40 rounded-lg min-w-0">
                     <span className={`px-1.5 py-0.5 rounded text-[10px] shrink-0 ${KIND_STYLE[f.kind] || KIND_STYLE.other}`}>{f.kind}</span>
                     <span className={`text-xs font-mono shrink-0 ${statusColor(f.status)}`}>{f.status ?? 'ERR'}</span>
@@ -356,7 +392,7 @@ export default function UrlScannerPanel({ data, virusTotal, loading, inputValue,
                 {openSection === 'fuzz' ? <ChevronDown className="w-4 h-4 text-gray-500" /> : <ChevronRight className="w-4 h-4 text-gray-500" />}
                 <FolderOpen className="w-5 h-5 text-yellow-400" /> Path Fuzzing
               </span>
-              <span className={`text-sm font-mono ${exposed.length > 0 ? 'text-red-400' : 'text-green-400'}`}>{exposed.length} exposed / {data.fuzz.length} probed</span>
+              <span className={`text-sm font-mono ${exposed.length > 0 ? 'text-red-400' : 'text-green-400'}`}>{exposed.length} exposed / {(data.fuzz || []).length} probed</span>
             </button>
             {openSection === 'fuzz' && (
               <div className="px-5 pb-4">
@@ -374,10 +410,10 @@ export default function UrlScannerPanel({ data, virusTotal, loading, inputValue,
                 ) : (
                   <p className="text-xs text-green-400 flex items-center gap-1.5"><ShieldCheck className="w-4 h-4" /> No sensitive paths returned 2xx/3xx — nothing obviously exposed.</p>
                 )}
-                {data.fuzz.length > 0 && (
+                {(data.fuzz || []).length > 0 && (
                   <div className="mt-3">
                     <button onClick={() => setShowAllFuzz(!showAllFuzz)} className="text-xs text-yellow-400 hover:text-yellow-300">
-                      {showAllFuzz ? 'Show only exposed' : `Show all ${data.fuzz.length} probed paths`}
+                      {showAllFuzz ? 'Show only exposed' : `Show all ${(data.fuzz || []).length} probed paths`}
                     </button>
                   </div>
                 )}
@@ -432,9 +468,9 @@ export default function UrlScannerPanel({ data, virusTotal, loading, inputValue,
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-semibold flex items-center gap-2">
-                <Fingerprint className="w-5 h-5 text-lime-400" /> Artifacts / IoCs ({data.artifacts.length})
+                <Fingerprint className="w-5 h-5 text-lime-400" /> Artifacts / IoCs ({(data.artifacts || []).length})
               </h3>
-              {data.artifacts.length > 12 && (
+              {(data.artifacts || []).length > 12 && (
                 <button onClick={() => setShowAllArtifacts(!showAllArtifacts)} className="text-xs text-lime-400 hover:text-lime-300">
                   {showAllArtifacts ? 'Collapse' : `Show all ${data.artifacts.length}`}
                 </button>
@@ -473,7 +509,7 @@ export default function UrlScannerPanel({ data, virusTotal, loading, inputValue,
                 <div className="px-5 pb-4">
                   <div className="flex items-start gap-2 py-1.5 border-b border-gray-800/60 last:border-0"><span className="text-xs text-gray-500 w-28 shrink-0">Final URL</span><span className="text-xs font-mono break-all text-gray-300">{data.http.finalUrl}</span></div>
                   <div className="flex items-start gap-2 py-1.5 border-b border-gray-800/60 last:border-0"><span className="text-xs text-gray-500 w-28 shrink-0">Server</span><span className="text-xs font-mono break-all text-gray-300">{data.http.server || '—'}</span></div>
-                  <div className="flex items-start gap-2 py-1.5 border-b border-gray-800/60 last:border-0"><span className="text-xs text-gray-500 w-28 shrink-0">TTFB</span><span className="text-xs font-mono text-gray-300">{data.http.timings.ttfbMs} ms</span></div>
+                  <div className="flex items-start gap-2 py-1.5 border-b border-gray-800/60 last:border-0"><span className="text-xs text-gray-500 w-28 shrink-0">TTFB</span><span className="text-xs font-mono text-gray-300">{data.http.timings ? `${data.http.timings.ttfbMs} ms` : '—'}</span></div>
                   <div className="mt-3">
                     <p className="text-xs text-gray-500 mb-1">Response headers</p>
                     <div className="max-h-48 overflow-y-auto rounded bg-gray-950 border border-gray-800 p-3 space-y-0.5">
@@ -510,13 +546,13 @@ export default function UrlScannerPanel({ data, virusTotal, loading, inputValue,
           </div>
 
           {/* ===== Static flags ===== */}
-          {data.staticFlags.length > 0 && (
+          {(data.staticFlags || []).length > 0 && (
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
               <h3 className="font-semibold mb-3 flex items-center gap-2">
                 <Binary className="w-5 h-5 text-lime-400" /> URL Heuristics
               </h3>
               <div className="flex flex-wrap gap-2">
-                {data.staticFlags.map((f, i) => (
+                {(data.staticFlags || []).map((f, i) => (
                   <span key={i} className={`px-2 py-1 rounded text-xs border ${f.weight >= 3 ? 'bg-red-500/10 text-red-300 border-red-500/30' : 'bg-yellow-500/10 text-yellow-300 border-yellow-500/30'}`}>
                     +{f.weight} · {f.label}
                   </span>
@@ -542,6 +578,9 @@ export default function UrlScannerPanel({ data, virusTotal, loading, inputValue,
           <div className="flex flex-wrap gap-2">
             <button onClick={() => onCopy(data.url)} className="px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm flex items-center gap-2"><Copy className="w-4 h-4" /> Copy URL</button>
             <button onClick={() => onCopy(data.http?.finalUrl || data.url)} className="px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm flex items-center gap-2"><ExternalLink className="w-4 h-4" /> Copy Final URL</button>
+            {onReport && (
+              <button onClick={onReport} className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 rounded-lg text-sm flex items-center gap-2"><Printer className="w-4 h-4" /> Informe Imprimible HTML</button>
+            )}
             <button onClick={() => onScan()} className="px-3 py-2 bg-yellow-600/20 hover:bg-yellow-600/30 border border-yellow-500/40 rounded-lg text-sm flex items-center gap-2"><RefreshCw className="w-4 h-4" /> Re-scan</button>
           </div>
         </>

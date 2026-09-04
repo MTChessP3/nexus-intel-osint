@@ -4,6 +4,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import DomainIntelPanel from '@/components/domain/DomainIntelPanel';
 import UrlSandboxPanel from '@/components/sandbox/UrlSandboxPanel';
 import UrlScannerPanel from '@/components/url/UrlScannerPanel';
+import TakeDownPanel from '@/components/takedown/TakeDownPanel';
+import ModuleErrorBoundary from '@/components/ModuleErrorBoundary';
 import { analyzeApkBytes } from '@/lib/intel/fakeapp';
 import { 
   Search, Globe, Shield, Bug, FileText, Download, Upload, 
@@ -15,7 +17,8 @@ import {
   Save, X, Loader2, Check, Info, AlertCircle, ArrowRight, Ban, WifiOff,
   Play, Pause, Camera, FileSearch, Smartphone, Globe2, Skull, EyeOff,
   FolderOpen, DownloadCloud, UploadCloud, FileCode, LockOpen, ShieldAlert,
-  Network, MessageSquare, ShieldUser, Radio, Presentation
+  Network, MessageSquare, ShieldUser, Radio, Presentation, Printer,
+  Send, Layers
 } from 'lucide-react';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
@@ -24,7 +27,7 @@ import {
 } from 'recharts';
 
 // ==================== TYPES ====================
-type TabType = 'dashboard' | 'ip' | 'domain' | 'url' | 'hash' | 'cve' | 'ai' | 'darkweb' | 'threats' | 'mobile' | 'forensics' | 'iocs' | 'export' | 'reports' | 'sources' | 'brand' | 'sandbox' | 'dnsdump' | 'social' | 'exec' | 'fakeapp';
+type TabType = 'dashboard' | 'ip' | 'domain' | 'url' | 'hash' | 'cve' | 'ai' | 'darkweb' | 'threats' | 'mobile' | 'forensics' | 'iocs' | 'export' | 'reports' | 'sources' | 'brand' | 'sandbox' | 'dnsdump' | 'social' | 'exec' | 'fakeapp' | 'takedown';
 type Severity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
 type IOCStatus = 'UNKNOWN' | 'BENIGN' | 'SUSPICIOUS' | 'MALICIOUS';
 
@@ -739,6 +742,7 @@ const NAV_CATEGORIES: NavCategory[] = [
       { id: 'dnsdump', label: 'DNS Dump', icon: Network, color: 'text-teal-400', badge: 'NEW' },
       { id: 'url', label: 'URL Scanner', icon: ExternalLink, color: 'text-yellow-400' },
       { id: 'sandbox', label: 'URL Sandbox', icon: Zap, color: 'text-lime-400', badge: 'NEW' },
+      { id: 'takedown', label: 'TakeDown URL', icon: Send, color: 'text-orange-400', badge: 'NEW' },
     ],
   },
   {
@@ -983,6 +987,11 @@ export default function OSINTPlatform() {
       setWgetZipLoading(false);
     }
   };
+
+  // DNS Dump UI state
+  const [dnsdumpType, setDnsdumpType] = useState('ALL');
+  const [dnsdumpFilter, setDnsdumpFilter] = useState('');
+  const [dnsdumpShowSafe, setDnsdumpShowSafe] = useState(false);
 
   // Generated Reports History
   const [reports, setReports] = useState<any[]>([]);
@@ -1258,13 +1267,16 @@ export default function OSINTPlatform() {
     });
   };
 
-  // Dark Web Search Handler
+  // Dark Web Search Handler — búsqueda real en deep/dark web vía API IntelX
   const handleDarkWebSearch = async () => {
-    const query = inputValue || 'latest threats breaches malware';
-    showFeedback(`Searching Dark Web: ${query}...`, 'info');
+    const query = (inputValue || '').trim().slice(0, 200);
+    if (!query) { showFeedback('Introduce un dominio, email, IP o dirección BTC', 'error'); return; }
+    setLoading(true);
+    setError(null);
+    showFeedback(`Buscando en deep/dark web (IntelligenceX): ${query}...`, 'info');
     await callAPI('/api/osint/darkweb', {
       method: 'POST',
-      body: JSON.stringify({ query, useAI: true })
+      body: JSON.stringify({ query, useAI: true, live: true })
     });
   };
 
@@ -1372,6 +1384,106 @@ export default function OSINTPlatform() {
     if (!inputValue) { showFeedback('Enter a domain to enumerate', 'error'); return; }
     showFeedback(`Enumerating DNS for ${inputValue}...`, 'info');
     await callAPI(`/api/osint/dnsdump?domain=${encodeURIComponent(inputValue)}`);
+  };
+
+  const exportDnsCsv = () => {
+    const d = apiData?.data;
+    if (!d) { showFeedback('Sin resultados para exportar', 'error'); return; }
+    const rows: string[][] = [];
+    rows.push([`NEXUS OSINT DNS DUMP`, d.domain, new Date().toISOString()]);
+    rows.push([]);
+    rows.push(['TYPE', 'NAME', 'TTL', 'DATA']);
+    (d.allRecords || []).forEach((r: any) => rows.push([r.type, r.name, String(r.ttl ?? ''), String(r.data ?? '')]));
+    rows.push([]);
+    rows.push(['SUBDOMAIN', 'SOURCE', 'FIRST_SEEN', 'LAST_SEEN', 'IPS', 'CNAME']);
+    (d.subdomainInfo || []).forEach((s: any) => rows.push([s.name, s.source || '', s.firstSeen || '', s.lastSeen || '', (s.ips || []).join('; '), s.cname || '']));
+    rows.push([]);
+    rows.push(['HOST', 'IP', 'ASN', 'PROVIDER', 'COUNTRY']);
+    (d.ipMap || []).forEach((m: any) => rows.push([m.host, m.ip, m.asn || '', m.provider || m.isp || '', m.country || '']));
+    rows.push([]);
+    rows.push(['TAKEOVER', 'CNAME', 'SERVICE', 'STATUS', 'REASON']);
+    (d.takeovers || []).forEach((t: any) => rows.push([t.subdomain, t.cname, t.service, t.status, t.reason]));
+    rows.push([]);
+    rows.push(['PASSIVE_DNS', 'FIRST_SEEN', 'LAST_SEEN', 'DAYS_KNOWN']);
+    (d.passiveDns || []).forEach((p: any) => rows.push([p.name, p.firstSeen || '', p.lastSeen || '', String(p.daysKnown ?? '')]));
+    const csv = rows.map((r) => r.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `dns_dump_${String(d.domain).replace(/[^a-zA-Z0-9._-]/g, '_')}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    showFeedback('CSV exportado correctamente', 'success');
+  };
+
+  const handleDnsDumpReport = async () => {
+    const data = apiData?.data;
+    if (!data) { showFeedback('Sin datos DNS para exportar', 'error'); return; }
+    showFeedback('Generando informe imprimible...', 'info');
+    try {
+      const res = await fetch('/api/osint/dnsdump/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain: data.domain, data, module: 'dnsdump' }),
+      });
+      if (!res.ok) { showFeedback('Error generando el informe', 'error'); return; }
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `informe_dnsdump_${data.domain.replace(/[^a-zA-Z0-9._-]/g, '_')}.html`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      showFeedback('Informe DNS Dump descargado', 'success');
+    } catch {
+      showFeedback('Error generando el informe', 'error');
+    }
+  };
+
+  const handleUrlScanReport = async () => {
+    const data = apiData?.data;
+    if (!data) { showFeedback('Sin datos de escaneo para exportar', 'error'); return; }
+    showFeedback('Generando informe imprimible...', 'info');
+    try {
+      const res = await fetch('/api/osint/url/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: data.url, data, virusTotal: apiData?.virusTotal || null, module: 'url' }),
+      });
+      if (!res.ok) { showFeedback('Error generando el informe', 'error'); return; }
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `informe_urlscan_${data.host || data.url}`.replace(/[^a-zA-Z0-9._-]/g, '_') + '.html';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      showFeedback('Informe URL Scanner descargado', 'success');
+    } catch {
+      showFeedback('Error generando el informe', 'error');
+    }
+  };
+
+  const handleSandboxReport = async () => {
+    const data = apiData?.data;
+    if (!data) { showFeedback('Sin datos de detonación para exportar', 'error'); return; }
+    showFeedback('Generando informe imprimible...', 'info');
+    try {
+      const res = await fetch('/api/osint/sandbox/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: data.url, data, module: 'sandbox' }),
+      });
+      if (!res.ok) { showFeedback('Error generando el informe', 'error'); return; }
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `informe_urlsandbox_${data.host || data.url}`.replace(/[^a-zA-Z0-9._-]/g, '_') + '.html';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      showFeedback('Informe URL Sandbox descargado', 'success');
+    } catch {
+      showFeedback('Error generando el informe', 'error');
+    }
   };
 
   // ==================== SOCIAL MONITOR ====================
@@ -3066,11 +3178,332 @@ export default function OSINTPlatform() {
                          <div className={`h-full ${apiData.data.risk.level === 'CRITICAL' ? 'bg-red-500' : apiData.data.risk.level === 'HIGH' ? 'bg-orange-500' : apiData.data.risk.level === 'MEDIUM' ? 'bg-yellow-500' : 'bg-green-500'}`}
                            style={{ width: `${Math.max(apiData.data.risk.score, 2)}%` }} />
                        </div>
-                     </div>
-                   )}
 
-                   {/* VirusTotal indicators */}
-                   {apiData.data.virusTotal && (
+                       {/* Evidencias completas del Web Forensic Analysis */}
+                       <details className="mt-4">
+                         <summary className="text-xs text-gray-400 cursor-pointer hover:text-gray-200 flex items-center gap-1.5 select-none">
+                           <ChevronDown className="w-3.5 h-3.5" /> Análisis completo — todas las evidencias del módulo (clic para desplegar)
+                         </summary>
+                         <div className="mt-4 space-y-5">
+
+                           {/* Infraestructura / Geo / SSL / HTTP */}
+                           <div>
+                             <div className="text-xs uppercase text-gray-500 mb-2">Infraestructura, Geo, SSL y HTTP</div>
+                             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                               <div className="p-2 bg-gray-900 rounded-lg">
+                                 <div className="text-[10px] uppercase text-gray-500">IP</div>
+                                 <div className="text-xs font-mono break-all">{apiData.data.ip || '—'}</div>
+                               </div>
+                               <div className="p-2 bg-gray-900 rounded-lg">
+                                 <div className="text-[10px] uppercase text-gray-500">ASN</div>
+                                 <div className="text-xs font-mono">{apiData.data.asn || '—'}</div>
+                               </div>
+                               <div className="p-2 bg-gray-900 rounded-lg">
+                                 <div className="text-[10px] uppercase text-gray-500">ISP</div>
+                                 <div className="text-xs">{apiData.data.isp || '—'}</div>
+                               </div>
+                               <div className="p-2 bg-gray-900 rounded-lg">
+                                 <div className="text-[10px] uppercase text-gray-500">Geo</div>
+                                 <div className="text-xs">{apiData.data.geo ? `${apiData.data.geo.country || ''}${apiData.data.geo.city ? ' / ' + apiData.data.geo.city : ''}` : '—'}</div>
+                               </div>
+                               <div className="p-2 bg-gray-900 rounded-lg">
+                                 <div className="text-[10px] uppercase text-gray-500">SSL/TLS</div>
+                                 <div className="text-xs flex items-center gap-1">
+                                   {apiData.data.ssl?.secure === true ? <CheckCircle className="w-3.5 h-3.5 text-green-400" /> : <XCircle className="w-3.5 h-3.5 text-red-400" />}
+                                   {apiData.data.ssl?.secure === true ? 'Verificado' : 'No verificado'}
+                                 </div>
+                               </div>
+                               <div className="p-2 bg-gray-900 rounded-lg">
+                                 <div className="text-[10px] uppercase text-gray-500">Protocolo SSL</div>
+                                 <div className="text-xs">{apiData.data.ssl?.protocol || '—'}</div>
+                               </div>
+                               <div className="p-2 bg-gray-900 rounded-lg">
+                                 <div className="text-[10px] uppercase text-gray-500">Servidor</div>
+                                 <div className="text-xs break-all">{apiData.data.httpHeaders?.server || '—'}</div>
+                               </div>
+                               <div className="p-2 bg-gray-900 rounded-lg">
+                                 <div className="text-[10px] uppercase text-gray-500">HTTP Status</div>
+                                 <div className="text-xs">{apiData.data.httpHeaders?.statusCode ?? '—'}</div>
+                               </div>
+                             </div>
+                           </div>
+
+                           {/* Security headers */}
+                           {apiData.data.httpHeaders?.securityHeaders && (
+                             <div>
+                               <div className="text-xs uppercase text-gray-500 mb-2">Security Headers ({apiData.data.httpHeaders.securityScore})</div>
+                               <div className="grid grid-cols-1 md:grid-cols-3 gap-1.5">
+                                 {Object.entries(apiData.data.httpHeaders.securityHeaders).map(([h, present]) => (
+                                   <div key={h} className="flex items-center gap-1.5 text-xs">
+                                     {present ? <CheckCircle className="w-3.5 h-3.5 text-green-400" /> : <XCircle className="w-3.5 h-3.5 text-red-400" />}
+                                     <span className={present ? '' : 'text-gray-500 line-through'}>{h}</span>
+                                   </div>
+                                 ))}
+                               </div>
+                             </div>
+                           )}
+
+                           {/* Todos los headers */}
+                           {apiData.data.httpHeaders?.headers && (
+                             <div>
+                               <div className="text-xs uppercase text-gray-500 mb-2">Todos los headers HTTP ({Object.keys(apiData.data.httpHeaders.headers).length})</div>
+                               <div className="max-h-48 overflow-auto bg-gray-900 rounded-lg p-2">
+                                 {Object.entries(apiData.data.httpHeaders.headers).map(([k, v]) => (
+                                   <div key={k} className="text-[11px] font-mono py-0.5 border-b border-gray-800 last:border-0 break-all">
+                                     <span className="text-cyan-400">{k}:</span> <span className="text-gray-300">{String(v)}</span>
+                                   </div>
+                                 ))}
+                               </div>
+                             </div>
+                           )}
+
+                           {/* DNS */}
+                           {apiData.data.dns && (
+                             <div>
+                               <div className="text-xs uppercase text-gray-500 mb-2">DNS (Google DoH)</div>
+                               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+                                 {Object.entries(apiData.data.dns).map(([type, records]: [string, any]) => (
+                                   <div key={type} className="p-2 bg-gray-900 rounded-lg">
+                                     <div className="text-[10px] font-medium text-gray-500 mb-1">{type} ({records?.Answer?.length || 0})</div>
+                                     {(records?.Answer || []).slice(0, 4).map((r: any, i: number) => (
+                                       <div key={i} className="text-[11px] font-mono text-green-400 truncate">{r.data || r.exchange || r.nsdname || '—'}</div>
+                                     ))}
+                                   </div>
+                                 ))}
+                               </div>
+                             </div>
+                           )}
+
+                           {/* Subdominios */}
+                           {apiData.data.subdomains?.length > 0 && (
+                             <div>
+                               <div className="text-xs uppercase text-gray-500 mb-2">Subdominios ({apiData.data.subdomains.length})</div>
+                               <div className="flex flex-wrap gap-1.5">
+                                 {apiData.data.subdomains.map((s: string, i: number) => (
+                                   <span key={i} className="px-2 py-0.5 bg-gray-900 rounded font-mono text-[11px]">{s}</span>
+                                 ))}
+                               </div>
+                             </div>
+                           )}
+
+                           {/* Fuzzing */}
+                           {apiData.data.fuzzingSummary && (
+                             <div>
+                               <div className="text-xs uppercase text-gray-500 mb-2">Fuzzing de directorios</div>
+                               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                 <div className="p-2 bg-gray-900 rounded-lg">
+                                   <div className="text-[10px] uppercase text-gray-500">Rutas probadas</div>
+                                   <div className="text-xs">{apiData.data.fuzzingSummary.totalProbed ?? 0}</div>
+                                 </div>
+                                 <div className="p-2 bg-gray-900 rounded-lg">
+                                   <div className="text-[10px] uppercase text-gray-500">Expuestas</div>
+                                   <div className="text-xs">{apiData.data.fuzzingSummary.exposed ?? 0}</div>
+                                 </div>
+                                 <div className="p-2 bg-gray-900 rounded-lg">
+                                   <div className="text-[10px] uppercase text-gray-500">Archivos en kits</div>
+                                   <div className="text-xs">{apiData.data.fuzzingSummary.archiveEntries ?? 0}</div>
+                                 </div>
+                                 <div className="p-2 bg-gray-900 rounded-lg">
+                                   <div className="text-[10px] uppercase text-gray-500">Tablas BD</div>
+                                   <div className="text-xs">{apiData.data.fuzzingSummary.dbTables ?? 0}</div>
+                                 </div>
+                               </div>
+                               <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2">
+                                 <div className="p-2 bg-gray-900 rounded-lg">
+                                   <div className="text-[10px] uppercase text-gray-500">Por status</div>
+                                   <div className="text-[11px] font-mono break-all">{Object.entries(apiData.data.fuzzingSummary.byStatus || {}).map(([k, v]) => `${k}:${v}`).join(' · ') || '—'}</div>
+                                 </div>
+                                 <div className="p-2 bg-gray-900 rounded-lg">
+                                   <div className="text-[10px] uppercase text-gray-500">Por categoría</div>
+                                   <div className="text-[11px] font-mono break-all">{Object.entries(apiData.data.fuzzingSummary.byCategory || {}).map(([k, v]) => `${k}:${v}`).join(' · ') || '—'}</div>
+                                 </div>
+                               </div>
+                             </div>
+                           )}
+
+                           {/* Atribución */}
+                           {apiData.data.attribution && (
+                             <div>
+                               <div className="text-xs uppercase text-gray-500 mb-2">Atribución de actor</div>
+                               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                 <div className="p-2 bg-gray-900 rounded-lg">
+                                   <div className="text-[10px] uppercase text-gray-500">Emails ({apiData.data.attribution.emails?.length || 0})</div>
+                                   <div className="flex flex-wrap gap-1 mt-1">
+                                     {apiData.data.attribution.emails?.length ? apiData.data.attribution.emails.map((e: string, i: number) => (
+                                       <span key={i} className="px-1.5 py-0.5 bg-gray-800 rounded text-[10px] font-mono">{e}</span>
+                                     )) : <span className="text-[11px] text-gray-500">ninguno</span>}
+                                   </div>
+                                 </div>
+                                 <div className="p-2 bg-gray-900 rounded-lg">
+                                   <div className="text-[10px] uppercase text-gray-500">Telegram ({apiData.data.attribution.telegramIds?.length || 0})</div>
+                                   <div className="flex flex-wrap gap-1 mt-1">
+                                     {apiData.data.attribution.telegramIds?.length ? apiData.data.attribution.telegramIds.map((t: string, i: number) => (
+                                       <span key={i} className="px-1.5 py-0.5 bg-gray-800 rounded text-[10px] font-mono">{t}</span>
+                                     )) : <span className="text-[11px] text-gray-500">ninguno</span>}
+                                   </div>
+                                 </div>
+                                 <div className="p-2 bg-gray-900 rounded-lg">
+                                   <div className="text-[10px] uppercase text-gray-500">API Keys / Secrets ({apiData.data.attribution.apiKeys?.length || 0})</div>
+                                   <div className="flex flex-wrap gap-1 mt-1">
+                                     {apiData.data.attribution.apiKeys?.length ? apiData.data.attribution.apiKeys.map((k: string, i: number) => (
+                                       <span key={i} className="px-1.5 py-0.5 bg-gray-800 rounded text-[10px] font-mono break-all">{k.slice(0, 60)}</span>
+                                     )) : <span className="text-[11px] text-gray-500">ninguno</span>}
+                                   </div>
+                                 </div>
+                                 <div className="p-2 bg-gray-900 rounded-lg">
+                                   <div className="text-[10px] uppercase text-gray-500">Tracking IDs ({apiData.data.attribution.trackingIds?.length || 0})</div>
+                                   <div className="flex flex-wrap gap-1 mt-1">
+                                     {apiData.data.attribution.trackingIds?.length ? apiData.data.attribution.trackingIds.map((t: string, i: number) => (
+                                       <span key={i} className="px-1.5 py-0.5 bg-gray-800 rounded text-[10px] font-mono">{t}</span>
+                                     )) : <span className="text-[11px] text-gray-500">ninguno</span>}
+                                   </div>
+                                 </div>
+                               </div>
+                               {(apiData.data.attribution.toolSignatures?.length > 0 || apiData.data.attribution.links?.length > 0) && (
+                                 <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2">
+                                   <div className="p-2 bg-gray-900 rounded-lg">
+                                     <div className="text-[10px] uppercase text-gray-500">Firmas de herramienta</div>
+                                     <div className="flex flex-wrap gap-1 mt-1">
+                                       {apiData.data.attribution.toolSignatures?.length ? apiData.data.attribution.toolSignatures.map((s: string, i: number) => (
+                                         <span key={i} className="px-1.5 py-0.5 bg-gray-800 rounded text-[10px]">{s}</span>
+                                       )) : <span className="text-[11px] text-gray-500">ninguna</span>}
+                                     </div>
+                                   </div>
+                                   <div className="p-2 bg-gray-900 rounded-lg">
+                                     <div className="text-[10px] uppercase text-gray-500">Links externos</div>
+                                     <div className="max-h-24 overflow-auto mt-1">
+                                       {apiData.data.attribution.links?.length ? apiData.data.attribution.links.map((l: string, i: number) => (
+                                         <div key={i} className="text-[10px] font-mono text-gray-400 truncate">{l}</div>
+                                       )) : <div className="text-[11px] text-gray-500">ninguno</div>}
+                                     </div>
+                                   </div>
+                                 </div>
+                               )}
+                             </div>
+                           )}
+
+                           {/* VirusTotal */}
+                           {apiData.data.virusTotal && (
+                             <div>
+                               <div className="text-xs uppercase text-gray-500 mb-2">VirusTotal</div>
+                               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                 <div className="p-2 bg-gray-900 rounded-lg">
+                                   <div className="text-[10px] uppercase text-gray-500">Veredicto</div>
+                                   <div className="text-xs">{apiData.data.virusTotal.verdict || '—'}</div>
+                                 </div>
+                                 <div className="p-2 bg-gray-900 rounded-lg">
+                                   <div className="text-[10px] uppercase text-gray-500">Malicious</div>
+                                   <div className="text-xs text-red-400">{apiData.data.virusTotal.lastAnalysisStats?.malicious ?? 0}</div>
+                                 </div>
+                                 <div className="p-2 bg-gray-900 rounded-lg">
+                                   <div className="text-[10px] uppercase text-gray-500">Suspicious</div>
+                                   <div className="text-xs text-orange-400">{apiData.data.virusTotal.lastAnalysisStats?.suspicious ?? 0}</div>
+                                 </div>
+                                 <div className="p-2 bg-gray-900 rounded-lg">
+                                   <div className="text-[10px] uppercase text-gray-500">Harmless</div>
+                                   <div className="text-xs text-green-400">{apiData.data.virusTotal.lastAnalysisStats?.harmless ?? 0}</div>
+                                 </div>
+                               </div>
+                             </div>
+                           )}
+
+                           {/* Artefactos */}
+                           {apiData.data.artifacts?.length > 0 && (
+                             <div>
+                               <div className="text-xs uppercase text-gray-500 mb-2">Artefactos descargados ({apiData.data.artifacts.length})</div>
+                               <div className="max-h-48 overflow-auto space-y-1.5">
+                                 {apiData.data.artifacts.map((a: any, i: number) => (
+                                   <div key={i} className="p-2 bg-gray-900 rounded-lg text-[11px]">
+                                     <div className="flex items-center gap-2">
+                                       <span className="uppercase text-[10px] px-1.5 py-0.5 rounded bg-gray-800">{a.category || 'other'}</span>
+                                       <span className="font-mono break-all flex-1">{a.url}</span>
+                                       {a.downloaded && <CheckCircle className="w-3.5 h-3.5 text-green-400 shrink-0" />}
+                                     </div>
+                                     {(a.hash || a.size) && (
+                                       <div className="text-[10px] text-gray-500 mt-1 truncate">
+                                         {a.hash ? `SHA-256: ${a.hash}` : ''}{a.size ? ` · ${(a.size / 1024).toFixed(1)} KB` : ''}
+                                       </div>
+                                     )}
+                                   </div>
+                                 ))}
+                               </div>
+                             </div>
+                           )}
+
+                           {/* Redirects / cadenas */}
+                           {(() => {
+                             const redirects: string[] = [];
+                             const walkRedirects = (n: any) => {
+                               if (n?.redirectChain?.length) {
+                                 let prev = '';
+                                 n.redirectChain.forEach((r: string) => {
+                                   if (r !== prev) redirects.push(r);
+                                   prev = r;
+                                 });
+                               }
+                               (n?.children || []).forEach(walkRedirects);
+                             };
+                             walkRedirects(apiData.data.resourceTree);
+                             return redirects.length ? (
+                               <div>
+                                 <div className="text-xs uppercase text-gray-500 mb-2">Cadenas de redirección</div>
+                                 <div className="max-h-32 overflow-auto space-y-1">
+                                   {Array.from(new Set(redirects)).slice(0, 40).map((r: string, i: number) => (
+                                     <div key={i} className="text-[10px] font-mono text-gray-400 truncate">{r}</div>
+                                   ))}
+                                 </div>
+                               </div>
+                             ) : null;
+                           })()}
+
+                           {/* Resource Tree stats */}
+                           {apiData.data.resourceTree && (
+                             <div>
+                               <div className="text-xs uppercase text-gray-500 mb-2">Resource Tree (Live Crawl)</div>
+                               <div className="p-2 bg-gray-900 rounded-lg text-[11px] text-gray-400">
+                                 El árbol completo de recursos (páginas, scripts, redirecciones, fuzz) se muestra en la sección "Resource Tree — Live Crawl" de esta pestaña y en el informe imprimible.
+                               </div>
+                             </div>
+                           )}
+
+                         </div>
+                       </details>
+</div>
+                    )}
+
+                    {/* Live Screenshot */}
+                    {apiData.data && (
+                      <div className="bg-gray-900 border border-yellow-500/30 rounded-xl p-5">
+                        <h3 className="font-semibold mb-3 flex items-center gap-2">
+                          <Camera className="w-5 h-5 text-yellow-400" /> Live Screenshot
+                          <span className="text-xs bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded">
+                            Captured: {(() => { const d = new Date(); const utc5 = new Date(d.getTime() - 5 * 60 * 60 * 1000); return utc5.toISOString().slice(0, 19).replace('T', ' ') + ' UTC-5'; })()}
+                          </span>
+                        </h3>
+                        <div className="relative aspect-video bg-gray-950 rounded-lg border border-gray-800 overflow-hidden">
+                          {(() => {
+                            const domain = apiData.data.domain;
+                            const screenshotUrl = `https://s0.wp.com/mshots/v1/${encodeURIComponent('https://' + domain)}?w=1280&h=720`;
+                            return (
+                              <a href={screenshotUrl} target="_blank" rel="noopener noreferrer" className="block">
+                                <img
+                                  src={screenshotUrl}
+                                  alt={`Screenshot of ${domain}`}
+                                  className="w-full h-full object-cover"
+                                  loading="lazy"
+                                />
+                              </a>
+                            );
+                          })()}
+                        </div>
+                        <p className="text-xs text-gray-500 mt-2 text-center">
+                          Captured via WordPress mshots (UTC-5). Click to open full-size in new tab.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* VirusTotal indicators */}
+                    {apiData.data.virusTotal && (
                      <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                        <div className="flex items-center gap-3 mb-3 flex-wrap">
                          <h3 className="font-semibold flex items-center gap-2">
@@ -3337,75 +3770,19 @@ export default function OSINTPlatform() {
                      </div>
                    )}
 
-                   {/* Infrastructure Graph */}
-                   {apiData.data.dns && (
-                     <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                       <h3 className="font-semibold mb-3 flex items-center gap-2">
-                         <Network className="w-5 h-5 text-blue-400" /> Infrastructure Graph
-                       </h3>
-                       <p className="text-xs text-gray-500 mb-3">DNS · MX · Nameservers · Subdomains · Hosting IP/ASN</p>
-                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                         <div className="space-y-2">
-                           <div className="p-3 bg-gray-800 rounded-lg border border-gray-700">
-                             <div className="flex items-center gap-2 mb-2">
-                               <span className="w-2 h-2 rounded-full bg-purple-400" />
-                               <span className="font-medium">Primary Domain</span>
-                             </div>
-                             <div className="font-mono text-xs text-gray-300">{apiData.data.domain}</div>
-                             {apiData.data.ip && (
-                               <div className="mt-1 text-[10px] text-gray-500">A: {apiData.data.ip}</div>
-                             )}
-                             {apiData.data.asn && (
-                               <div className="mt-1 text-[10px] text-gray-500">ASN: {apiData.data.asn}</div>
-                             )}
-                             {apiData.data.isp && (
-                               <div className="mt-1 text-[10px] text-gray-500">ISP: {apiData.data.isp}</div>
-                             )}
-                             {apiData.data.geo && (
-                               <div className="mt-1 text-[10px] text-gray-500">Geo: {apiData.data.geo.country}, {apiData.data.geo.city} ({apiData.data.geo.lat.toFixed(2)}, {apiData.data.geo.lon.toFixed(2)})</div>
-                             )}
-                           </div>
-                           <div className="p-3 bg-gray-800 rounded-lg border border-gray-700">
-                             <div className="flex items-center gap-2 mb-2">
-                               <span className="w-2 h-2 rounded-full bg-pink-400" />
-                               <span className="font-medium">MX Records ({apiData.data.dns.MX?.Answer?.length || 0})</span>
-                             </div>
-                             {apiData.data.dns.MX?.Answer?.slice(0, 5).map((m: any, i: number) => (
-                               <div key={i} className="font-mono text-xs text-gray-300">MX {m.preference || i}: {m.data || m.exchange}</div>
-                             ))}
-                           </div>
-                         </div>
-                         <div className="space-y-2">
-                           <div className="p-3 bg-gray-800 rounded-lg border border-gray-700">
-                             <div className="flex items-center gap-2 mb-2">
-                               <span className="w-2 h-2 rounded-full bg-gray-400" />
-                               <span className="font-medium">Nameservers ({apiData.data.dns.NS?.Answer?.length || 0})</span>
-                             </div>
-                             {apiData.data.dns.NS?.Answer?.slice(0, 4).map((n: any, i: number) => (
-                               <div key={i} className="font-mono text-xs text-gray-300">{n.data || n.nsdname}</div>
-                             ))}
-                           </div>
-                           <div className="p-3 bg-gray-800 rounded-lg border border-gray-700">
-                             <div className="flex items-center gap-2 mb-2">
-                               <span className="w-2 h-2 rounded-full bg-green-400" />
-                               <span className="font-medium">Subdomains ({apiData.data.subdomains?.length || 0})</span>
-                             </div>
-                             <div className="flex flex-wrap gap-1">
-                               {apiData.data.subdomains?.slice(0, 8).map((s: string, i: number) => (
-                                 <span key={i} className="px-2 py-1 bg-gray-700 rounded font-mono text-xs text-gray-300">{s}</span>
-                               ))}
-                               {apiData.data.subdomains && apiData.data.subdomains.length > 8 && (
-                                 <span className="px-2 py-1 bg-gray-700 rounded text-xs text-gray-500">+{apiData.data.subdomains.length - 8} more</span>
-                               )}
-                             </div>
-                           </div>
-                         </div>
-                       </div>
-                     </div>
-                   )}
+{/* Infrastructure Graph - Interactive (Lookyloo-style) */}
+                    {apiData.data.dns && (
+                      <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                        <h3 className="font-semibold mb-3 flex items-center gap-2">
+                          <Network className="w-5 h-5 text-blue-400" /> Infrastructure Graph
+                        </h3>
+                        <p className="text-xs text-gray-500 mb-3">Interactive graph: DNS · MX · NS · Subdomains · IP/ASN/Geo. Click nodes to expand.</p>
+                        <InfrastructureGraph data={apiData.data} />
+                      </div>
+                    )}
 
-                   {/* DNS Records */}
-                   {apiData.data.dns && (
+                    {/* DNS Records */}
+                    {apiData.data.dns && (
                      <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                        <h3 className="font-semibold mb-3 flex items-center gap-2">
                          <Server className="w-5 h-5 text-blue-400" /> DNS Enumeration (Google DoH)
@@ -3492,15 +3869,18 @@ export default function OSINTPlatform() {
                 <ExternalLink className="w-7 h-7 text-yellow-400" /> URL Scanner
                 <span className="text-sm font-normal text-gray-400">attack-surface · kit fingerprint · attribution</span>
               </h2>
-              <UrlScannerPanel
-                data={apiData?.data || null}
-                virusTotal={apiData?.virusTotal || null}
-                loading={loading}
-                inputValue={inputValue}
-                setInputValue={setInputValue}
-                onScan={handleURLAnalysis}
-                onCopy={copyToClipboard}
-              />
+              <ModuleErrorBoundary module="URL Scanner">
+                <UrlScannerPanel
+                  data={apiData?.data || null}
+                  virusTotal={apiData?.virusTotal || null}
+                  loading={loading}
+                  inputValue={inputValue}
+                  setInputValue={setInputValue}
+                  onScan={handleURLAnalysis}
+                  onCopy={copyToClipboard}
+                  onReport={handleUrlScanReport}
+                />
+              </ModuleErrorBoundary>
             </div>
           )}
 
@@ -3752,8 +4132,8 @@ export default function OSINTPlatform() {
                 </div>
 
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <span className="text-xs text-gray-500">Quick searches:</span>
-                  {['breaches', 'malware', 'credentials', 'exploits', 'marketplaces', 'ransomware'].map(q => (
+                  <span className="text-xs text-gray-500">Selectores rápidos (domino · email · IP · BTC):</span>
+                  {['bitcoin.com', 'test@example.com', '8.8.8.8', '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa'].map(q => (
                     <button
                       key={q}
                       onClick={() => { setInputValue(q); handleDarkWebSearch(); }}
@@ -3798,7 +4178,60 @@ export default function OSINTPlatform() {
               </div>
 
               {/* Search Results */}
-              {apiData?.matches && (
+              {apiData?.liveMode && apiData.results && (
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="font-semibold">
+                      Resultados combinados ({apiData.results.length}) — IntelX + DuckDuckGo + Bing
+                    </h3>
+                    <div className="flex flex-wrap gap-1.5 text-[10px]">
+                      {(apiData.engines || []).map((e: any, i: number) => (
+                        <span key={i} className={`px-1.5 py-0.5 rounded font-mono border ${
+                          e.ok ? 'bg-green-500/10 border-green-500/40 text-green-400' : 'bg-gray-800 border-gray-700 text-gray-500'
+                        }`} title={e.ok ? `${e.count} resultados` : e.error}>
+                          {e.engine}: {e.ok ? e.count : 'err'}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {apiData.results.length === 0 && (
+                    <div className="p-4 bg-gray-900 border border-gray-800 rounded-xl text-xs text-gray-400">
+                      {apiData.note ? apiData.note : 'Sin resultados para este término. Prueba con un dominio, email, IP o dirección Bitcoin.'}
+                    </div>
+                  )}
+
+                  {apiData.results.map((r: any, idx: number) => (
+                    <div key={idx} className="p-4 rounded-lg border bg-gray-900 border-gray-800">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <h4 className="font-medium text-sm break-all">{r.title}</h4>
+                          <p className="mt-1 font-mono text-[11px] text-purple-300 break-all">{r.url}</p>
+                          {r.snippet && <p className="mt-1.5 text-xs text-gray-400 break-all">{r.snippet}</p>}
+                        </div>
+                        <div className="flex flex-col items-end gap-1.5 shrink-0">
+                          <span className="px-2 py-1 rounded text-[10px] font-bold bg-purple-500/20 text-purple-300">
+                            {r.engines?.join(' + ')}
+                          </span>
+                          <button
+                            onClick={() => copyToClipboard(r.url)}
+                            className="px-2 py-1 rounded text-[10px] bg-gray-800 hover:bg-gray-700 text-gray-300"
+                          >
+                            {r.url.includes('.onion') ? 'Copiar .onion' : 'Copiar enlace'}
+                          </button>
+                        </div>
+                      </div>
+                      {r.url.includes('.onion') && (
+                        <div className="mt-2 text-[10px] text-yellow-500/80">
+                          ⚠ Abre esta URL solo dentro de Tor Browser — la red clara no puede resolver .onion.
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {apiData?.matches && !apiData?.liveMode && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h3 className="font-semibold">Search Results ({apiData.matches.length})</h3>
@@ -4755,14 +5188,28 @@ export default function OSINTPlatform() {
                 <Zap className="w-7 h-7 text-lime-400" /> URL Sandbox
                 <span className="text-sm font-normal text-gray-400">real detonation · HTTP/TLS · content · reputation</span>
               </h2>
-              <UrlSandboxPanel
-                data={apiData?.data || null}
-                loading={loading}
-                inputValue={inputValue}
-                setInputValue={setInputValue}
-                onDetonate={handleSandbox}
-                onCopy={copyToClipboard}
-              />
+              <ModuleErrorBoundary module="URL Sandbox">
+                <UrlSandboxPanel
+                  data={apiData?.data || null}
+                  loading={loading}
+                  inputValue={inputValue}
+                  setInputValue={setInputValue}
+                  onDetonate={handleSandbox}
+                  onCopy={copyToClipboard}
+                  onReport={handleSandboxReport}
+                />
+              </ModuleErrorBoundary>
+            </div>
+          )}
+
+          {/* ==================== TAKE DOWN URL TAB ==================== */}
+          {activeTab === 'takedown' && (
+            <div className="space-y-6">
+              <h2 className="text-2xl font-bold flex items-center gap-3">
+                <Send className="w-7 h-7 text-orange-400" /> TakeDown URL
+                <span className="text-sm font-normal text-gray-400">Cargue URLs maliciosas y repórtelas a servicios de seguridad</span>
+              </h2>
+              <TakeDownPanel />
             </div>
           )}
 
@@ -4789,7 +5236,7 @@ export default function OSINTPlatform() {
 
               {apiData?.data?.records && (
                 <div className="space-y-4">
-                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
                     {Object.entries(apiData.data.records).map(([type, recs]: [string, any]) => (
                       <div key={type} className="p-3 bg-gray-900 border border-gray-800 rounded-xl">
                         <div className="text-sm font-bold text-teal-400">{type}</div>
@@ -4799,14 +5246,223 @@ export default function OSINTPlatform() {
                     ))}
                   </div>
 
+                  {/* Toolbar: fuentes + export CSV */}
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="px-2.5 py-1 bg-purple-500/20 border border-purple-500/40 text-purple-300 rounded-lg font-mono">
+                        CT (crt.sh): {apiData.data.sourceBreakdown?.ct ?? 0}
+                      </span>
+                      <span className="px-2.5 py-1 bg-pink-500/20 border border-pink-500/40 text-pink-300 rounded-lg font-mono">
+                        OTX: {apiData.data.sourceBreakdown?.otx ?? 0}
+                      </span>
+                      <span className="px-2.5 py-1 bg-orange-500/20 border border-orange-500/40 text-orange-300 rounded-lg font-mono">
+                        BufferOver: {apiData.data.sourceBreakdown?.buffer ?? 0}
+                      </span>
+                      <span className="px-2.5 py-1 bg-blue-500/20 border border-blue-500/40 text-blue-300 rounded-lg font-mono">
+                        Hackertarget: {apiData.data.sourceBreakdown?.hackertarget ?? 0}
+                      </span>
+                      <span className="px-2.5 py-1 bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 rounded-lg font-mono">
+                        Brute-force: {apiData.data.sourceBreakdown?.brute ?? 0}
+                      </span>
+                      {(apiData.data.takeovers || []).filter((t: any) => t.status !== 'SAFE').length > 0 && (
+                        <span className="px-2.5 py-1 bg-red-500/20 border border-red-500/40 text-red-300 rounded-lg font-mono">
+                          {apiData.data.takeovers.filter((t: any) => t.status !== 'SAFE').length} takeovers posibles
+                        </span>
+                      )}
+                    </div>
+                    <button onClick={handleDnsDumpReport} className="ml-auto text-xs px-3 py-2 bg-indigo-600 hover:bg-indigo-700 rounded-lg text-white flex items-center gap-1.5">
+                      <Printer className="w-3.5 h-3.5" /> Informe Imprimible HTML
+                    </button>
+                    <button onClick={exportDnsCsv} className="text-xs px-3 py-2 bg-emerald-600 hover:bg-emerald-700 rounded-lg text-white flex items-center gap-1.5">
+                      <Download className="w-3.5 h-3.5" /> Exportar CSV (lista completa)
+                    </button>
+                  </div>
+
+                  {/* Tabla filtrable de registros DNS */}
                   <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                    <h3 className="font-semibold mb-3 flex items-center gap-2"><Server className="w-5 h-5 text-purple-400" /> Subdomains Found ({apiData.data.subdomains?.length || 0})</h3>
-                    <div className="flex flex-wrap gap-2">
-                      {(apiData.data.subdomains || []).map((s: string, i: number) => (
-                        <span key={i} className="px-2 py-1 bg-gray-800 rounded text-xs font-mono">{s}</span>
+                    <h3 className="font-semibold mb-3 flex items-center gap-2"><Server className="w-5 h-5 text-purple-400" /> Registros DNS — tabla filtrable ({apiData.data.allRecords?.length || 0})</h3>
+                    <div className="flex flex-wrap items-center gap-2 mb-3">
+                      <button onClick={() => setDnsdumpType('ALL')} className={`px-2.5 py-1 rounded-lg text-xs font-medium border ${dnsdumpType === 'ALL' ? 'bg-teal-600 border-teal-500 text-white' : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'}`}>TODOS</button>
+                      {Object.entries(apiData.data.records).map(([type, recs]: [string, any]) => (
+                        <button key={type} onClick={() => setDnsdumpType(type)} className={`px-2.5 py-1 rounded-lg text-xs font-mono border ${dnsdumpType === type ? 'bg-teal-600 border-teal-500 text-white' : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'}`}>
+                          {type} ({recs?.length || 0})
+                        </button>
                       ))}
+                      <input
+                        type="text"
+                        placeholder="Filtrar por nombre o valor..."
+                        value={dnsdumpFilter}
+                        onChange={(e) => setDnsdumpFilter(e.target.value)}
+                        className="ml-auto w-64 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-xs focus:border-teal-500 focus:outline-none"
+                      />
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead>
+                          <tr className="text-gray-500 border-b border-gray-800">
+                            <th className="py-2 pr-3">Tipo</th>
+                            <th className="py-2 pr-3">Nombre</th>
+                            <th className="py-2 pr-3">TTL</th>
+                            <th className="py-2">Dato</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(apiData.data.allRecords || [])
+                            .filter((r: any) => dnsdumpType === 'ALL' || r.type === dnsdumpType)
+                            .filter((r: any) => {
+                              const q = dnsdumpFilter.toLowerCase();
+                              return !q || String(r.name).toLowerCase().includes(q) || String(r.data).toLowerCase().includes(q);
+                            })
+                            .map((r: any, i: number) => (
+                              <tr key={i} className="border-b border-gray-800/60 hover:bg-gray-800/40">
+                                <td className="py-1.5 pr-3"><span className="px-1.5 py-0.5 rounded bg-gray-800 font-mono text-teal-300">{r.type}</span></td>
+                                <td className="py-1.5 pr-3 font-mono text-gray-300">{r.name}</td>
+                                <td className="py-1.5 pr-3 text-gray-500">{r.ttl}</td>
+                                <td className="py-1.5 font-mono text-gray-400 break-all">{r.data}</td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
                     </div>
                   </div>
+
+                  {/* Grafo visual de subdominios */}
+                  <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                    <h3 className="font-semibold mb-3 flex items-center gap-2">
+                      <Network className="w-5 h-5 text-teal-400" /> Grafo visual — subdominios descubiertos ({apiData.data.subdomains?.length || 0})
+                    </h3>
+                    <p className="text-xs text-gray-500 mb-3">
+                      Fuentes: certificate transparency (crt.sh) + brute-force DNS. Nodos: dominio → subdominio → IP. Clic en un nodo para ver detalles.
+                    </p>
+                    <SubdomainGraph data={apiData.data} />
+                  </div>
+
+                  {/* Mapeo dominio -> IP -> proveedor de hosting */}
+                  {apiData.data.ipMap?.length > 0 && (
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                      <h3 className="font-semibold mb-3 flex items-center gap-2"><Globe2 className="w-5 h-5 text-indigo-400" /> Mapeo Dominio → IP → Proveedor de Hosting ({apiData.data.ipMap.length})</h3>
+                      <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                        <table className="w-full text-left text-xs">
+                          <thead>
+                            <tr className="text-gray-500 border-b border-gray-800 sticky top-0 bg-gray-900">
+                              <th className="py-2 pr-3">Host</th>
+                              <th className="py-2 pr-3">IP</th>
+                              <th className="py-2 pr-3">ASN</th>
+                              <th className="py-2 pr-3">Proveedor</th>
+                              <th className="py-2">País</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {apiData.data.ipMap.map((m: any, i: number) => (
+                              <tr key={i} className="border-b border-gray-800/60 hover:bg-gray-800/40">
+                                <td className="py-1.5 pr-3 font-mono text-gray-300">{m.host}</td>
+                                <td className="py-1.5 pr-3 font-mono text-cyan-300">{m.ip}</td>
+                                <td className="py-1.5 pr-3 font-mono text-pink-300">{m.asn}</td>
+                                <td className="py-1.5 pr-3 text-gray-300">{m.provider}</td>
+                                <td className="py-1.5 text-gray-400">{m.country}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* DNS histórico (passive DNS) con línea de tiempo */}
+                  {(apiData.data.passiveDns?.length > 0 || true) && (
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                      <h3 className="font-semibold mb-3 flex items-center gap-2"><Clock className="w-5 h-5 text-yellow-400" /> DNS Histórico — Passive DNS con línea de tiempo (CT)</h3>
+                      <p className="text-xs text-gray-500 mb-4">Línea de tiempo basada en emisiones de certificados (certificate transparency) y registros passive DNS. Primera y última aparición observada por subdominio.</p>
+                      {apiData.data.passiveDns?.length > 0 ? (
+                        <div className="relative pl-6">
+                          <div className="absolute left-2 top-1 bottom-1 w-px bg-gradient-to-b from-yellow-400/60 via-gray-700 to-transparent"></div>
+                          {apiData.data.passiveDns.map((p: any, i: number) => (
+                            <div key={i} className="relative pb-4 pl-4">
+                              <div className="absolute left-0 top-1 w-3 h-3 rounded-full bg-yellow-400/80 border-2 border-gray-900 -translate-x-1/2"></div>
+                              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                                <span className="font-mono text-gray-200">{p.name}</span>
+                                <span className="text-gray-500">visto: <span className="text-yellow-300 font-mono">{p.firstSeen}</span> → <span className="text-yellow-300 font-mono">{p.lastSeen}</span></span>
+                                <span className="px-1.5 py-0.5 bg-gray-800 rounded text-[10px] text-gray-400">{p.daysKnown} días activo</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="p-3 bg-gray-800/50 border border-yellow-500/20 rounded-lg text-xs text-gray-400">
+                          Sin datos históricos disponibles: las fuentes passive DNS (crt.sh / OTX AlienVault) no respondieron en este momento. Reintenta en unos minutos para ver la línea de tiempo.
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Posibles tomas de control (subdomain takeover) */}
+                  {apiData.data.takeovers?.length > 0 && (
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                      <div className="flex flex-wrap items-center gap-2 mb-3">
+                        <h3 className="font-semibold flex items-center gap-2"><ShieldAlert className="w-5 h-5 text-orange-400" /> Posibles Subdomain Takeovers ({apiData.data.takeovers.filter((t: any) => t.status !== 'SAFE').length})</h3>
+                        <button onClick={() => setDnsdumpShowSafe(!dnsdumpShowSafe)} className="ml-auto text-xs px-2.5 py-1 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-400">
+                          {dnsdumpShowSafe ? 'Ocultar seguros' : 'Mostrar seguros'}
+                        </button>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs">
+                          <thead>
+                            <tr className="text-gray-500 border-b border-gray-800">
+                              <th className="py-2 pr-3">Subdominio</th>
+                              <th className="py-2 pr-3">CNAME</th>
+                              <th className="py-2 pr-3">Servicio</th>
+                              <th className="py-2 pr-3">Estado</th>
+                              <th className="py-2">Razón</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {apiData.data.takeovers
+                              .filter((t: any) => dnsdumpShowSafe || t.status !== 'SAFE')
+                              .map((t: any, i: number) => (
+                                <tr key={i} className="border-b border-gray-800/60 hover:bg-gray-800/40 align-top">
+                                  <td className="py-2 pr-3 font-mono text-gray-200">{t.subdomain}</td>
+                                  <td className="py-2 pr-3 font-mono text-cyan-300 break-all">{t.cname}</td>
+                                  <td className="py-2 pr-3 text-gray-300">{t.service}</td>
+                                  <td className="py-2 pr-3">
+                                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                      t.status === 'CANDIDATE' ? 'bg-red-500/20 text-red-400' :
+                                      t.status === 'DANGLING' ? 'bg-yellow-500/20 text-yellow-400' :
+                                      'bg-green-500/20 text-green-400'
+                                    }`}>{t.status}</span>
+                                  </td>
+                                  <td className="py-2 text-gray-400">{t.reason}</td>
+                                </tr>
+                              ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* WHOIS integrado */}
+                  {apiData.data.whois && (
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                      <h3 className="font-semibold mb-3 flex items-center gap-2"><Key className="w-5 h-5 text-green-400" /> WHOIS integrado (RDAP)</h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                        <div className="p-3 bg-gray-800 rounded-lg">
+                          <div className="text-[10px] uppercase text-gray-500 mb-1">Registrar</div>
+                          <div className="text-sm font-mono break-all">{apiData.data.whois.registrar || '—'}</div>
+                        </div>
+                        <div className="p-3 bg-gray-800 rounded-lg">
+                          <div className="text-[10px] uppercase text-gray-500 mb-1">Registrado</div>
+                          <div className="text-sm font-mono">{apiData.data.whois.created ? apiData.data.whois.created.slice(0, 10) : '—'}</div>
+                        </div>
+                        <div className="p-3 bg-gray-800 rounded-lg">
+                          <div className="text-[10px] uppercase text-gray-500 mb-1">Expira</div>
+                          <div className="text-sm font-mono">{apiData.data.whois.expires ? apiData.data.whois.expires.slice(0, 10) : '—'}</div>
+                        </div>
+                        <div className="p-3 bg-gray-800 rounded-lg">
+                          <div className="text-[10px] uppercase text-gray-500 mb-1">Nameservers</div>
+                          <div className="text-sm font-mono truncate">{apiData.data.whois.nameservers?.join(', ') || '—'}</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                     <h3 className="font-semibold mb-3 flex items-center gap-2"><ExternalLink className="w-5 h-5 text-cyan-400" /> Related Hosts</h3>
@@ -4833,7 +5489,7 @@ export default function OSINTPlatform() {
                 <div className="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center">
                   <Network className="w-16 h-16 mx-auto mb-4 text-gray-600" />
                   <h3 className="text-lg font-semibold mb-2">DNS Dump Ready</h3>
-                  <p className="text-gray-400">Enumerate A, AAAA, MX, NS, TXT, CNAME, SOA records, subdomains and related hosts.</p>
+                  <p className="text-gray-400">Enumerate A, AAAA, MX, TXT, NS, CNAME, SOA, CAA records, subdomains (crt.sh + brute-force), passive DNS timeline y subdomain takeover detection.</p>
                 </div>
               )}
             </div>
@@ -5383,5 +6039,368 @@ function TreeNode({ node, indent = 0, onDownload }: { node: any; indent?: number
     </div>
   );
 }
+
+// Infrastructure Graph Component (Lookyloo-style interactive graph)
+function InfrastructureGraph({ data }: { data: any }) {
+  const [nodes, setNodes] = React.useState<any[]>([]);
+  const [edges, setEdges] = React.useState<any[]>([]);
+  const [selectedNode, setSelectedNode] = React.useState<any>(null);
+  const [pan, setPan] = React.useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = React.useState(1);
+
+  React.useEffect(() => {
+    if (!data.dns) return;
+    
+    const newNodes: any[] = [];
+    const newEdges: any[] = [];
+    const nodeId = (prefix: string, label: string) => `${prefix}-${label.replace(/[^a-zA-Z0-9]/g, '-')}`;
+    
+    // Primary domain (center)
+    const domainId = nodeId('domain', data.domain);
+    newNodes.push({
+      id: domainId,
+      label: data.domain,
+      type: 'domain',
+      x: 400,
+      y: 200,
+      data: { domain: data.domain, ip: data.ip, asn: data.asn, isp: data.isp, geo: data.geo }
+    });
+
+    // IP node
+    if (data.ip) {
+      const ipId = nodeId('ip', data.ip);
+      newNodes.push({ id: ipId, label: data.ip, type: 'ip', x: 200, y: 200, data: { ip: data.ip, asn: data.asn, isp: data.isp, geo: data.geo } });
+      newEdges.push({ from: domainId, to: ipId, label: 'A', color: '#a855f7' });
+    }
+
+    // ASN
+    if (data.asn) {
+      const asnId = nodeId('asn', data.asn);
+      newNodes.push({ id: asnId, label: `AS${data.asn}`, type: 'asn', x: 200, y: 300, data: { asn: data.asn } });
+      if (data.ip) newEdges.push({ from: nodeId('ip', data.ip), to: asnId, label: 'ASN', color: '#ec4899' });
+    }
+
+    // ISP
+    if (data.isp) {
+      const ispId = nodeId('isp', data.isp);
+      newNodes.push({ id: ispId, label: data.isp, type: 'isp', x: 200, y: 400, data: { isp: data.isp } });
+      if (data.asn) newEdges.push({ from: nodeId('asn', data.asn), to: ispId, label: 'ISP', color: '#ec4899' });
+    }
+
+    // Geo
+    if (data.geo) {
+      const geoId = nodeId('geo', data.geo.country);
+      newNodes.push({ id: geoId, label: `${data.geo.country}, ${data.geo.city}`, type: 'geo', x: 200, y: 500, data: data.geo });
+      if (data.isp) newEdges.push({ from: nodeId('isp', data.isp), to: geoId, label: 'Geo', color: '#22d3ee' });
+    }
+
+    // MX Records
+    data.dns.MX?.Answer?.slice(0, 5).forEach((m: any, i: number) => {
+      const mxLabel = m.data || m.exchange;
+      if (!mxLabel) return;
+      const mxId = nodeId('mx', mxLabel);
+      newNodes.push({ id: mxId, label: `MX ${m.preference || i}: ${mxLabel}`, type: 'mx', x: 600, y: 100 + i * 80, data: m });
+      newEdges.push({ from: domainId, to: mxId, label: 'MX', color: '#f97316' });
+    });
+
+    // Nameservers
+    data.dns.NS?.Answer?.slice(0, 4).forEach((n: any, i: number) => {
+      const nsLabel = n.data || n.nsdname;
+      if (!nsLabel) return;
+      const nsId = nodeId('ns', nsLabel);
+      newNodes.push({ id: nsId, label: nsLabel, type: 'ns', x: 600, y: 500 + i * 80, data: n });
+      newEdges.push({ from: domainId, to: nsId, label: 'NS', color: '#84cc16' });
+    });
+
+    // Subdomains
+    data.subdomains?.slice(0, 12).forEach((s: string, i: number) => {
+      const subId = nodeId('sub', s);
+      newNodes.push({ id: subId, label: s, type: 'subdomain', x: 800, y: 100 + i * 50, data: { subdomain: s } });
+      newEdges.push({ from: domainId, to: subId, label: 'sub', color: '#6366f1' });
+    });
+
+    setNodes(newNodes);
+    setEdges(newEdges);
+  }, [data]);
+
+  const getNodeColor = (type: string) => {
+    const colors: Record<string, string> = {
+      domain: '#f97316', ip: '#a855f7', asn: '#ec4899', isp: '#ec4899',
+      geo: '#22d3ee', mx: '#f97316', ns: '#84cc16', subdomain: '#6366f1',
+    };
+    return colors[type] || '#6b7280';
+  };
+
+  const getNodeIcon = (type: string) => {
+    const icons: Record<string, string> = {
+      domain: '🌐', ip: '📍', asn: '🔢', isp: '🏢', geo: '🌍',
+      mx: '📧', ns: '📛', subdomain: '🌿',
+    };
+    return icons[type] || '🔗';
+  };
+
+  if (!data.dns) return <div className="text-gray-500 text-center py-8">No DNS data available</div>;
+
+  return (
+    <div className="relative w-full h-[500px] bg-gray-950 rounded-lg border border-gray-800 overflow-hidden">
+      <svg viewBox="0 0 800 500" className="w-full h-full" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: '0 0' }}>
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#6b7280" />
+          </marker>
+        </defs>
+        {/* Edges */}
+        {edges.map((edge, i) => (
+          <line
+            key={i}
+            x1={nodes.find(n => n.id === edge.from)?.x || 0}
+            y1={nodes.find(n => n.id === edge.from)?.y || 0}
+            x2={nodes.find(n => n.id === edge.to)?.x || 0}
+            y2={nodes.find(n => n.id === edge.to)?.y || 0}
+            stroke={edge.color}
+            strokeWidth="1.5"
+            markerEnd="url(#arrowhead)"
+            strokeDasharray="5,5"
+            opacity="0.7"
+          />
+        ))}
+        {/* Nodes */}
+        {nodes.map((node) => (
+          <g key={node.id} onClick={() => setSelectedNode(node)}>
+            <circle
+              cx={node.x}
+              cy={node.y}
+              r={selectedNode?.id === node.id ? 22 : 18}
+              fill="url(#node-gradient)"
+              stroke={getNodeColor(node.type)}
+              strokeWidth={selectedNode?.id === node.id ? 3 : 2}
+              filter="drop-shadow(0 0 8px currentColor)"
+            />
+            <text x={node.x} y={node.y + 4} textAnchor="middle" fontSize="14" fill="white" fontWeight="bold">
+              {getNodeIcon(node.type)}
+            </text>
+            <text x={node.x} y={node.y - 28} textAnchor="middle" fontSize="10" fill="#9ca3af" fontFamily="monospace">
+              {node.label.length > 20 ? node.label.slice(0, 18) + '...' : node.label}
+            </text>
+          </g>
+        ))}
+        {/* Edge labels */}
+        {edges.map((edge, i) => {
+          const from = nodes.find(n => n.id === edge.from);
+          const to = nodes.find(n => n.id === edge.to);
+          if (!from || !to) return null;
+          const mx = (from.x + to.x) / 2;
+          const my = (from.y + to.y) / 2;
+          return (
+            <text key={i} x={mx} y={my - 5} textAnchor="middle" fontSize="8" fill="#9ca3af" fontFamily="monospace">
+              {edge.label}
+            </text>
+          );
+        })}
+      </svg>
+      
+      {/* Pan/Zoom Controls */}
+      <div className="absolute bottom-4 right-4 flex flex-col gap-1">
+        <button onClick={() => setZoom(Math.min(zoom + 0.2, 3))} className="p-2 bg-gray-800 border border-gray-700 rounded hover:bg-gray-700">+</button>
+        <button onClick={() => setZoom(Math.max(zoom - 0.2, 0.3))} className="p-2 bg-gray-800 border border-gray-700 rounded hover:bg-gray-700">−</button>
+        <button onClick={() => { setPan({ x: 0, y: 0 }); setZoom(1); }} className="p-2 bg-gray-800 border border-gray-700 rounded hover:bg-gray-700">⌂</button>
+      </div>
+
+      {/* Node Detail Panel */}
+      {selectedNode && (
+        <div className="absolute top-4 left-4 w-72 bg-gray-900 border border-gray-700 rounded-lg p-4 shadow-lg z-10">
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="font-semibold">{selectedNode.label}</h4>
+            <button onClick={() => setSelectedNode(null)} className="text-gray-400 hover:text-white">×</button>
+          </div>
+          <div className="space-y-2 text-xs">
+            <div><span className="text-gray-500">Type:</span> <span className="font-mono ml-2 capitalize">{selectedNode.type}</span></div>
+            {selectedNode.data.ip && <div><span className="text-gray-500">IP:</span> <span className="font-mono ml-2">{selectedNode.data.ip}</span></div>}
+            {selectedNode.data.asn && <div><span className="text-gray-500">ASN:</span> <span className="font-mono ml-2">{selectedNode.data.asn}</span></div>}
+            {selectedNode.data.isp && <div><span className="text-gray-500">ISP:</span> <span className="font-mono ml-2">{selectedNode.data.isp}</span></div>}
+            {selectedNode.data.geo && <div><span className="text-gray-500">Geo:</span> <span className="font-mono ml-2">{selectedNode.data.geo.country}, {selectedNode.data.geo.city}</span></div>}
+            {selectedNode.data.mx && <div><span className="text-gray-500">MX:</span> <span className="font-mono ml-2">{selectedNode.data.mx}</span></div>}
+            <button onClick={() => setSelectedNode(null)} className="mt-3 w-full px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs">Close</button>
+          </div>
+        </div>
+      )}
+      
+      <style jsx>{`
+        @keyframes gradient {
+          0% { background-position: 0% 50%; }
+          50% { background-position: 100% 50%; }
+          100% { background-position: 0% 50%; }
+        }
+        #node-gradient {
+          background: linear-gradient(135deg, #1f2937, #374151);
+          background-size: 200% 200%;
+          animation: gradient 3s ease infinite;
+        }
+      `}
+      </style>
+    </div>
+  );
+}
+
+// Subdomain Graph Component — DNS Dump (dominio → subdominios → IPs, fuentes CT/brute)
+function SubdomainGraph({ data }: { data: any }) {
+  const [selected, setSelected] = React.useState<any>(null);
+  const infoMap = React.useMemo(() => {
+    const m = new Map<string, any>();
+    (data?.subdomainInfo || []).forEach((s: any) => m.set(s.name, s));
+    return m;
+  }, [data]);
+  const tbMap = React.useMemo(() => {
+    const m = new Map<string, any>();
+    (data?.takeovers || []).forEach((t: any) => m.set(t.subdomain, t));
+    return m;
+  }, [data]);
+  const ipRows = React.useMemo(() => (data?.ipMap || []).slice(), [data]);
+
+  const providerFor = (host: string, ip: string) => {
+    const row = ipRows.find((r: any) => r.host === host && r.ip === ip);
+    if (!row) return '';
+    const parts = [row.provider, row.asn && row.asn !== '—' ? row.asn : '', row.country && row.country !== '—' ? row.country : ''].filter(Boolean);
+    return parts.join(' · ');
+  };
+
+  const subs = (data?.subdomains || []).slice(0, 30);
+  const W = Math.max(840, subs.length * 150 + 80);
+  const H = 320;
+  const rootX = Math.min(W / 2, 640);
+  const subX = (i: number) => (subs.length === 1 ? W / 2 : 60 + (i * (W - 120)) / Math.max(subs.length - 1, 1));
+  const colorFor = (info: any) => {
+    const src = info?.source || '';
+    if (src.includes('brute-force') && (src.includes('crt.sh') || src.includes('OTX') || src.includes('bufferover') || src.includes('hackertarget'))) return '#2dd4bf';
+    if (src.includes('crt.sh')) return '#a855f7';
+    if (src.includes('OTX')) return '#ec4899';
+    if (src.includes('bufferover')) return '#fb923c';
+    if (src.includes('hackertarget')) return '#60a5fa';
+    if (src.includes('brute-force')) return '#22d3ee';
+    return '#6b7280';
+  };
+
+  return (
+    <div className="relative w-full max-h-[380px] overflow-auto bg-gray-950 rounded-lg border border-gray-800">
+      <svg width={W} height={H} className="min-w-full">
+        <defs>
+          <marker id="subarrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+            <polygon points="0 0, 8 3, 0 6" fill="#4b5563" />
+          </marker>
+        </defs>
+        {subs.map((s: string, i: number) => (
+          <line key={`e${i}`} x1={rootX} y1={48} x2={subX(i)} y2={118} stroke="#4b5563" strokeWidth="1" strokeDasharray="4,4" opacity="0.6" markerEnd="url(#subarrow)" />
+        ))}
+        {subs.map((s: string, i: number) => {
+          const info = infoMap.get(s);
+          const ips = info?.ips || [];
+          return ips.map((ip: string, j: number) => (
+            <line key={`ei${i}-${j}`} x1={subX(i)} y1={140} x2={subX(i) + (j - (ips.length - 1) / 2) * 14} y2={210} stroke="#3b82f6" strokeWidth="1" strokeDasharray="2,3" opacity="0.5" />
+          ));
+        })}
+        <g onClick={() => setSelected({ kind: 'root' })} style={{ cursor: 'pointer' }}>
+          <circle cx={rootX} cy={36} r={22} fill="#134e4a" stroke="#2dd4bf" strokeWidth={2.5} />
+          <text x={rootX} y={41} textAnchor="middle" fontSize="10" fill="#e2e8f0" fontFamily="monospace" fontWeight="bold">
+            {data?.domain?.length > 16 ? data.domain.slice(0, 14) + '…' : data?.domain || 'domain'}
+          </text>
+          <text x={rootX} y={72} textAnchor="middle" fontSize="9" fill="#64748b" fontFamily="monospace">dominio</text>
+        </g>
+        {subs.map((s: string, i: number) => {
+          const info = infoMap.get(s);
+          const tb = tbMap.get(s);
+          const stroke = tb && tb.status !== 'SAFE' ? (tb.status === 'CANDIDATE' ? '#ef4444' : '#f59e0b') : colorFor(info);
+          const color = colorFor(info);
+          const label = s.split('.')[0];
+          return (
+            <g key={s} onClick={() => setSelected({ kind: 'sub', name: s })} style={{ cursor: 'pointer' }}>
+              <circle cx={subX(i)} cy={128} r={15} fill="#111827" stroke={stroke} strokeWidth={selected?.name === s ? 3 : 2} />
+              <text x={subX(i)} y={132} textAnchor="middle" fontSize="8" fill="#cbd5e1" fontFamily="monospace">{label.length > 9 ? label.slice(0, 8) + '…' : label}</text>
+              <text x={subX(i)} y={158} textAnchor="middle" fontSize="8" fill={color} fontFamily="monospace">{info?.ips?.length || 0} IP</text>
+            </g>
+          );
+        })}
+        {subs.map((s: string, i: number) => {
+          const info = infoMap.get(s);
+          const ips = info?.ips || [];
+          return ips.map((ip: string, j: number) => (
+            <g key={s + ip} onClick={() => setSelected({ kind: 'ip', host: s, ip })} style={{ cursor: 'pointer' }}>
+              <rect x={subX(i) + (j - (ips.length - 1) / 2) * 14 - 18} y={203} width={36} height={20} rx={4} fill="#0f172a" stroke="#3b82f6" strokeWidth={1} opacity={0.9} />
+              <text x={subX(i) + (j - (ips.length - 1) / 2) * 14} y={216} textAnchor="middle" fontSize="7" fill="#60a5fa" fontFamily="monospace">{ip}</text>
+            </g>
+          ));
+        })}
+      </svg>
+
+      {selected && (
+        <div className="absolute top-3 left-3 w-80 bg-gray-900 border border-gray-700 rounded-lg p-4 shadow-lg z-10 max-h-[92%] overflow-auto">
+          {selected.kind === 'root' && (
+            <>
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="font-semibold text-sm break-all">{data?.domain}</h4>
+                <button onClick={() => setSelected(null)} className="text-gray-400 hover:text-white">×</button>
+              </div>
+              <div className="space-y-2 text-xs">
+                <div><span className="text-gray-500">Subdominios:</span> <span className="font-mono ml-2">{data?.subdomains?.length || 0}</span></div>
+                <div><span className="text-gray-500">Registros DNS:</span> <span className="font-mono ml-2">{data?.allRecords?.length || 0}</span></div>
+                <div><span className="text-gray-500">Takeovers:</span> <span className="font-mono ml-2">{(data?.takeovers || []).filter((t: any) => t.status !== 'SAFE').length}</span></div>
+              </div>
+            </>
+          )}
+          {selected.kind === 'sub' && (() => {
+            const info = infoMap.get(selected.name);
+            const tb = tbMap.get(selected.name);
+            return (
+              <>
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="font-semibold text-sm break-all font-mono">{selected.name}</h4>
+                  <button onClick={() => setSelected(null)} className="text-gray-400 hover:text-white">×</button>
+                </div>
+                <div className="space-y-2 text-xs">
+                  {info?.source && <div><span className="text-gray-500">Fuente:</span> <span className="ml-2">{info.source}</span></div>}
+                  {info?.firstSeen && <div><span className="text-gray-500">Primera vista:</span> <span className="font-mono ml-2">{info.firstSeen}</span></div>}
+                  {info?.lastSeen && <div><span className="text-gray-500">Última vista:</span> <span className="font-mono ml-2">{info.lastSeen}</span></div>}
+                  {info?.cname && <div><span className="text-gray-500">CNAME:</span> <span className="font-mono ml-2 break-all">{info.cname}</span></div>}
+                  {tb && tb.status !== 'SAFE' && (
+                    <div className={`p-2 rounded ${tb.status === 'CANDIDATE' ? 'bg-red-500/20 text-red-300' : 'bg-yellow-500/20 text-yellow-300'}`}>
+                      <b>{tb.status}</b> — {tb.reason}
+                    </div>
+                  )}
+                  <div><span className="text-gray-500">IPs resolvidas:</span></div>
+                  {(info?.ips || []).map((ip: string, i: number) => (
+                    <div key={i} className="font-mono text-cyan-300">{ip} <span className="text-gray-500">{providerFor(selected.name, ip)}</span></div>
+                  ))}
+                </div>
+              </>
+            );
+          })()}
+          {selected.kind === 'ip' && (
+            <>
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="font-semibold text-sm break-all font-mono">{selected.ip}</h4>
+                <button onClick={() => setSelected(null)} className="text-gray-400 hover:text-white">×</button>
+              </div>
+              <div className="space-y-2 text-xs">
+                <div><span className="text-gray-500">Host:</span> <span className="font-mono ml-2">{selected.host}</span></div>
+                <div><span className="text-gray-500">Proveedor:</span> <span className="ml-2">{providerFor(selected.host, selected.ip) || '—'}</span></div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+      <div className="absolute bottom-2 left-3 flex flex-wrap gap-2 text-[10px] text-gray-400">
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block" style={{ background: '#a855f7' }} /> crt.sh</span>
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block" style={{ background: '#ec4899' }} /> OTX passive DNS</span>
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block" style={{ background: '#fb923c' }} /> bufferover</span>
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block" style={{ background: '#60a5fa' }} /> hackertarget</span>
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block" style={{ background: '#22d3ee' }} /> brute-force</span>
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block" style={{ background: '#2dd4bf' }} /> múltiples fuentes</span>
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block" style={{ background: '#ef4444' }} /> takeover candidato</span>
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block" style={{ background: '#f59e0b' }} /> CNAME colgante</span>
+      </div>
+      <button onClick={() => setSelected(null)} className="absolute top-2 right-2 p-1.5 bg-gray-800 border border-gray-700 rounded hover:bg-gray-700 text-xs text-gray-400">Limpiar selección</button>
+    </div>
+  );
+}
+
 // force rebuild 08/20/2026 09:06:46
 // force rebuild 08/20/2026 09:32:28

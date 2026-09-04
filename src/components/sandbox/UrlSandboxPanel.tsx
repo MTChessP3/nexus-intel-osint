@@ -10,7 +10,7 @@ import {
   Zap, Search, Loader2, Copy, ChevronDown, ChevronRight, Shield, ShieldAlert,
   ShieldCheck, AlertTriangle, CheckCircle, XCircle, Network, Server, Lock,
   Globe, Mail, Fingerprint, MapPin, FileCode, Bug, ArrowRight, ExternalLink,
-  Image, RefreshCw, Eye,
+  Image, RefreshCw, Eye, Printer,
 } from 'lucide-react';
 
 interface SandboxData {
@@ -59,6 +59,7 @@ interface Props {
   setInputValue: (v: string) => void;
   onDetonate: (url?: string) => void;
   onCopy: (text: string) => void;
+  onReport?: () => void;
 }
 
 const LEVEL_STYLES: Record<string, { badge: string; bar: string; icon: any }> = {
@@ -97,7 +98,7 @@ function fmtDate(iso: string | null): string {
   return Number.isNaN(d.getTime()) ? iso : d.toISOString().slice(0, 10);
 }
 
-export default function UrlSandboxPanel({ data, loading, inputValue, setInputValue, onDetonate, onCopy }: Props) {
+export default function UrlSandboxPanel({ data, loading, inputValue, setInputValue, onDetonate, onCopy, onReport }: Props) {
   const [openSection, setOpenSection] = useState<string | null>('http');
   const [showAllResources, setShowAllResources] = useState(false);
   const [showAllReasons, setShowAllReasons] = useState(false);
@@ -143,20 +144,64 @@ export default function UrlSandboxPanel({ data, loading, inputValue, setInputVal
           </button>
         </div>
         <div className="mt-3 flex flex-wrap gap-2 items-center">
-          <span className="text-xs text-gray-500">Try:</span>
-          {['https://example.com', 'http://secure-login-update.xyz/verify', 'https://google.com'].map((d) => (
-            <button
-              key={d}
-              onClick={() => { setInputValue(d); onDetonate(d); }}
-              className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs font-mono"
-            >
-              {d}
-            </button>
-          ))}
-          <span className="ml-auto text-xs text-lime-400/80 flex items-center gap-1">
-            <RefreshCw className="w-3 h-3" /> real capture — no API key
-          </span>
-        </div>
+            {data ? (
+              <>
+                <span className="px-2 py-1 bg-gray-800 rounded text-xs font-mono text-gray-300">
+                  {verdict ? (
+                    <span className={style?.badge || LEVEL_STYLES.BENIGN.badge}>{verdict.level}</span>
+                  ) : (
+                    'Detonated'
+                  )}
+                </span>
+                {data.http && (
+                  <span className="px-2 py-1 bg-gray-800 rounded text-xs font-mono text-gray-300">
+                    {data.http.status} {data.http.statusText}
+                  </span>
+                )}
+                {data.redirects && data.redirects.length > 0 && (
+                  <span className="px-2 py-1 bg-blue-500/20 border border-blue-500/40 rounded text-xs font-mono text-blue-300">
+                    {data.redirects.length} redirect(s)
+                  </span>
+                )}
+                {data.tls && (
+                  <span className={`px-2 py-1 rounded text-xs font-mono ${
+                    data.tls.expired ? 'bg-red-500/20 text-red-300 border border-red-500/40'
+                    : data.tls.selfSigned || data.tls.hostnameMismatch ? 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/40'
+                    : 'bg-green-500/20 text-green-300 border border-green-500/40'
+                  }`}>
+                    TLS: {data.tls.expired ? 'EXPIRED' : data.tls.selfSigned ? 'SELF-SIGNED' : data.tls.hostnameMismatch ? 'MISMATCH' : 'VALID'}
+                  </span>
+                )}
+                {data.content && data.content.forms && data.content.forms.length > 0 && (
+                  <span className="px-2 py-1 bg-purple-500/20 border border-purple-500/40 rounded text-xs font-mono text-purple-300">
+                    {data.content.forms.length} form(s)
+                  </span>
+                )}
+                {data.content && data.content.iframes && data.content.iframes.length > 0 && (
+                  <span className="px-2 py-1 bg-orange-500/20 border border-orange-500/40 rounded text-xs font-mono text-orange-300">
+                    {data.content.iframes.length} iframe(s)
+                  </span>
+                )}
+                {data.resources && data.resources.length > 0 && (
+                  <span className="px-2 py-1 bg-gray-800 rounded text-xs font-mono text-gray-300">
+                    {data.resources.length} resource(s)
+                  </span>
+                )}
+                {data.staticFlags && data.staticFlags.length > 0 && (
+                  <span className="px-2 py-1 bg-yellow-500/20 border border-yellow-500/40 rounded text-xs font-mono text-yellow-300">
+                    {data.staticFlags.length} heuristic(s)
+                  </span>
+                )}
+                <span className="ml-auto text-xs text-lime-400/80 flex items-center gap-1">
+                  <RefreshCw className="w-3 h-3" /> real capture — no API key
+                </span>
+              </>
+            ) : (
+              <span className="ml-auto text-xs text-lime-400/80 flex items-center gap-1">
+                <RefreshCw className="w-3 h-3" /> real capture — no API key
+              </span>
+            )}
+          </div>
       </div>
 
       {!data && !loading && (
@@ -284,8 +329,8 @@ export default function UrlSandboxPanel({ data, loading, inputValue, setInputVal
                   {headerRow('Content-Type', data.http.contentType)}
                   {headerRow('Content-Encoding', data.http.contentEncoding)}
                   {headerRow('Content-Length', data.http.contentLength !== null ? String(data.http.contentLength) : null)}
-                  {headerRow('TTFB', `${data.http.timings.ttfbMs} ms`)}
-                  {headerRow('Total', `${data.http.timings.totalMs} ms`)}
+                  {headerRow('TTFB', data.http.timings ? `${data.http.timings.ttfbMs} ms` : null)}
+                  {headerRow('Total', data.http.timings ? `${data.http.timings.totalMs} ms` : null)}
                   <div className="mt-3">
                     <p className="text-xs text-gray-500 mb-1">Response headers</p>
                     <div className="max-h-48 overflow-y-auto rounded bg-gray-950 border border-gray-800 p-3 space-y-0.5">
@@ -541,6 +586,11 @@ export default function UrlSandboxPanel({ data, loading, inputValue, setInputVal
             {data.reputation.ip && (
               <button onClick={() => onCopy(data.reputation.ip!)} className="px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm flex items-center gap-2">
                 <Server className="w-4 h-4" /> Copy IP ({data.reputation.ip})
+              </button>
+            )}
+            {onReport && (
+              <button onClick={onReport} className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 rounded-lg text-sm flex items-center gap-2">
+                <Printer className="w-4 h-4" /> Informe Imprimible HTML
               </button>
             )}
             <button onClick={() => onDetonate()} className="px-3 py-2 bg-lime-600/20 hover:bg-lime-600/30 border border-lime-500/40 rounded-lg text-sm flex items-center gap-2">

@@ -137,21 +137,57 @@ export async function POST(request: NextRequest) {
   <div class="scorebar"><div style="width:${Math.max((d.risk?.score ?? 0), 2)}%; background:${riskColor}"></div></div>
   <div class="verdict"><b>Veredicto:</b> ${esc(d.verdict || 'Sin indicadores críticos')}</div>
 
+  <h2>Captura de pantalla (Live)</h2>
+  <div style="text-align:center;padding:8px;border:1px solid #e5e7eb;border-radius:8px;">
+    <img src="https://s0.wp.com/mshots/v1/${encodeURIComponent('https://' + domain)}?w=1280&h=720" alt="Live screenshot" style="max-width:100%;border-radius:6px;"/>
+    <div class="meta">Fuente: WordPress mshots · Hora local UTC-5</div>
+  </div>
+
   <h2>Infraestructura</h2>
   <div class="grid">
     <div class="card"><b>IP</b><span class="mono">${esc(d.ip || '—')}</span></div>
     <div class="card"><b>ASN</b><span>${esc(d.asn || '—')}</span></div>
     <div class="card"><b>ISP</b><span>${esc(d.isp || '—')}</span></div>
-    <div class="card"><b>Geo</b><span>${esc(d.geo ? `${d.geo.country} · ${d.geo.city}` : '—')}</span></div>
+    <div class="card"><b>Geo</b><span>${esc(d.geo ? [d.geo.country, d.geo.region, d.geo.city].filter(Boolean).join(' · ') : '—')}</span></div>
     <div class="card"><b>Servidor</b><span>${esc(d.httpHeaders?.server || '—')}</span></div>
     <div class="card"><b>HTTP</b><span>${esc(d.httpHeaders?.statusCode ?? '—')} · Seg. ${esc(d.httpHeaders?.securityScore ?? '—')}</span></div>
     <div class="card"><b>SSL/TLS</b><span>${esc(d.ssl?.secure ? 'Verificado' : 'No verificado')}</span></div>
+    <div class="card"><b>Protocolo SSL</b><span>${esc(d.ssl?.protocol || '—')}</span></div>
     <div class="card"><b>Subdominios</b><span>${esc((d.subdomains || []).length)}</span></div>
+    <div class="card"><b>Análisis</b><span>${esc(d.name || '—')}</span></div>
   </div>
   ${d.subdomains?.length ? `<h3>Subdominios</h3><div class="chips">${d.subdomains.slice(0, 50).map((s: string) => `<span class="chip">${esc(s)}</span>`).join('')}</div>` : ''}
   ${d.dns ? `<h3>DNS</h3>` +
     ['A', 'AAAA', 'MX', 'NS', 'TXT', 'CNAME'].filter((t) => d.dns[t]?.Answer?.length).map((t) =>
       `<div class="card" style="margin-bottom:4px"><b>${esc(t)}</b><div class="mono small">${d.dns[t].Answer.slice(0, 8).map((a: any) => esc(String(a.data || ''))).join(' · ')}</div></div>`).join('') : ''}
+
+  <h2>HTTP Headers & Seguridad</h2>
+  <div class="grid">
+    <div class="card"><b>Status Code</b><span>${esc(d.httpHeaders?.statusCode ?? '—')}</span></div>
+    <div class="card"><b>Server</b><span>${esc(d.httpHeaders?.server || '—')}</span></div>
+    <div class="card"><b>Content-Type</b><span>${esc(d.httpHeaders?.headers?.['content-type'] || '—')}</span></div>
+    <div class="card"><b>Powered By</b><span>${esc(d.httpHeaders?.headers?.['x-powered-by'] || '—')}</span></div>
+    <div class="card"><b>Security Score</b><span>${esc(d.httpHeaders?.securityScore ?? '—')}</span></div>
+  </div>
+  ${d.httpHeaders?.securityHeaders ? `<h3>Checklist de security headers</h3><table class="tbl"><thead><tr><th>Header</th><th>Estado</th></tr></thead><tbody>${Object.entries(d.httpHeaders.securityHeaders).map(([h, present]) =>
+    `<tr><td class="mono">${esc(h)}</td><td>${present ? '✓ Presente' : '✗ Ausente'}</td></tr>`).join('')}</tbody></table>` : ''}
+  ${d.httpHeaders?.headers && Object.keys(d.httpHeaders.headers).length ? `<h3>Headers completos (${esc(Object.keys(d.httpHeaders.headers).length)})</h3><table class="tbl"><thead><tr><th>Header</th><th>Valor</th></tr></thead><tbody>${Object.entries(d.httpHeaders.headers).map(([k, v]) =>
+    `<tr><td class="mono">${esc(k)}</td><td class="mono small">${esc(v)}</td></tr>`).join('')}</tbody></table>` : ''}
+
+  ${(() => {
+    const redirects: string[] = [];
+    const walk = (n: any) => {
+      if (n?.redirectChain?.length) {
+        let prev = '';
+        n.redirectChain.forEach((r: string) => { if (r !== prev) redirects.push(r); prev = r; });
+      }
+      (n?.children || []).forEach(walk);
+    };
+    walk(d.resourceTree);
+    const uniq = Array.from(new Set(redirects));
+    return uniq.length ? `<h2>Cadenas de Redirección</h2><table class="tbl"><thead><tr><th>#</th><th>URL</th></tr></thead><tbody>${uniq.slice(0, 80).map((r: string, i: number) =>
+      `<tr><td>${esc(i + 1)}</td><td class="mono small">${esc(r)}</td></tr>`).join('')}</tbody></table>` : '';
+  })()}
 
   <h2>Fuzzing de Directorios (${esc(fz.totalProbed ?? 0)} rutas)</h2>
   <div class="grid">
@@ -181,9 +217,12 @@ export async function POST(request: NextRequest) {
     <div class="card"><b>Emails (${esc((att.emails || []).length)})</b><div class="chips">${(att.emails || []).map((e: string) => `<span class="chip">${esc(e)}</span>`).join('') || '<span class="note">ninguno</span>'}</div></div>
     <div class="card"><b>Telegram (${esc((att.telegramIds || []).length)})</b><div class="chips">${(att.telegramIds || []).map((e: string) => `<span class="chip">${esc(e)}</span>`).join('') || '<span class="note">ninguno</span>'}</div></div>
     <div class="card"><b>API Keys / Secrets</b><div class="chips">${(att.apiKeys || []).map((e: string) => `<span class="chip">${esc(e.slice(0, 60))}</span>`).join('') || '<span class="note">ninguno</span>'}</div></div>
+    <div class="card"><b>Tracking IDs</b><div class="chips">${(att.trackingIds || []).map((e: string) => `<span class="chip">${esc(e)}</span>`).join('') || '<span class="note">ninguno</span>'}</div></div>
     <div class="card"><b>Firmas de herramienta</b><div class="chips">${(att.toolSignatures || []).map((e: string) => `<span class="chip">${esc(e)}</span>`).join('') || '<span class="note">ninguna</span>'}</div></div>
+    <div class="card"><b>Comentarios / strings</b><div class="mono small">${(att.comments || []).map((e: string) => `${esc(e.slice(0, 80))}<br/>`).join('') || '<span class="note">ninguno</span>'}</div></div>
   </div>
-  ${d.virusTotal ? `<h2>VirusTotal</h2><div class="grid"><div class="card"><b>Reputación</b><span>${esc(d.virusTotal.reputation ?? '—')}</span></div><div class="card"><b>Veredicto</b><span>${esc(d.virusTotal.verdict || '—')}</span></div></div>` : ''}
+  ${(att.links || []).length ? `<h3>Links externos detectados (${esc(att.links.length)})</h3><table class="tbl"><thead><tr><th>URL</th></tr></thead><tbody>${att.links.slice(0, 50).map((l: string) => `<tr><td class="mono small">${esc(l)}</td></tr>`).join('')}</tbody></table>` : ''}
+  ${d.virusTotal ? `<h2>VirusTotal</h2><div class="grid"><div class="card"><b>Reputación</b><span>${esc(d.virusTotal.reputation ?? '—')}</span></div><div class="card"><b>Veredicto</b><span>${esc(d.virusTotal.verdict || '—')}</span></div><div class="card"><b>Malicious</b><span>${esc(d.virusTotal.lastAnalysisStats?.malicious ?? 0)}</span></div><div class="card"><b>Suspicious</b><span>${esc(d.virusTotal.lastAnalysisStats?.suspicious ?? 0)}</span></div><div class="card"><b>Harmless</b><span>${esc(d.virusTotal.lastAnalysisStats?.harmless ?? 0)}</span></div><div class="card"><b>Engines</b><span>${esc(d.virusTotal.totalEngines ?? 0)}</span></div></div>` : ''}
 
   <div class="footer">NEXUS OSINT — Advanced Web Forensic Engine v5.2 · Generado ${esc(new Date().toISOString())} · Informe forense automatizado</div>
 </div></body>
