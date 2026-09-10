@@ -85,7 +85,6 @@ export async function POST(request: Request) {
         break;
     }
 
-    // Validate URLs
     const validUrls = urls.filter(url => {
       try {
         new URL(url);
