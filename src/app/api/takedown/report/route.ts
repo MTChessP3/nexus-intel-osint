@@ -222,10 +222,6 @@ export async function POST(request: Request) {
       }, { status: 400 });
     }
 
-    const reportId = 'TD-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).substring(2, 8).toUpperCase();
-    const timestamp = new Date().toISOString();
-    const results: ServiceReportResult[] = [];
-
     const googleApiKey = apiKeys?.google || process.env.GOOGLE_SAFE_BROWSING_API_KEY;
     const vtApiKey = apiKeys?.virustotal || process.env.VIRUSTOTAL_API_KEY;
 
@@ -278,6 +274,8 @@ export async function POST(request: Request) {
     }
 
     // Process with controlled concurrency
+    const reportId = 'TD-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).substring(2, 8).toUpperCase();
+    const timestamp = new Date().toISOString();
     const results: ServiceReportResult[] = [];
     const queue = [...tasks];
     const maxConcurrent = Math.min(5, tasks.length);
@@ -303,8 +301,6 @@ export async function POST(request: Request) {
     await Promise.all(workers);
 
     const fingerprint = createHash('sha256').update(JSON.stringify({ reportId, urls, services, timestamp, results })).digest('hex').toUpperCase();
-    const reportId = 'TD-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).substring(2, 8).toUpperCase();
-    const timestamp = new Date().toISOString();
 
     return NextResponse.json({
       reportId,
